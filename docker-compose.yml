@@ -1,0 +1,304 @@
+
+services:
+
+  traefik:
+    image: docker.io/traefik:v3.4.1
+    restart: unless-stopped
+    command:
+      - --providers.docker
+    ports:
+      - "8081:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml
+      - ./logs/traefik:/var/log/traefik
+    networks:
+      - financial_manager
+
+  session-auth:
+    build: 
+      context: ./session
+      dockerfile: docker/session/Dockerfile
+    env_file: ./session/config/.env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.session-auth.entrypoints=web"
+      - "traefik.http.routers.session-auth.rule=Host(`session-auth.localhost`) && PathPrefix(`/admin`)"
+      - "traefik.http.routers.session-auth.service=session-auth-service"
+      #register
+      - "traefik.enable=true"
+      - "traefik.http.routers.session-auth-register.entrypoints=web"
+      - "traefik.http.routers.session-auth-register.rule=Host(`session-auth.localhost`) && PathPrefix(`/register`)"
+      # Router to /static
+      - "traefik.http.routers.session-auth-static.rule=Host(`session-auth.localhost`) && PathPrefix(`/static`)"
+      - "traefik.http.routers.session-auth-static.entrypoints=web"
+      # Router to /media
+      - "traefik.http.routers.session-auth-media.rule=Host(`session-auth.localhost`) && PathPrefix(`/media`)"
+      - "traefik.http.routers.session-auth-media.entrypoints=web"
+      # Activate
+      - "traefik.http.routers.session-auth-activate.rule=Host(`session-auth.localhost`) && PathPrefix(`/activate`)"
+      - "traefik.http.routers.session-auth-activate.service=session-auth-service"
+      # ReCAPTCHE
+      - "traefik.http.routers.session-auth-recaptche.entrypoints=web"
+      - "traefik.http.routers.session-auth-recaptche.rule=Host(`session-auth.localhost`) && PathPrefix(`/.well-known`)"
+      - "traefik.http.middlewares.secure-headers.headers.customResponseHeaders.X-Content-Type-Options=nosniff"
+      - "traefik.http.middlewares.secure-headers.headers.customResponseHeaders.X-Frame-Options=DENY"
+      - "traefik.http.middlewares.secure-headers.headers.customResponseHeaders.Content-Security-Policy=default-src 'self'; script-src 'self' https://www.google.com https://www.gstatic.com 'unsafe-inline'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; frame-src 'self' https://www.google.com; connect-src 'self' https://www.google.com https://www.gstatic.com; img-src 'self' data:"
+      - "traefik.http.middlewares.secure-headers.headers.customResponseHeaders.Referrer-Policy=strict-origin-when-cross-origin"
+      - "traefik.http.routers.session-auth.middlewares=secure-headers@docker"
+      - "traefik.http.services.session-auth-service.loadbalancer.server.port=8000"
+    expose:
+      - 8000
+    volumes:
+      - ./session:/session_auth
+      - ./logs/auth:/session_auth/logs
+    depends_on:
+      - session-db
+      - mailpit
+      - redis
+      - rabbitmq
+    command: docker/session/start.sh
+    restart: on-failure
+    networks:
+      - financial_manager
+
+  session-db:
+    build:
+      context: ./session
+      dockerfile: docker/postgres/Dockerfile
+    ports:
+      - "5432:5432"
+    volumes:
+      - session_service_db:/var/lib/postgresql/data
+    env_file:
+      - ./session/config/.env
+    networks:
+      - financial_manager
+
+  nice-ui:
+    build:
+      context: ./ui
+      dockerfile: /docker/Dockerfile
+    volumes:
+      - ./ui:/app
+      - ./logs/ui:/app/logs
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ui.rule=Host(`wallet.localhost`)"
+      - "traefik.http.routers.ui.entrypoints=web"
+      - "traefik.http.routers.ui.service=ui-service"
+      - "traefik.http.routers.ui.middlewares=ui-forwardauth@docker,nocache@docker"
+      - "traefik.http.middlewares.ui-forwardauth.forwardauth.address=http://session-auth:8000/verifySession/"
+      - "traefik.http.middlewares.ui-forwardauth.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.ui-forwardauth.forwardauth.authResponseHeaders=X-User"
+      - "traefik.http.middlewares.ui-forwardauth.forwardauth.addAuthCookiesToResponse=hmac,sessionid"
+      # Router to /static
+      - "traefik.http.routers.ui-static.rule=Host(`wallet.localhost`) && (PathPrefix(`/_nicegui/`) || PathPrefix(`/_nicegui_ws/`))"
+      - "traefik.http.routers.ui-static.entrypoints=web"
+      # Router to /login
+      - "traefik.http.routers.ui-login.rule=Host(`wallet.localhost`) && (PathPrefix(`/login`) || PathPrefix(`/login/`))"
+      - "traefik.http.routers.ui-login.entrypoints=web"
+      - "traefik.http.routers.ui-login-fin.rule=Host(`wallet.localhost`) && (PathPrefix(`/finalize-login`) || PathPrefix(`/finalize-login/`))"
+      - "traefik.http.routers.ui-login-fin.entrypoints=web"
+      # Router to /register
+      - "traefik.http.routers.ui-register.rule=Host(`wallet.localhost`) && (PathPrefix(`/register`) || PathPrefix(`/register/`))"
+      - "traefik.http.routers.ui-register.entrypoints=web"
+      # Router to /home
+      - "traefik.http.routers.ui-home.rule=Host(`wallet.localhost`) && (PathPrefix(`/home`) || PathPrefix(`/home/`))"
+      - "traefik.http.routers.ui-home.entrypoints=web"
+      # Router to /error
+      - "traefik.http.routers.ui-error.rule=Host(`wallet.localhost`) && (PathPrefix(`/error`) || PathPrefix(`/error/`))"
+      - "traefik.http.routers.ui-error.entrypoints=web"
+      # Router to  /.well-known
+      - "traefik.http.routers.ui-recaptche.rule=Host(`wallet.localhost`) && (PathPrefix(`/.well-known`) || PathPrefix(`/.well-known/`))"
+      - "traefik.http.routers.ui-recaptche.entrypoints=web"
+      #png
+      - "traefik.http.routers.ui-png.rule=Host(`wallet.localhost`) && PathPrefix(`/favicon.png`)"
+      - "traefik.http.routers.ui-png.entrypoints=web"
+      - "traefik.http.middlewares.nocache.headers.customResponseHeaders.Cache-Control=no-store"
+      - "traefik.http.services.ui-service.loadbalancer.server.port=8501"
+    env_file:
+      - ./ui/.env
+    depends_on:
+      - redis
+    expose:
+      - 8501
+    networks:
+      - financial_manager
+
+  wallet: &api
+    build:
+      context: ./wallet
+      dockerfile: /docker/fastapi/Dockerfile
+    volumes:
+      - ./wallet:/wallet_api
+      - ./logs/wallet:/wallet_api/logs
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wallet.entrypoints=web"
+      - "traefik.http.routers.wallet.rule=Host(`wallet-backend.localhost`)"
+      - "traefik.http.routers.wallet.service=wallet-service"
+      - "traefik.http.services.wallet-service.loadbalancer.server.port=8001"
+    expose:
+      - 8001
+    env_file:
+      - ./wallet/app/core/.envs/.env.local
+    depends_on:
+      - wallet-db
+    command: docker/fastapi/start.sh
+    
+    networks:
+      - financial_manager
+
+
+  celerywalletworker:
+    <<: *api
+    ports: []
+    command: docker/celery/start.sh
+
+  wallet-db:
+    build:
+      context: ./wallet
+      dockerfile: docker/postgres/Dockerfile
+    ports:
+      - "5433:5432"
+    volumes:
+      - wallet_service_db:/var/lib/postgresql/data
+    env_file:
+      - ./wallet/app/core/.envs/.env.local
+    networks:
+      - financial_manager
+  
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis/redis.conf:/etc/redis/redis.conf  
+      - redis_data:/data                              
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    networks:
+      - financial_manager
+
+  # elasticsearch:
+  #   image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+  #   environment:
+  #     - discovery.type=single-node
+  #     - ES_JAVA_OPTS=-Xms1g -Xmx1g
+  #     - xpack.security.enabled=false
+  #     - xpack.monitoring.collection.enabled=true
+  #   ulimits:
+  #     memlock:
+  #       soft: -1
+  #       hard: -1
+  #   volumes:
+  #     - esdata:/usr/share/elasticsearch/data
+  #   ports:
+  #     - "9200:9200"
+  #   networks:
+  #     - financial_manager
+
+  # kibana:
+  #   image: docker.elastic.co/kibana/kibana:8.13.4
+  #   environment:
+  #     - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+  #   ports:
+  #     - "5601:5601"
+  #   depends_on:
+  #     - elasticsearch
+  #   networks:
+  #     - financial_manager
+
+  # filebeat:
+  #   image: docker.elastic.co/beats/filebeat:8.13.4
+  #   user: root
+  #   volumes:
+  #     - ./filebeat.yml:/usr/share/filebeat/filebeat.yml
+  #     - ./logs:/logs
+  #   entrypoint: ["/bin/bash", "-c", "chmod go-w /usr/share/filebeat/filebeat.yml && exec filebeat"]
+  #   depends_on:
+  #     - elasticsearch
+  #     - kibana
+  #   networks:
+  #     - financial_manager
+
+  mailpit:
+    image: docker.io/axllent/mailpit:v1.20.3
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    volumes:
+      - financial_mailpit_data:/data
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_DATA_FILE: /data/mailpit.db
+      MP_SMTP_AUTH_ACCPEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    networks:
+      - financial_manager
+
+  rabbitmq:
+    image: docker.io/rabbitmq:3.13-management
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+    volumes:
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - financial_rabbitmq_data:/var/lib/rabbitmq
+    env_file: ./session/config/.env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rabbitmq.entrypoints=web"
+      - "traefik.http.routers.rabbitmq.rule=Host(`rabbitmq.localhost`)"
+      - "traefik.http.routers.rabbitmq.service=rabbitmq-service"
+      - "traefik.http.services.rabbitmq-service.loadbalancer.server.port=15672"
+    networks:
+      - financial_manager
+
+  celeryworker: &celery
+    build: 
+      context: ./session
+      dockerfile: docker/session/Dockerfile
+    env_file: ./session/config/.env
+    volumes:
+      - ./session:/session_auth
+      - ./logs/auth:/session_auth/logs
+    depends_on:
+      - session-db
+      - mailpit
+      - redis
+      - rabbitmq
+    command: docker/celery/worker/start.sh
+    restart: on-failure
+    networks:
+      - financial_manager
+
+  celerybeat:
+    <<: *celery
+    command: docker/celery/beat/start.sh
+
+  flower:
+    <<: *celery
+    ports:
+      - "5555:5555"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.flower.entrypoints=web"
+      - "traefik.http.routers.flower.rule=Host(`flower.localhost`)"
+      - "traefik.http.routers.flower.service=flower-service"
+      - "traefik.http.services.flower-service.loadbalancer.server.port=5555"
+    command: docker/celery/flower/start.sh
+
+networks:
+  financial_manager:
+    external: true
+
+volumes:
+  session_service_db:
+  wallet_service_db:
+  redis_data:
+  # esdata:
+  financial_mailpit_data:
+  financial_rabbitmq_data:

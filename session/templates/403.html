@@ -1,0 +1,18 @@
+{% extends 'base_error.html' %}
+
+{% block title %}Forbidden{% endblock %}
+
+{% block status_code %}403{% endblock %}
+{% block background_code %}403{% endblock %}
+{% block comment %}403 - Access Forbidden{% endblock %}
+
+{% block message %}
+{% if error %}
+{{ error }}
+
+{% endif %}
+{% endblock %}
+
+{% block link %}
+<a href="{{href}}">{{text}}</a>
+{% endblock %}

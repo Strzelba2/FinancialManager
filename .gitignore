@@ -1,0 +1,11 @@
+.venv/*
+.history/*
+logs/*
+session/config/.env
+ui/.env
+session/static/*
+wallet/app/core/.envs/.env.local
+*__pycache__
+
+.flake8
+commends.txt

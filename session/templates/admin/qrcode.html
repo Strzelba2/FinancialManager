@@ -1,0 +1,20 @@
+{% extends "registration/base.html" %}
+
+{% load i18n jazzmin %}
+{% get_jazzmin_settings request as jazzmin_settings %}
+{% get_jazzmin_ui_tweaks as jazzmin_ui %}
+
+{% block content %}
+<div style="text-align: center; margin-top: 40px; padding: 35px;">
+    <h1 style="font-size: 48px; font-weight: bold;">Admin2FaCode</h1>
+    <div style="display: inline-block; padding: 35px; border: 1px solid #ddd; border-radius: 8px;">
+        <h2 style="margin-bottom: 20px;">SCAN HERE</h2>
+        <img src="data:image/svg+xml;utf8;base64,{{ image }}" alt="QR Code" style="width: 250px; height: 250px;">
+        <div style="margin-top: 20px;">
+            <a href="/admin/login/" class="button" style="padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">
+                Go to Admin Site
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock content %}

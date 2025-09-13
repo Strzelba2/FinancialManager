@@ -1,0 +1,18 @@
+{% extends 'base_error.html' %}
+
+{% block title %}Access Denied{% endblock %}
+
+{% block status_code %}401{% endblock %}
+{% block background_code %}401{% endblock %}
+{% block comment %}401 - Access Denied{% endblock %}
+
+{% block message %}
+{% if error %}
+{{ error }}
+
+{% endif %}
+{% endblock %}
+
+{% block link %}
+    <a href="{{href}}">{{text}}</a>
+{% endblock %}

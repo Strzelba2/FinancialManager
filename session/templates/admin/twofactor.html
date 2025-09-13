@@ -1,0 +1,31 @@
+{% extends "registration/base.html" %}
+{% load i18n jazzmin %}
+{% get_jazzmin_settings request as jazzmin_settings %}
+{% get_jazzmin_ui_tweaks as jazzmin_ui %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="card shadow-lg p-4">
+        <h2 class="mb-4">🔒 {% trans "Enter your authentication code" %}</h2>
+
+        {% if messages %}
+          <div class="messages mb-3">
+            {% for message in messages %}
+              <div class="alert alert-{{ message.tags }}">
+                {{ message }}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+        
+        <form method="post" novalidate>
+            {% csrf_token %}
+            <div class="form-group">
+                <label for="token">{% trans "Authenticator Code" %}</label>
+                <input type="text" class="form-control" id="token" name="token" placeholder="123456" required>
+            </div>
+            <button type="submit" class="btn btn-primary mt-3">{% trans "Verify" %}</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
