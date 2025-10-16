@@ -80,6 +80,28 @@ class SessionPersistent:
         except Exception as e:
             logger.error(f"Error setting session: {e}")
             
+    async def delete(self, session_key: str) -> bool:
+        """
+        Delete a session key from Redis.
+
+        Args:
+            session_key (str): The session key to delete.
+
+        Returns:
+            bool: True if a key was removed, False otherwise.
+        """
+        key = f"{self.key_prefix}{session_key}"
+        try:
+            removed = await self.redis_client.delete(key)  
+            if removed:
+                logger.debug("Deleted session for key %s", key)
+            else:
+                logger.debug("No session to delete for key %s", key)
+            return bool(removed)
+        except Exception as e:
+            logger.error("Error deleting session key %s: %s", key, e)
+            return False
+            
     async def exists(self, session_key: str) -> bool:
         """
         Check if a session key exists in Redis.

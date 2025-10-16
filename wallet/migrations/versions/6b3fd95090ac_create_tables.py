@@ -83,7 +83,7 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=False),
-    sa.Column('account_type', sa.Enum('CURRENT', 'SAVINGS', name='account_type_enum'), nullable=False),
+    sa.Column('account_type', sa.Enum('CURRENT', 'SAVINGS', 'BROKERAGE', 'CREDIT', name='account_type_enum'), nullable=False),
     sa.Column('account_number_enc', sa.LargeBinary(), nullable=False),
     sa.Column('account_number_fp', sa.LargeBinary(length=32), nullable=False),
     sa.Column('iban', sa.String(length=34), nullable=True),

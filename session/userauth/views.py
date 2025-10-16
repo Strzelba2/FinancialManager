@@ -15,20 +15,22 @@ from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from django.contrib.auth import login, logout
 
-from .serializers import RegisterSerializer, LoginSerializer
+from .serializers import RegisterSerializer, LoginSerializer, CryptoBatchRequest
 from .throttles import VerifySessionThrottle, RegisterIPThrottle, LoginIPThrottle
 from .tokens import account_activation_token
-from .models import User
+from .models import User, UserKeys
 from .two_factor import TwoFactor
 from .hmac_token import HmacToken
-from .authentication import SessionAuthenticationWithoutCSRF
+from .authentication import SessionAuthenticationWithoutCSRF, IPAllowlistPermission
 from utils.utils import formatted_response
+from .crypto import unwrap_dek, derive_keys_from_dek, encrypt_bytes, decrypt_bytes, hmac_bytes
 
 
 import logging
 import time
 from urllib.parse import unquote
 import json
+import base64
 
 logger = logging.getLogger("session-auth")
 
@@ -264,7 +266,7 @@ class LoginView(APIView):
                 )
                 user_data = {
                     'username': request.user.username,
-                    'id': request.user.id,
+                    'first_name': request.user.first_name,
                     'email': request.user.email,
                 }
                 cache.set(f'session:{request.session.session_key}', user_data, timeout=3600)
@@ -430,3 +432,93 @@ class QRCodeView(APIView):
 
         logger.info(f"QR code successfully generated for user: {user.username}")
         return Response({'image': qr_code_image}, template_name='admin/qrcode.html')
+   
+    
+class CryptoBatchView(APIView):
+    """
+    API endpoint for batch cryptographic operations (encrypt, decrypt, hmac).
+    
+    This view receives a batch of crypto operations tied to a specific user and:
+    - decrypts their Data Encryption Key (DEK)
+    - derives encryption and HMAC keys
+    - executes requested crypto operations (AES-GCM or HMAC-SHA256)
+    """
+
+    authentication_classes = [] 
+    permission_classes = [IPAllowlistPermission] 
+    serializer_class = CryptoBatchRequest
+    renderer_classes = [JSONRenderer]
+    
+    def post(self, request, *args, **kwargs) -> Response:
+        """
+        Handles POST request with batch crypto operations.
+
+        Returns:
+            - 200 OK with results if successful
+            - 400 Bad Request if validation fails
+            - 401 Unauthorized if user is invalid
+            - 404 Not Found if user's keys are missing
+        """
+        logger.info("CryptoBatchView: Received crypto batch request.")
+        
+        serializer = self.serializer_class(data=request.data)
+        
+        if serializer.is_valid():
+            
+            username = serializer.validated_data["username"]
+            data = serializer.validated_data["data"]
+            
+            try:
+                user = User.objects.get(username=username)
+            except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+                logger.warning(f"CryptoBatchView: Invalid user '{username}'.")
+                return Response({"error": "user do not exist"},
+                                status=status.HTTP_401_UNAUTHORIZED)
+                
+            try:
+                uk = UserKeys.objects.get(user=user)
+            except UserKeys.DoesNotExist:
+                logger.warning(f"CryptoBatchView: User keys not found for '{username}'.")
+                return Response({"detail": "user keys not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+            dek = unwrap_dek(uk.wrapped_dek_nonce, uk.wrapped_dek_ct)
+            
+            enc_key, mac_key = derive_keys_from_dek(dek)
+            
+            results = []
+            for op in data:
+                oid, kind = op["id"], op["kind"]
+                try:
+                    if kind == "encrypt":
+                        pt = base64.b64decode(op["plaintext_b64"])
+                        nonce, ct = encrypt_bytes(enc_key, pt)
+                        results.append({
+                            "id": oid, "ok": True,
+                            "nonce_b64": base64.b64encode(nonce).decode(),
+                            "ciphertext_b64": base64.b64encode(ct).decode(),
+                        })
+                        
+                    elif kind == "hmac":
+                        pt = base64.b64decode(op["plaintext_b64"])
+                        dig = hmac_bytes(mac_key, pt)
+                        results.append({"id": oid, "ok": True, "digest_b64": base64.b64encode(dig).decode()})
+                        
+                    elif kind == "decrypt":
+                        nonce = base64.b64decode(op["nonce_b64"])
+                        ct = base64.b64decode(op["ciphertext_b64"])
+                        pt = decrypt_bytes(enc_key, nonce, ct)
+                        results.append({"id": oid, "ok": True, "plaintext_b64": base64.b64encode(pt).decode()})
+                        
+                    else:
+                        logger.warning(f"CryptoBatchView: Unsupported crypto kind: {kind}")
+                        results.append({"id": oid, "ok": False, "error": "unsupported"})
+                except Exception:
+                    logger.error(f"CryptoBatchView: Error in operation {oid}: {e}")
+                    results.append({"id": oid, "ok": False, "error": "crypto_error"})
+                    
+            return Response({"results": results})
+            
+        else:
+            logger.error(f"CryptoBatchView: Invalid request data: {serializer.errors}")
+            return Response({"error": serializer.errors},
+                             status=status.HTTP_400_BAD_REQUEST)

@@ -1,0 +1,479 @@
+import io
+import re
+import csv
+from typing import Iterable, Tuple
+from schemas.wallet import TransactionCreationRow
+from utils.money import dec, parse_amount
+from utils.utils import read_bytes, parse_date
+from exceptions import MissingRequiredColumnsError
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class BaseBankParser:
+    """
+    Base parser for generic Polish bank CSVs.
+
+    Designed to:
+    - Normalize encoding from uploaded files (PL banks often use non-UTF encodings).
+    - Automatically locate the header row using common variants (e.g., "Data księgowania").
+    - Guess the delimiter (comma, semicolon, or tab).
+    - Convert rows into `TransactionCreationRow` objects.
+
+    Extend this class for bank-specific formats.
+    """
+    name = 'Generic CSV'
+    kind = 'CSV'
+    accept = '.csv'
+    upload_label = 'Drop CSV here or click'
+    
+    def __init__(self):
+        self.header_variants = [
+            r'Data\s+transakcji',
+            r'Data\s+operacji',
+            r'Data\s+ksi(?:ę|e)gowania',
+            r'ID\s+klienta',
+        ]
+        self.header_start_pattern = re.compile(
+            r'^\s*#?\s*(?:' + r'|'.join(self.header_variants) + r')\b',
+            re.IGNORECASE,
+        )
+
+    def sniff(self, header: list[str]) -> bool:
+        """
+        Naively determine if a header line looks like a valid transaction file.
+
+        Args:
+            header: List of header strings.
+
+        Returns:
+            True if it contains basic expected fields.
+        """
+        return set(h.lower() for h in header).issuperset({'date', 'amount'})
+
+    def parse(self, rows: Iterable[dict[str, str]]) -> list[TransactionCreationRow]:
+        """
+        Convert CSV rows into structured transaction rows.
+
+        Args:
+            rows: Dict rows from a CSV DictReader.
+
+        Returns:
+            List of TransactionCreationRow instances.
+        """
+        parsed: list[TransactionCreationRow] = []
+        for r in rows:
+            desc = r.get('description') or r.get('title') or r.get('details') or ''
+            parsed.append(TransactionCreationRow(
+                date=r.get('date') or r.get('booking date') or r.get('transaction_date') or '',
+                amount=dec(r.get('amount', '0')),
+                description=desc,
+            ))
+        return parsed
+    
+    def decode_bytes_pl(self, upload_content) -> str:
+        """
+        Decode uploaded file content using common Polish encodings.
+
+        Args:
+            upload_content: NiceGUI Upload content or file-like.
+
+        Returns:
+            UTF-8 decoded string.
+        """
+        b = read_bytes(upload_content)
+        for enc in ('utf-8-sig', 'utf-8', 'cp1250', 'windows-1250',
+                    'iso-8859-2', 'latin2', 'latin-1'):
+            try:
+                return b.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return b.decode('utf-8', errors='replace')
+    
+    def find_table_start(self, lines: list[str]) -> int:
+        """
+        Detect the line index where the CSV table begins.
+
+        Args:
+            lines: List of text lines.
+
+        Returns:
+            Index of the header row.
+
+        Raises:
+            ValueError if no header line found.
+        """
+        for i, ln in enumerate(lines):
+            if self.header_start_pattern.search(ln):
+                return i
+
+        logger.error("No recognizable header found")
+        raise ValueError('Can not find header in table')
+    
+    def guess_delimiter(self, header_line: str) -> str:
+        """
+        Guess the CSV delimiter used in a given line.
+
+        Args:
+            header_line: Raw header string.
+
+        Returns:
+            Detected delimiter: ',', ';', or '\\t'
+        """
+        s = header_line.replace('\u00A0', ' ')
+
+        if '\t' in s:
+            return '\t'
+
+        counts = {';': s.count(';'), ',': s.count(',')}
+        if counts[';'] == counts[','] == 0:
+            return ',' 
+
+        return ';' if counts[';'] >= counts[','] else ','
+    
+    def open_mb_dictreader_from_bytes(self, b: bytes) -> Tuple[csv.DictReader, list[str]]:
+        """
+        Prepare a CSV DictReader starting from the detected table.
+
+        Args:
+            b: Raw bytes from an uploaded file.
+
+        Returns:
+            Tuple of (csv.DictReader, header_fields)
+
+        Raises:
+            ValueError if the file has no usable header or rows.
+        """
+        text = self.decode_bytes_pl(b)
+        lines = text.splitlines()
+
+        start = self.find_table_start(lines)
+        header_line = lines[start]
+        delim = self.guess_delimiter(header_line)
+
+        src = io.StringIO('\n'.join(lines[start:]))
+        row_reader = csv.reader(src, delimiter=delim, quotechar='"', skipinitialspace=True)
+
+        raw_header = next(row_reader, None)
+        if not raw_header:
+            raise ValueError('Pusty nagłówek CSV.')
+
+        fieldnames = [h.lstrip('#').strip() for h in raw_header]
+
+        data_stream = io.StringIO('\n'.join(lines[start+1:]))
+        dict_reader = csv.DictReader(
+            data_stream,
+            fieldnames=fieldnames,
+            delimiter=delim,
+            quotechar='"',
+            skipinitialspace=True,
+        )
+        return dict_reader, fieldnames
+
+
+class MBankParser(BaseBankParser):
+    """
+    Parser for mBank CSV statements.
+
+    Expected columns include:
+        - "Data księgowania"
+        - "Kwota"
+        - "Saldo po operacji"
+        - "Opis operacji"
+        - "Tytuł"
+
+    Example row:
+        {
+            "Data księgowania": "2024-10-05",
+            "Kwota": "123.45",
+            "Saldo po operacji": "1500.00",
+            "Opis operacji": "Przelew zewnętrzny",
+            "Tytuł": "Zakupy online"
+        }
+    """
+    name = 'mBank CSV'
+    kind = 'CSV'
+    accept = '.csv'
+    upload_label = 'Drop CSV here or click'
+    
+    def __init__(self):
+        super().__init__()
+
+    def sniff(self, header: list[str]) -> bool:
+        """
+        Determine if this parser is appropriate for the given CSV header.
+        """
+        hdr = [h.strip().lower() for h in header]
+        return {'data operacji', 'kwota'} <= set(hdr)
+
+    def parse(self, rows: Iterable[dict[str, str]]) -> list[TransactionCreationRow]:
+        """
+        Parse mBank CSV rows into TransactionCreationRow instances.
+
+        Args:
+            rows: Iterable of CSV dict rows.
+
+        Returns:
+            A list of TransactionCreationRow objects.
+        """
+        parsed: list[TransactionCreationRow] = []
+        for r in rows:
+            date = parse_date(r.get("Data księgowania"))
+            if not date:
+                continue
+            amount = dec(parse_amount(r.get('Kwota', '0')))
+            amount_after = dec(parse_amount(r.get('Saldo po operacji', '0')))
+            desc = ' '.join([r.get('Opis operacji'), r.get('Tytuł')])
+
+            parsed.append(TransactionCreationRow(
+                date=date,
+                amount=amount,
+                description=desc,
+                amount_after=amount_after
+            ))
+        return parsed
+    
+    
+class IngBankParser(BaseBankParser):
+    """
+    Parser for ING Bank CSV statements.
+
+    Expected columns include:
+        - "Data księgowania"
+        - "Kwota transakcji (waluta rachunku)"
+        - "Saldo po transakcji"
+        - "Dane kontrahenta"
+        - "Tytuł"
+    """
+    name = 'IngBank CSV'
+    kind = 'CSV'
+    accept = '.csv'
+    upload_label = 'Drop CSV here or click'
+    
+    def __init__(self):
+        super().__init__()
+
+    def sniff(self, header: list[str]) -> bool:
+        """
+        Determine if this parser is appropriate for the given CSV header.
+        """
+        hdr = [h.strip().lower() for h in header]
+        return {'data operacji', 'kwota'} <= set(hdr)
+
+    def parse(self, rows: Iterable[dict[str, str]]) -> list[TransactionCreationRow]:
+        """
+        Parse ING Bank CSV rows into TransactionCreationRow instances.
+
+        Args:
+            rows: Iterable of CSV dict rows.
+
+        Returns:
+            A list of TransactionCreationRow objects.
+        """
+        parsed: list[TransactionCreationRow] = []
+        for r in rows:
+            date = parse_date(r.get("Data księgowania"))
+            if not date:
+                continue
+            amount = dec(parse_amount(r.get('Kwota transakcji (waluta rachunku)', '0')))
+            amount_after = dec(parse_amount(r.get('Saldo po transakcji', '0')))
+            desc = ' '.join([r.get('Dane kontrahenta'), r.get('Tytuł')])
+
+            parsed.append(TransactionCreationRow(
+                date=date,
+                amount=amount,
+                description=desc,
+                amount_after=amount_after
+            ))
+        return parsed
+   
+    
+class SaxoBankParser(BaseBankParser):
+    """
+    Parser for Saxo Bank CSV statements.
+
+    Expected columns:
+        - "Data transakcji"
+        - "Zablokowana kwota"
+        - "Saldo po operacji"
+        - "Rodzaj"
+        - "Instrument"
+        - "Zdarzenie"
+
+    Raises:
+        MissingRequiredColumnsError:
+            If required columns (e.g., 'Saldo po operacji') are missing.
+    """
+    name = 'SaxoBank CSV'
+    kind = 'CSV'
+    accept = '.csv'
+    upload_label = 'Drop CSV here or click'
+    
+    def __init__(self):
+        super().__init__()
+
+    def sniff(self, header: list[str]) -> bool:
+        """
+        Determine if this parser is appropriate for the given CSV header.
+        """
+        hdr = [h.strip().lower() for h in header]
+        return {'data operacji', 'kwota'} <= set(hdr)
+
+    def parse(self, rows: Iterable[dict[str, str]]) -> list[TransactionCreationRow]:
+        """
+        Parse Saxo Bank CSV rows into TransactionCreationRow instances.
+
+        Args:
+            rows: Iterable of CSV dict rows.
+
+        Returns:
+            A list of TransactionCreationRow objects.
+        """
+        parsed: list[TransactionCreationRow] = []
+        for r in rows:
+            if "Saldo po operacji" not in r.keys():
+                raise MissingRequiredColumnsError("Proszę dodać kolumnę: Saldo po operacji, z poprawnym saldem")
+            date = parse_date(r.get("Data transakcji"))
+            if not date:
+                continue
+            amount = dec(parse_amount(r.get('Zablokowana kwota', '0')))
+            amount_after = dec(parse_amount(r.get('Saldo po operacji', '0')))
+            desc = ' '.join([r.get('Rodzaj'), ":",  r.get('Instrument'), "-",  r.get('Zdarzenie')])
+
+            parsed.append(TransactionCreationRow(
+                date=date,
+                amount=amount,
+                description=desc,
+                amount_after=amount_after
+            ))
+        return parsed
+  
+    
+class BossaBankParser(BaseBankParser):
+    """
+    Parser for BOSSA Bank CSV statements.
+
+    Expected columns:
+        - "data"
+        - "kwota"
+        - "Saldo po operacji"
+        - "tytuł operacji"
+        - "szczegóły"
+
+    Raises:
+        MissingRequiredColumnsError:
+            If required columns (e.g., 'Saldo po operacji') are missing.
+    """
+    name = 'BossaBank CSV'
+    kind = 'CSV'
+    accept = '.csv'
+    upload_label = 'Drop CSV here or click'
+    
+    def __init__(self):
+        super().__init__()
+        self.header_variants = [
+            r'data'
+        ]
+        
+        self.header_start_pattern = re.compile(
+            r'^\s*#?\s*(?:' + r'|'.join(self.header_variants) + r')\b',
+            re.IGNORECASE,
+        )
+
+    def sniff(self, header: list[str]) -> bool:
+        """
+        Determine if this parser is appropriate for the given CSV header.
+        """
+        hdr = [h.strip().lower() for h in header]
+        return {'data operacji', 'kwota'} <= set(hdr)
+
+    def parse(self, rows: Iterable[dict[str, str]]) -> list[TransactionCreationRow]:
+        """
+        Parse BOSSA CSV rows into TransactionCreationRow instances.
+
+        Args:
+            rows: Iterable of CSV dict rows.
+
+        Returns:
+            A list of TransactionCreationRow objects.
+        """
+        parsed: list[TransactionCreationRow] = []
+        for r in rows:
+            if "Saldo po operacji" not in r.keys():
+                raise MissingRequiredColumnsError("Proszę dodać kolumnę: Saldo po operacji, z poprawnym saldem")
+            date = parse_date(r.get("data"))
+            if not date:
+                continue
+            amount = dec(parse_amount(r.get('kwota', '0')))
+            amount_after = dec(parse_amount(r.get('Saldo po operacji', '0')))
+            desc = ' '.join([r.get('tytuł operacji'),  r.get('szczegóły')])
+
+            parsed.append(TransactionCreationRow(
+                date=date,
+                amount=amount,
+                description=desc,
+                amount_after=amount_after
+            ))
+        return parsed
+    
+
+class IngMaklerBankParser(BaseBankParser):
+    """
+    Parser for ING Makler CSV (brokerage) statements.
+
+    Expected columns:
+        - "Data transakcji"
+        - "Kwota transakcji"
+        - "Saldo po operacji"
+        - "Typ transakcji"
+        - "Opis transakcji"
+
+    Raises:
+        MissingRequiredColumnsError:
+            If required columns (e.g., 'Saldo po operacji') are missing.
+    """
+    name = 'IngMakler CSV'
+    kind = 'CSV'
+    accept = '.csv'
+    upload_label = 'Drop CSV here or click'
+    
+    def __init__(self):
+        super().__init__()
+
+    def sniff(self, header: list[str]) -> bool:
+        """
+        Determine if this parser is appropriate for the given CSV header.
+        """
+        hdr = [h.strip().lower() for h in header]
+        return {'data operacji', 'kwota'} <= set(hdr)
+
+    def parse(self, rows: Iterable[dict[str, str]]) -> list[TransactionCreationRow]:
+        """
+        Parse ING Makler CSV rows into TransactionCreationRow instances.
+
+        Args:
+            rows: Iterable of CSV dict rows.
+
+        Returns:
+            A list of TransactionCreationRow objects.
+        """
+        parsed: list[TransactionCreationRow] = []
+        for r in rows:
+            logger.info(f"row: {r}")
+            if "Saldo po operacji" not in r.keys():
+                raise MissingRequiredColumnsError("Proszę dodać kolumnę: Saldo po operacji, z poprawnym saldem")
+            date = parse_date(r.get("Data transakcji"))
+            if not date:
+                continue
+            amount = dec(parse_amount(r.get('Kwota transakcji', '0')))
+            amount_after = dec(parse_amount(r.get('Saldo po operacji', '0')))
+            desc = ' '.join([r.get('Typ transakcji'), ": ",  r.get('Opis transakcji')])
+
+            parsed.append(TransactionCreationRow(
+                date=date,
+                amount=amount,
+                description=desc,
+                amount_after=amount_after
+            ))
+        return parsed

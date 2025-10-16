@@ -1,11 +1,12 @@
 from nicegui import ui
 from .alerts import alert_form_dialog, ALERTS, alert_nav_right_section
+from services.current_user import get_username
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def nav(current: str = ''):
+def nav(current: str = '', ctx=None):
     with ui.element('div').classes('navbar'):
         def nav_link(label, path):
             return (
@@ -40,8 +41,8 @@ def nav(current: str = ''):
                 with ui.button('Portfel', icon='account_balance_wallet').props('flat color=white'):
                     with ui.menu().classes('settings-menu') as menu:
                         menu.props('offset=[0,22]')
-                        ui.menu_item('Dodaj portfel…', on_click=lambda: ui.navigate.to('/wallet/new')).classes('text-white')
-                        ui.menu_item('Usuń portfel…', on_click=lambda: ui.navigate.to('/wallet/delete')).classes('text-white')
+                        ui.menu_item('Dodaj portfel…', on_click=lambda: ctx.open_create_wallet_dialog()).classes('text-white')
+                        ui.menu_item('Usuń portfel…', on_click=lambda: ctx.open_delete_wallet_dialog()).classes('text-white')
                         ui.separator().classes('bg-white')
                         ui.menu_item('Zarządzaj portfelami',
                                      on_click=lambda: ui.navigate.to('/wallet/manage')).classes('text-white')
@@ -60,10 +61,11 @@ def nav(current: str = ''):
                         ui.menu_item('alerts', on_click=lambda: ui.navigate.to('/stock/alesrts')).classes('text-white')
             
             with ui.element('div').classes('nav-right'): 
+                display_name = get_username()
                 
                 with ui.element('div').classes('user-name-chip'):
                     ui.element('span').classes('user-name-dot')  
-                    ui.label("Artur").classes('user-name')   
+                    ui.label(display_name).classes('user-name')   
                     ui.icon('expand_more').props('size=18')
                 
                 alert_nav_right_section()

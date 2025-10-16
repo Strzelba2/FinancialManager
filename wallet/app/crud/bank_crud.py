@@ -36,17 +36,17 @@ async def get_bank_with_accounts(session: AsyncSession, bank_id: uuid.UUID) -> O
         )
         .where(Bank.id == bank_id)
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.first()
 
 
 async def get_bank_by_name(session: AsyncSession, name: str) -> Optional[Bank]:
-    result = await session.exec(select(Bank).where(Bank.name == name))
+    result = await session.execute(select(Bank).where(Bank.name == name))
     return result.first()
 
 
 async def get_bank_by_shortname(session: AsyncSession, shortname: str) -> Optional[Bank]:
-    result = await session.exec(select(Bank).where(Bank.shortname == shortname.upper()))
+    result = await session.execute(select(Bank).where(Bank.shortname == shortname.upper()))
     return result.first()
 
 
@@ -68,8 +68,8 @@ async def list_banks(
             selectinload(Bank.brokerage_accounts),
         )
     stmt = stmt.offset(offset).limit(limit)
-    result = await session.exec(stmt)
-    return result.all()
+    result = await session.execute(stmt)
+    return result.scalars().all() 
 
 
 async def update_bank(session: AsyncSession, bank_id: uuid.UUID, data: BankUpdate) -> Optional[Bank]:

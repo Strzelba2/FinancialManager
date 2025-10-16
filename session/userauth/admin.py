@@ -17,7 +17,7 @@ from django.urls import path
 from django.conf import settings
 
 from .forms import UserChangeForm, UserCreationForm, CustomAdminAuthenticationForm
-from .models import BlockedIP
+from .models import BlockedIP, UserKeys
 from .two_factor import TwoFactor
 from utils.utils import get_client_ip
 
@@ -262,6 +262,7 @@ if not hasattr(admin, '_custom_admin_registered'):
     admin.site = custom_admin_site
 
     custom_admin_site.register(BlockedIP)
+    custom_admin_site.register(UserKeys)
 
     if PeriodicTask not in custom_admin_site._registry:
         custom_admin_site.register(PeriodicTask, PeriodicTaskAdmin)

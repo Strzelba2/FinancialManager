@@ -38,7 +38,7 @@ async def get_real_estate_with_wallet(session: AsyncSession, re_id: uuid.UUID) -
         .options(selectinload(RealEstate.wallet))
         .where(RealEstate.id == re_id)
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.first()
 
 
@@ -88,7 +88,7 @@ async def list_real_estates(
         RealEstate.created_at.desc() if newest_first else RealEstate.created_at.asc()
     ).offset(offset).limit(limit)
 
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 

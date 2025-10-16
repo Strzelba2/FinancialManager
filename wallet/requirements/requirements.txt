@@ -15,5 +15,6 @@ email_validator==2.2.0
 redis==5.2.0
 celery==5.5.3
 watchfiles==1.1.0
-cryptography==45.0.6
+httpx[http2]==0.28.1
+
 

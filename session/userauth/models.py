@@ -146,7 +146,41 @@ class BlockedIP(models.Model):
         return f"{self.ip_address} ({'Temp' if self.is_temporary else 'Permanent'})"
   
 
-    
+class UserKeys(models.Model):
+    """
+    Per-user envelope-encryption material.
+
+    Stores the DEK wrapped by a KEK (AES-GCM). Never persist the plaintext DEK here.
+    """
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="keys",
+        verbose_name=_("user"),
+        help_text=_("The user who owns this key bundle."),
+        db_index=True,
+        editable=False,
+    )
+
+    wrapped_dek_nonce = models.BinaryField(
+        verbose_name=_("wrapped DEK nonce"),
+        help_text=_("12-byte AES-GCM nonce used to wrap the DEK."),
+    )
+    wrapped_dek_ct = models.BinaryField(
+        verbose_name=_("wrapped DEK ciphertext"),
+        help_text=_("Ciphertext (with GCM tag) of the DEK wrapped by the KEK."),
+    )
+    created_at = models.DateTimeField(
+        verbose_name=_("Created_at"),
+        auto_now_add=True,
+        editable=False,
+        help_text=_("The time when Key was created"),
+    )
+    updated_at = models.DateTimeField(
+        verbose_name=_("Update_at"),
+        auto_now_add=True,
+        help_text=_("The time when Key was updated"),
+    )   
 
     
 

@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 from decouple import config
+from ast import literal_eval
 import os
 from celery.schedules import crontab
 
@@ -188,6 +189,7 @@ ADMIN_TEMPORARY_BLOCK_TIME = int(config("ADMIN_TEMPORARY_BLOCK_TIME"))
 USER_TEMPORARY_BLOCK_TIME = int(config("USER_TEMPORARY_BLOCK_TIME"))
 
 ADMIN_ALLOWED_IPS = config("ADMIN_ALLOWED_IPS")
+ALLOWED_WALLET_IPS = config("ALLOWED_WALLET_IPS", cast=literal_eval)
 
 RECAPTCHA_PUBLIC_KEY = config("RECAPTCHA_PUBLIC_KEY")
 RECAPTCHA_PRIVATE_KEY = config("RECAPTCHA_PRIVATE_KEY")
@@ -196,6 +198,9 @@ ADMIN_PATH = config("ADMIN_PATH")
 
 SERVER_SALT = config("SERVER_SALT")
 VALID_HMAC = config("VALID_HMAC")
+
+APP_AES_KEY = config("APP_AES_KEY")
+APP_HMAC_KEY = config("APP_HMAC_KEY")
 
 CELERY_BEAT_SCHEDULE = {
     'delete-old-temp-blocked-ips-daily': {
@@ -238,6 +243,7 @@ LOGGING = {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/django.json'), 
+            'formatter': 'json',
         },
         'request': {
             'level': 'DEBUG',

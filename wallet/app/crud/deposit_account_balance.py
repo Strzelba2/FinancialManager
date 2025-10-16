@@ -39,7 +39,7 @@ async def get_deposit_account_balance_with_account(
         .options(selectinload(DepositAccountBalance.account))
         .where(DepositAccountBalance.account_id == account_id)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def list_deposit_account_balances(
@@ -67,7 +67,7 @@ async def list_deposit_account_balances(
         stmt = stmt.options(selectinload(DepositAccountBalance.account))
 
     stmt = stmt.offset(offset).limit(limit)
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 

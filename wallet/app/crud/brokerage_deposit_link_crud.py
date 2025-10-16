@@ -38,7 +38,7 @@ async def get_brokerage_deposit_link(
         (BrokerageDepositLink.brokerage_account_id == brokerage_account_id)
         & (BrokerageDepositLink.deposit_account_id == deposit_account_id)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def get_link_by_ba_and_currency(
@@ -50,7 +50,7 @@ async def get_link_by_ba_and_currency(
         (BrokerageDepositLink.brokerage_account_id == brokerage_account_id)
         & (BrokerageDepositLink.currency == currency)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def get_link_with_relations(
@@ -69,7 +69,7 @@ async def get_link_with_relations(
             & (BrokerageDepositLink.deposit_account_id == deposit_account_id)
         )
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def list_brokerage_deposit_links(
@@ -97,7 +97,7 @@ async def list_brokerage_deposit_links(
         )
 
     stmt = stmt.offset(offset).limit(limit)
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 

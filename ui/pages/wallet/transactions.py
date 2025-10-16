@@ -5,7 +5,9 @@ import itertools
 import logging
 
 from static.style import add_style, add_user_style, add_table_style
-from components.navbar_footer import nav, footer
+from components.context.nav_context import NavContextBase
+from clients.wallet_client import WalletClient
+from components.navbar_footer import footer
 from utils.utils import fmt_money, parse_date
 
 logger = logging.getLogger(__name__)
@@ -27,8 +29,12 @@ ACCOUNTS = list(DB.keys())
 CURRENT_USER = 'User' 
 
 
-class Transactions:
+class Transactions(NavContextBase):
     def __init__(self, request):
+        super().__init__()
+        self.request = request
+        self.wallet_client = WalletClient()
+        
         self.range_btn = None
         self.custom_row = None
         
@@ -45,7 +51,12 @@ class Transactions:
             'to': '',                   
         }
         
+        ui.timer(0.01, self._init_async, once=True)
+        
+    async def _init_async(self):
+        self.render_navbar()
         self.build_ui()
+        footer()
 
     def build_ui(self):
         
@@ -553,8 +564,6 @@ def transactions_page(request: Request):
     add_style()
     add_user_style()
     add_table_style()
-    nav("User")
-    
     Transactions(request)
     
-    footer()
+    

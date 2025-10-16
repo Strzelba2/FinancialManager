@@ -142,7 +142,7 @@ class DepositAccountBalance(DepositAccountBalanceBase, TimestampMixin, table=Tru
         sa.CheckConstraint("blocked >= 0",  name="ck_depaccbal_blocked_nonneg"),
     )
     
-    
+
 class Instrument(InstrumentBase, UUIDMixin, SQLModel, table=True):
     __tablename__ = "instruments"
    

@@ -78,3 +78,30 @@ class RegisterSerializer(serializers.ModelSerializer):
         logger.info("Registering new user.")
         
         return User.objects.create_user(username=username, email=email, password=password, **validated_data)
+
+
+class Cryptodata(serializers.Serializer):
+    """
+    Represents a single cryptographic operation.
+
+    Depending on the value of `kind`, different fields are required:
+
+    - "encrypt": requires `plaintext_b64`, returns `ciphertext_b64` and `nonce_b64`
+    - "decrypt": requires `ciphertext_b64` and `nonce_b64`, returns `plaintext_b64`
+    - "hmac": requires `plaintext_b64`, returns a MAC value
+    """
+    id = serializers.CharField()
+    kind = serializers.ChoiceField(choices=["encrypt", "decrypt", "hmac"])
+    plaintext_b64 = serializers.CharField(required=False)
+    nonce_b64 = serializers.CharField(required=False)
+    ciphertext_b64 = serializers.CharField(required=False)
+
+
+class CryptoBatchRequest(serializers.Serializer):
+    """
+    A batch of cryptographic operations associated with a user.
+
+    Useful for performing multiple crypto tasks (e.g. encrypt/decrypt/hmac) in a single API call.
+    """
+    username = serializers.CharField()
+    data = Cryptodata(many=True)

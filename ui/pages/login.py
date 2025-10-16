@@ -5,6 +5,8 @@ from fastapi import Request
 from starlette.responses import RedirectResponse
 import httpx
 from components.navbar_footer import nav, footer
+from services.current_user import clear_current_user_cache
+from storage.session_state import clear_state
 from static.style import add_style
 from utils.utils import generate_csrf_token, handle_api_error
 from utils.validators import is_valid_email, is_valid_password
@@ -115,6 +117,8 @@ class LoginForm:
     async def confirm_login(self, response):
         result = await self.dialog
         if result == 'Yes' or result is None:
+            clear_current_user_cache()
+            clear_state()
             
             pending_logins[self.client.host] = {
                 'sessionid': response.cookies.get('sessionid', ''),

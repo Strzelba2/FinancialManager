@@ -4,7 +4,7 @@ from typing import Optional, List
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
-from sqlmodel import select
+from sqlmodel import select, or_, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import DepositAccount
@@ -12,7 +12,6 @@ from app.schamas.schemas import (
     DepositAccountCreate,
     DepositAccountUpdate,
 )
-from app.models.enums import Currency, AccountType
 
 
 async def create_deposit_account(session: AsyncSession, data: DepositAccountCreate) -> DepositAccount:
@@ -41,18 +40,13 @@ async def get_deposit_account_with_relations(session: AsyncSession, account_id: 
         )
         .where(DepositAccount.id == account_id)
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.first()
 
 
 async def get_deposit_by_fingerprint(session: AsyncSession, fp: bytes) -> Optional[DepositAccount]:
     stmt = select(DepositAccount).where(DepositAccount.account_number_fp == fp)
-    return (await session.exec(stmt)).first()
-
-
-async def get_deposit_by_iban(session: AsyncSession, iban: str) -> Optional[DepositAccount]:
-    stmt = select(DepositAccount).where(DepositAccount.iban == iban.upper())
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def get_deposit_by_wallet_and_name(
@@ -61,16 +55,13 @@ async def get_deposit_by_wallet_and_name(
     stmt = select(DepositAccount).where(
         (DepositAccount.wallet_id == wallet_id) & (DepositAccount.name == name)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def list_deposit_accounts(
     session: AsyncSession,
     *,
     wallet_id: Optional[uuid.UUID] = None,
-    bank_id: Optional[uuid.UUID] = None,
-    currency: Optional["Currency"] = None,
-    account_type: Optional["AccountType"] = None,
     search: Optional[str] = None,  
     limit: int = 50,
     offset: int = 0,
@@ -79,16 +70,29 @@ async def list_deposit_accounts(
     stmt = select(DepositAccount)
     if wallet_id:
         stmt = stmt.where(DepositAccount.wallet_id == wallet_id)
-    if bank_id:
-        stmt = stmt.where(DepositAccount.bank_id == bank_id)
-    if currency:
-        stmt = stmt.where(DepositAccount.currency == currency)
-    if account_type:
-        stmt = stmt.where(DepositAccount.account_type == account_type)
+        
     if search:
-        like = f"%{search}%"
-        stmt = stmt.where((DepositAccount.name.ilike(like)) | (DepositAccount.iban.ilike(like)))
+        q = (search or "").strip()
+        like = f"%{q}%"
+        conditions = [
+            DepositAccount.name.ilike(like),
+            cast(DepositAccount.account_type, String).ilike(like),
+        ]
+        try:
+            as_uuid = uuid.UUID(q)
+            conditions.append(DepositAccount.bank_id == as_uuid)
+        except (ValueError, AttributeError):
+            join_bank = True
 
+        if join_bank:
+            from app.models.models import Bank
+            stmt = stmt.join(Bank, Bank.id == DepositAccount.bank_id)
+            conditions.extend([
+                cast(Bank.name, String).ilike(like),
+                cast(Bank.shortname, String).ilike(like),
+            ])
+
+        stmt = stmt.where(or_(*conditions))
     if with_relations:
         stmt = stmt.options(
             selectinload(DepositAccount.bank),
@@ -97,8 +101,25 @@ async def list_deposit_accounts(
         )
 
     stmt = stmt.order_by(DepositAccount.created_at.desc()).offset(offset).limit(limit)
-    result = await session.exec(stmt)
-    return result.all()
+    result = await session.execute(stmt)
+    return result.scalars().all() 
+
+
+async def list_deposit_accounts_for_wallets(
+    session: AsyncSession,
+    wallet_ids: list[uuid.UUID],
+) -> list[DepositAccount]:
+    stmt = (
+        select(DepositAccount)
+        .where(DepositAccount.wallet_id.in_(wallet_ids))
+        .options(
+            selectinload(DepositAccount.balance),
+            selectinload(DepositAccount.bank),
+        )
+        .order_by(DepositAccount.created_at.desc())
+    )
+    res = await session.execute(stmt)
+    return res.scalars().all()
 
 
 async def update_deposit_account(

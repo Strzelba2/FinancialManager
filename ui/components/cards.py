@@ -409,8 +409,9 @@ def line_card(title, x, y, *, infl_pct=None, cpi=None, base='first',
 def kpi_card(title: str, value: str,  sub: str):
     with panel():
         ui.label(title).classes('text-sm text-gray-500')
-        ui.label(value).classes('text-xl font-semibold')
+        value_label = ui.label(value).classes('text-xl font-semibold')
         ui.html(f'<div class="text-xs text-gray-500">{colorize_numbers(sub)}</div>')
+    return value_label
 
         
 def bar_card(title, x, inc, exp, *, cap=None, unit=' PLN',

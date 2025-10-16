@@ -127,7 +127,7 @@ services:
     networks:
       - financial_manager
 
-  wallet: &api
+  wallet: 
     build:
       context: ./wallet
       dockerfile: /docker/fastapi/Dockerfile
@@ -153,9 +153,18 @@ services:
 
 
   celerywalletworker:
-    <<: *api
-    ports: []
+    build:
+      context: ./wallet
+      dockerfile: /docker/fastapi/Dockerfile
+    volumes:
+      - ./wallet:/wallet_api
+    env_file:
+      - ./wallet/app/core/.envs/.env.local
+    depends_on:
+      - wallet-db
     command: docker/celery/start.sh
+    networks:
+      - financial_manager
 
   wallet-db:
     build:
@@ -291,6 +300,22 @@ services:
       - "traefik.http.services.flower-service.loadbalancer.server.port=5555"
     command: docker/celery/flower/start.sh
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "5050:80"          
+    depends_on:
+      - wallet-db
+      - session-db
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - financial_manager
+
 networks:
   financial_manager:
     external: true
@@ -302,3 +327,4 @@ volumes:
   # esdata:
   financial_mailpit_data:
   financial_rabbitmq_data:
+  pgadmin_data:

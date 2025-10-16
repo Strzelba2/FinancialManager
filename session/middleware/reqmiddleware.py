@@ -51,7 +51,7 @@ class RequestMiddleware:
         referer = request.META.get("HTTP_REFERER", "")
         path = request.META.get("PATH_INFO", "").strip('/').split('/')[0]
         
-        if path in ["admin", "static", "activate"]:
+        if path in ["admin", "static", "activate", "crypto"]:
             return self.get_response(request)
 
         blocked_ip = BlockedIP.objects.filter(ip_address=ip).first()

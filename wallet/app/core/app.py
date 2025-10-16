@@ -5,7 +5,7 @@ from .cache.redis import Storage
 
 class App(FastAPI):
     def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs, docs_url=None, redoc_url=None)
+        super().__init__(**kwargs)
         self.storage = Storage()
         
     async def startup(self):

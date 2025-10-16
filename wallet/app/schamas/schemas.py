@@ -1,6 +1,6 @@
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, Field
 from pydantic import ConfigDict
-from typing import Optional
+from typing import Optional, Annotated, List
 from datetime import datetime
 import uuid
 
@@ -11,11 +11,11 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
-    Q2,  Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty
+    Q2,  Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt
 )
 
 from app.models.enums import (
-    AccountType, Currency, InstrumentType, TransactionType, MetalType,
+    AccountType, Currency, InstrumentType,  MetalType,
     PropertyType
     )
 
@@ -60,6 +60,17 @@ class DepositAccountCreate(AccountBase):
 
     wallet_id: uuid.UUID
     bank_id: uuid.UUID
+   
+    
+class AccountCreation (SQLModel):
+    model_config = ConfigDict(from_attributes=False)
+    
+    name: str
+    account_type: AccountType 
+    currency: Currency
+    account_number: str
+    bank_id: uuid.UUID
+    iban: IBANOpt = None
 
 
 class DepositAccountRead(AccountBase, UUIDMixin, TimestampMixin):
@@ -180,6 +191,20 @@ class TransactionCreate(TransactionBase):
     model_config = ConfigDict(from_attributes=False)
     
     account_id: uuid.UUID
+   
+    
+class TransactionIn(SQLModel):
+    model_config = ConfigDict(from_attributes=False)
+    date: datetime                               
+    amount: Q2                          
+    description: Optional[str] = None
+    amount_after: Q2 = None
+
+
+class CreateTransactionsRequest(SQLModel):
+    model_config = ConfigDict(from_attributes=False)
+    account_id: uuid.UUID
+    transactions: Annotated[List[TransactionIn], Field(min_length=1)]
     
     
 class TransactionRead(TransactionBase, UUIDMixin, TimestampMixin):
@@ -190,7 +215,6 @@ class TransactionRead(TransactionBase, UUIDMixin, TimestampMixin):
     
 class TransactionUpdate(PartialUpdateMixin):
     
-    type: Optional[TransactionType] = None
     amount: Optional[Q2] = None
     description: NoneIfEmpty = None
     balance_before: Optional[Q2] = None
@@ -250,13 +274,17 @@ class WalletCreate(WalletBase):
     model_config = ConfigDict(from_attributes=False)
     
     user_id: uuid.UUID
+  
+    
+class WalletCreateWithoutUser(WalletBase):
+    model_config = ConfigDict(from_attributes=False)
     
     
 class WalletRead(WalletBase, UUIDMixin, TimestampMixin):
     model_config = ConfigDict(from_attributes=True, validate_assignment=False)
 
     user_id: uuid.UUID
-    
+   
     
 class WalletUpdate(PartialUpdateMixin):
 

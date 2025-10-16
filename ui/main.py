@@ -1,6 +1,7 @@
 from pythonjsonlogger import jsonlogger
 import logging
 import os
+import httpx
 from fastapi import Request
 from fastapi.responses import Response
 
@@ -16,6 +17,7 @@ import pages.error
 from middleware.middleware import ClientDataMiddleware
 from exceptions import UnauthorizedError, BadRequestError, InternalServerError
 from storage.session_storage import SessionStorage
+from config import settings
 
 from nicegui import ui, app
 from nicegui.client import Client
@@ -44,6 +46,22 @@ logger.setLevel(logging.DEBUG)
 app.add_middleware(ClientDataMiddleware)
 
 app.storage = SessionStorage()
+
+
+async def startup_httpx():
+    app.state.wallet_httpx = httpx.AsyncClient(
+        base_url=settings.WALLET_API_URL.rstrip('/'),
+        timeout=httpx.Timeout(connect=3.0, read=5.0, write=5.0, pool=5.0),
+        limits=httpx.Limits(max_keepalive_connections=10, max_connections=100),
+        headers={'User-Agent': 'wallet-ui/1.0'},
+    )
+
+
+async def shutdown_httpx():
+    await app.state.wallet_httpx.aclose()
+
+app.on_startup(startup_httpx)
+app.on_shutdown(shutdown_httpx)
       
         
 @app.exception_handler(Exception)

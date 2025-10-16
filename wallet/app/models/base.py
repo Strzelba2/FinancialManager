@@ -2,28 +2,29 @@ from sqlmodel import Field, SQLModel
 import sqlalchemy as sa
 from sqlalchemy.sql import func, text
 from sqlalchemy.types import DateTime
+from decimal import Decimal
 from pydantic import ConfigDict, model_validator
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from sqlalchemy.dialects import postgresql as pg
 from typing import Optional, ClassVar, Set
 
 from .enums import (
     PropertyType, AccountType, Currency, InstrumentType,
-    TransactionType, MetalType
+    MetalType
     )
-from app.security.crypto import encrypt_str, hmac_fingerprint, decrypt_str
+
 from app.validators.validators import (
-    Username12, EmailLower, FirstNameOpt, NonEmptyStr,
-    Shortname, BICOpt, IBANOpt,
-    BytesNonEmpty, BytesLen32,
-    Q2,  Q6Pos, AreaQ2OptPos,
+    Username12, EmailLower, FirstNameOpt, 
+    Shortname, BICOpt, NonEmptyStr,
+    BytesLen32, Q2,  Q6Pos, AreaQ2OptPos,
     CountryISO2Opt, CityOpt, NoneIfEmpty
 )
 
 
 class UUIDMixin(SQLModel, table=False):
     id: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
         primary_key=True,
         sa_type=pg.UUID(as_uuid=True),   
         sa_column_kwargs={"server_default": text("gen_random_uuid()")}
@@ -32,12 +33,12 @@ class UUIDMixin(SQLModel, table=False):
 
 class TimestampMixin(SQLModel, table=False):
     created_at: datetime = Field(
-        default=None,    
+        default_factory=lambda: datetime.now(timezone.utc),   
         sa_type=DateTime(timezone=True),
         sa_column_kwargs={"server_default": func.now(), "nullable": False},
     )
     updated_at: datetime = Field(
-        default=None,
+        default_factory=lambda: datetime.now(timezone.utc),
         sa_type=DateTime(timezone=True),
         sa_column_kwargs={
             "server_default": func.now(),
@@ -117,7 +118,7 @@ class BankBase(SQLModel):
    
     
 class AccountBase(SQLModel):
-    model_config = ConfigDict(validate_assignment=True, from_attributes=True)
+    model_config = ConfigDict(validate_assignment=False, from_attributes=True)
     
     name: NonEmptyStr = Field(
         sa_column=sa.Column(sa.String(255), nullable=False),
@@ -129,9 +130,14 @@ class AccountBase(SQLModel):
         description="Account category (e.g., CURRENT, SAVINGS, BROKERAGE_WALLET)."
     )
     
-    account_number_enc: BytesNonEmpty = Field(
-        sa_column=sa.Column("account_number_enc", sa.LargeBinary, nullable=False),
-        description="Encrypted raw account number (ciphertext)."
+    account_number_nonce: bytes = Field(
+        sa_column=sa.Column(sa.LargeBinary(12), nullable=False),
+        description="AES-GCM nonce (12B) for account_number."
+    )
+    
+    account_number_ct: bytes = Field(
+        sa_column=sa.Column(sa.LargeBinary, nullable=False),
+        description="AES-GCM ciphertext+tag for account_number."
     )
 
     account_number_fp: BytesLen32 = Field(
@@ -139,27 +145,32 @@ class AccountBase(SQLModel):
         description="HMAC fingerprint of account number (used for uniqueness & lookups)."
     )
 
-    iban: IBANOpt = Field(
-        default=None, sa_column=sa.Column(sa.String(34), unique=True),
-        description="IBAN for the account (if available)."
+    iban_nonce: bytes | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.LargeBinary(12), nullable=True),
+        description="AES-GCM nonce (12B) for IBAN."
     )
+    
+    iban_ct: bytes | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.LargeBinary, nullable=True),
+        description="AES-GCM ciphertext+tag for IBAN."
+    )
+    
+    iban_fp: Optional[bytes] = Field(
+        default=None, 
+        sa_column=sa.Column(sa.LargeBinary(32), nullable=True, unique=True, index=True)
+    )
+
     currency: Currency = Field(
         sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False),
         description="Account currency (must match balances & transactions)."
     )
-    
-    @property
-    def account_number(self) -> Optional[str]:
-        return decrypt_str(self.account_number_enc) if self.account_number_enc else None
 
-    def set_account_number(self, plaintext: str) -> None:
-        self.account_number_enc = encrypt_str(plaintext)
-        self.account_number_fp = hmac_fingerprint(plaintext)
-        
     @model_validator(mode="after")
     def _both_account_secrets_set(self):
-        if not self.account_number_enc or not self.account_number_fp:
-            raise ValueError("Both account_number_enc and account_number_fp must be set")
+        if not self.account_number_ct or not self.account_number_fp or not self.account_number_nonce:
+            raise ValueError("Both account_number_ct and account_number_fp and account_number_nonce must be set")
         return self
 
     
@@ -181,8 +192,16 @@ class BrokerageDepositLinkBase(SQLModel):
 class DepositAccountBalanceBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True)
     
-    available: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
-    blocked:   Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
+    available: Q2 = Field(
+        default=Decimal("0"),
+        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        description="Available balance"
+    )
+    blocked:   Q2 = Field(
+        default=Decimal("0"),
+        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        description="Blocked balance"
+    )
    
     
 class HoldingBase(SQLModel):
@@ -208,11 +227,11 @@ class InstrumentBase(SQLModel):
 class TransactionBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True)
     
-    type: TransactionType = Field(sa_column=sa.Column(sa.Enum(TransactionType, name="transaction_type_enum"), nullable=False))
     amount: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
     description: NoneIfEmpty = Field(default=None, sa_column=sa.Column(sa.String(255)))
     balance_before: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
     balance_after:  Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
+    date_transaction: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
    
     
 class MetalHoldingBase(SQLModel):

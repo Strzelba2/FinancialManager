@@ -4,7 +4,7 @@ from typing import Optional, List
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
-from sqlmodel import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Wallet
@@ -41,7 +41,7 @@ async def get_wallet_with_relations(session: AsyncSession, wallet_id: uuid.UUID)
         )
         .where(Wallet.id == wallet_id)
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.first()
 
 
@@ -49,7 +49,7 @@ async def get_wallet_by_user_and_name(
     session: AsyncSession, user_id: uuid.UUID, name: str
 ) -> Optional[Wallet]:
     stmt = select(Wallet).where((Wallet.user_id == user_id) & (Wallet.name == name))
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def list_wallets(
@@ -82,8 +82,8 @@ async def list_wallets(
         Wallet.created_at.desc() if newest_first else Wallet.created_at.asc()
     ).offset(offset).limit(limit)
 
-    result = await session.exec(stmt)
-    return result.all()
+    result = await session.execute(stmt)
+    return result.scalars().all() 
 
 
 async def update_wallet(
@@ -113,6 +113,24 @@ async def delete_wallet(session: AsyncSession, wallet_id: uuid.UUID) -> bool:
     obj = await session.get(Wallet, wallet_id)
     if not obj:
         return False
-    session.delete(obj) 
-    await session.commit()
+    try:
+        await session.delete(obj) 
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return False
     return True
+
+
+async def ensure_unique_name(session: AsyncSession, user_id: uuid.UUID, name: str) -> None:
+    """Proactive duplicate check to return a friendly error before DB constraint fires."""
+    exists = await session.scalar(
+        select(func.count())
+        .select_from(Wallet)
+        .where(
+            Wallet.user_id == user_id,
+            Wallet.name == name,
+        )
+    )
+    if exists:
+        raise ValueError("Wallet with this name already exists for this user.")

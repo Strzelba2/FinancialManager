@@ -10,6 +10,8 @@ class Currency(str, Enum):
 class AccountType(str, Enum):
     CURRENT = "CURRENT"  
     SAVINGS = "SAVINGS" 
+    BROKERAGE = "BROKERAGE"
+    CREDIT = "CREDIT"
        
 
 class TaxWrapper(str, Enum):
@@ -24,12 +26,6 @@ class InstrumentType(str, Enum):
     BOND = "BOND"
     FUND = "FUND"
     CRYPTO = "CRYPTO"
-  
-    
-class TransactionType(str, Enum):
-    INTERNAL = "INTERNAL"
-    EXTERNAL = "EXTERNAL"
-
     
 class PropertyType(str, Enum):
     APARTMENT = "APARTMENT",

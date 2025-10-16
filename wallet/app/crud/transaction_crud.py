@@ -6,7 +6,7 @@ from typing import Optional, List
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
-from sqlmodel import select
+from sqlmodel import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Transaction
@@ -14,7 +14,6 @@ from app.schamas.schemas import (
     TransactionCreate,
     TransactionUpdate,
 )
-from app.models.enums import TransactionType
 
 
 async def create_transaction(session: AsyncSession, data: TransactionCreate) -> Transaction:
@@ -29,6 +28,16 @@ async def create_transaction(session: AsyncSession, data: TransactionCreate) -> 
     return tx
 
 
+async def create_transaction_uow(session: AsyncSession, data: TransactionCreate) -> None:
+    """Create a Transaction without committing; caller controls the transaction boundary."""
+    tx = Transaction(**data.model_dump(exclude_unset=True))
+    session.add(tx)
+    try:
+        await session.flush()
+    except IntegrityError as e:
+        raise ValueError("Could not create transaction (invalid account or constraints).") from e
+
+
 async def get_transaction(session: AsyncSession, tx_id: uuid.UUID) -> Optional[Transaction]:
     return await session.get(Transaction, tx_id)
 
@@ -39,7 +48,7 @@ async def get_transaction_with_account(session: AsyncSession, tx_id: uuid.UUID) 
         .options(selectinload(Transaction.account))
         .where(Transaction.id == tx_id)
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.first()
 
 
@@ -47,7 +56,6 @@ async def list_transactions(
     session: AsyncSession,
     *,
     account_id: Optional[uuid.UUID] = None,
-    types: Optional[List[TransactionType]] = None,
     created_from: Optional[datetime] = None,
     created_to: Optional[datetime] = None,
     min_amount: Optional[Decimal] = None,
@@ -62,8 +70,6 @@ async def list_transactions(
 
     if account_id:
         stmt = stmt.where(Transaction.account_id == account_id)
-    if types:
-        stmt = stmt.where(Transaction.type.in_(types))
     if created_from:
         stmt = stmt.where(Transaction.created_at >= created_from)
     if created_to:
@@ -83,7 +89,7 @@ async def list_transactions(
         Transaction.created_at.desc() if newest_first else Transaction.created_at.asc()
     ).offset(offset).limit(limit)
 
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 
@@ -117,3 +123,9 @@ async def delete_transaction(session: AsyncSession, tx_id: uuid.UUID) -> bool:
     session.delete(tx)
     await session.commit()
     return True
+
+
+async def account_has_transactions(session: AsyncSession, account_id: uuid.UUID) -> bool:
+    stmt = select(func.count()).select_from(Transaction).where(Transaction.account_id == account_id)
+    result = await session.execute(stmt)
+    return (result.scalar_one() or 0) > 0

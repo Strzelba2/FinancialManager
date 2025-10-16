@@ -46,9 +46,9 @@ class Database:
         async with self.async_session() as session:
             try:
                 yield session
-            except Exception:
+            except Exception as e:
                 await session.rollback()
-                logger.warning("Database session rollback due to exception")
+                logger.warning(f"Database session rollback due to exception: {e}")
                 raise
 
     async def init_db(self):

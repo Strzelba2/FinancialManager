@@ -95,6 +95,7 @@ class RegisterForm:
     def create_headers(self):
         headers = dict(self.headers)
         headers['X-Forwarded-For'] = self.client.host
+        headers["Referer"] = "http://wallet.localhost:8081/register/"
         headers["Accept"] = "application/json"
         return headers
                     

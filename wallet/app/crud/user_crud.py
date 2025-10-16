@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import User
 from app.schamas.schemas import UserCreate, UserUpdate
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow():
@@ -31,13 +34,13 @@ async def get_user(session: AsyncSession, user_id: uuid.UUID) -> Optional[User]:
 
 
 async def get_user_by_username(session: AsyncSession, username: str) -> Optional[User]:
-    result = await session.exec(select(User).where(User.username == username))
-    return result.first()
+    result = await session.execute(select(User).where(User.username == username))
+    return result.scalars().first()
 
 
 async def get_user_by_email(session: AsyncSession, email: str) -> Optional[User]:
-    result = await session.exec(select(User).where(User.email == email))
-    return result.first()
+    result = await session.execute(select(User).where(User.email == email))
+    return result.scalars().first()
 
 
 async def list_users(
@@ -52,7 +55,7 @@ async def list_users(
         like = f"%{search}%"
         stmt = stmt.where((User.username.ilike(like)) | (User.email.ilike(like)))
     stmt = stmt.offset(offset).limit(limit)
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 

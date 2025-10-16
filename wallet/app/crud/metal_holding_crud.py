@@ -41,7 +41,7 @@ async def get_metal_holding_by_wallet_and_metal(
     stmt = select(MetalHolding).where(
         (MetalHolding.wallet_id == wallet_id) & (MetalHolding.metal == metal)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def get_metal_holding_with_wallet(
@@ -52,7 +52,7 @@ async def get_metal_holding_with_wallet(
         .options(selectinload(MetalHolding.wallet))
         .where(MetalHolding.id == holding_id)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def list_metal_holdings(
@@ -78,7 +78,7 @@ async def list_metal_holdings(
         stmt = stmt.options(selectinload(MetalHolding.wallet))
 
     stmt = stmt.order_by(MetalHolding.created_at.desc()).offset(offset).limit(limit)
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 

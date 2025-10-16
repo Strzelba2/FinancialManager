@@ -14,3 +14,9 @@ class InternalServerError(Exception):
     """Raised for internal errors (HTTP 500)."""
     def __init__(self, message="Internal Server Error"):
         super().__init__(message)
+   
+        
+class MissingRequiredColumnsError(Exception):
+    """raised when the CSV parser does not detect a specific column."""
+    def __init__(self, message="Column do not exist"):
+        super().__init__(message)

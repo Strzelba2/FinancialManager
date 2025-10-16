@@ -36,7 +36,7 @@ async def get_holding_by_keys(
     stmt = select(Holding).where(
         (Holding.account_id == account_id) & (Holding.instrument_id == instrument_id)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def get_holding_with_relations(
@@ -50,7 +50,7 @@ async def get_holding_with_relations(
         )
         .where(Holding.id == holding_id)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def list_holdings(
@@ -86,7 +86,7 @@ async def list_holdings(
         )
 
     stmt = stmt.order_by(Holding.created_at.desc()).offset(offset).limit(limit)
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 

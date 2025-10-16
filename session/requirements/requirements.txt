@@ -18,3 +18,4 @@ django-celery-email==3.0.0
 user-agents==2.2.0
 qrcode==8.2
 pyotp==2.9.0
+cryptography==45.0.6

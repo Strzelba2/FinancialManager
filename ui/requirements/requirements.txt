@@ -1,3 +1,8 @@
 nicegui==2.23.0
 python-json-logger==3.3.0
+pydantic-settings==2.7.0
 redis==5.2.0
+email_validator==2.2.0
+tabula-py==2.10.0
+pandas==2.3.0
+jpype1==1.6.0

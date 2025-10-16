@@ -28,7 +28,7 @@ async def get_instrument(session: AsyncSession, instrument_id: uuid.UUID) -> Opt
 
 
 async def get_instrument_by_symbol(session: AsyncSession, symbol: str) -> Optional[Instrument]:
-    result = await session.exec(select(Instrument).where(Instrument.symbol == symbol.upper()))
+    result = await session.execute(select(Instrument).where(Instrument.symbol == symbol.upper()))
     return result.first()
 
 
@@ -55,7 +55,7 @@ async def list_instruments(
     stmt = stmt.order_by(Instrument.symbol.asc() if order_by_symbol else Instrument.name.asc())
     stmt = stmt.offset(offset).limit(limit)
 
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 

@@ -47,7 +47,7 @@ async def get_brokerage_account_with_relations(
         )
         .where(BrokerageAccount.id == account_id)
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.first()
 
 
@@ -59,7 +59,7 @@ async def get_brokerage_by_wallet_bank_name(
         & (BrokerageAccount.bank_id == bank_id)
         & (BrokerageAccount.name == name)
     )
-    return (await session.exec(stmt)).first()
+    return (await session.execute(stmt)).first()
 
 
 async def list_brokerage_accounts(
@@ -90,7 +90,7 @@ async def list_brokerage_accounts(
         )
 
     stmt = stmt.order_by(BrokerageAccount.created_at.desc()).offset(offset).limit(limit)
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     return result.all()
 
 
