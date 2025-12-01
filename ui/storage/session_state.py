@@ -16,9 +16,7 @@ class SessionState(TypedDict, total=False):
     
     
 DEFAULT_STATE: SessionState = {"user_id": None, "wallets": {}}
-    
-    
-# ---------- Accessors ----------
+
 
 def get_state() -> SessionState:
     """Get or create the per-user SessionState object."""
@@ -41,9 +39,7 @@ def clear_state() -> None:
     """Remove SessionState from user storage (e.g., on logout)."""
     app.storage.user.pop(_STATE_KEY, None)
     logger.debug("SessionState cleared from user storage")
-    
-    
-# ---------- User helpers ----------
+
 
 def get_current_user_id() -> Optional[str]:
     """Return user_id from SessionState, falling back to your _CURRENT_USER_KEY cache."""
@@ -54,55 +50,81 @@ def set_current_user_id(user_id: Optional[str]) -> None:
     """Update user info in SessionState (non-sensitive only)."""
     state = get_state()
     state["user_id"] = user_id
+    set_state(state)
     logger.debug(f"SessionState user set: user_id={user_id}")
-
-    
+  
+   
 def clear_current_user() -> None:
     """Clear only the user fields (not the whole state)."""
     state = get_state()
     state.user_id = None
+    set_state(state)
     logger.debug("SessionState user fields cleared")
     
-    
-# ---------- Wallet helpers (small, shareable across pages) ----------
 
-def list_wallets() -> List[WalletListItem]:
+def list_wallets() -> List[str]:
     """Return the wallets as a list (stable order not guaranteed)."""
     state = get_state()
     return list(state["wallets"].values())
 
 
-def get_wallet(wallet_id: str) -> Optional[WalletListItem]:
+def get_wallets() -> Dict[str, str]:
+    state = get_state()
+    return state["wallets"]
+
+
+def get_wallet(wallet_id: str) -> Optional[str]:
     state = get_state()
     return state["wallets"].get(wallet_id)
 
 
-def upsert_wallet(wallet: WalletListItem) -> WalletListItem:
+def upsert_wallet(wallet: WalletListItem) -> str:
+    """
+    Insert or update a wallet in the mapping, persisting the change.
+    Returns the (string) wallet name.
+    """
     state = get_state()
-    wallets: dict[str, WalletListItem] = state.setdefault("wallets", {})
-    wallets[wallet.id] = wallet
-    return wallets[wallet.id]
+    wallets = state.get("wallets") or {}
+    wallet_id = str(wallet.id)
+    wallet_name = str(wallet.name)
+    wallets[wallet_id] = wallet_name
+    state["wallets"] = wallets
+    set_state(state)
+    return wallet_name
 
 
 def rename_wallet(wallet_id: str, new_name: str) -> bool:
-    w = get_wallet(wallet_id)
-    if not w:
+    """Rename an existing wallet and persist. Returns True if it existed."""
+    state = get_state()
+    wallets = state.get("wallets") or {}
+    if wallet_id not in wallets:
         return False
-    if w.name == new_name:
+    if wallets[wallet_id] == new_name:
         return True
-    w.name = new_name
+    wallets[wallet_id] = new_name
+    state["wallets"] = wallets
+    set_state(state)
     return True
 
 
 def remove_wallet(wallet_id: str) -> bool:
-    wallets = get_state().get("wallets", {})
-    return wallets.pop(wallet_id, None) is not None
+    """Remove a wallet by id and persist. Returns True if removed."""
+    state = get_state()
+    wallets = state.get("wallets") or {}
+    existed = wallet_id in wallets
+    if existed:
+        wallets.pop(wallet_id, None)
+        state["wallets"] = wallets
+        set_state(state)
+    return existed
  
  
 def set_wallets_from_payload(payload: List[WalletListItem]) -> None:
-    logger.info(f"payload: {payload}")
-    state = get_state()
-    state["wallets"] = {
-        str(w.id): w
-        for w in payload if "id" in w
+    wallets_map = {
+        str(w.id): str(w.name)
+        for w in payload
+        if getattr(w, "id", None) is not None and getattr(w, "name", None)
     }
+    state = get_state()
+    state["wallets"] = wallets_map
+    set_state(state)

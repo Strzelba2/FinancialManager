@@ -7,7 +7,8 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select, or_, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import DepositAccount
+from app.models.models import DepositAccount, BrokerageDepositLink
+from app.models.enums import Currency
 from app.schamas.schemas import (
     DepositAccountCreate,
     DepositAccountUpdate,
@@ -153,3 +154,24 @@ async def delete_deposit_account(session: AsyncSession, account_id: uuid.UUID) -
     session.delete(acc)  
     await session.commit()
     return True
+
+
+async def resolve_deposit_for_event(
+    session: AsyncSession,
+    brokerage_account_id: uuid.UUID,
+    currency: Currency,
+) -> DepositAccount | None:
+
+    stmt = (
+        select(DepositAccount)
+        .join(
+            BrokerageDepositLink,
+            BrokerageDepositLink.deposit_account_id == DepositAccount.id,
+        )
+        .where(
+            BrokerageDepositLink.brokerage_account_id == brokerage_account_id,
+            BrokerageDepositLink.currency == currency,
+        )
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()

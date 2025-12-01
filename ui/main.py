@@ -12,6 +12,7 @@ import pages.register
 import pages.home
 import pages.wallet.user_wallet
 import pages.wallet.transactions
+import pages.wallet.quotes
 import pages.error
 
 from middleware.middleware import ClientDataMiddleware
@@ -55,11 +56,29 @@ async def startup_httpx():
         limits=httpx.Limits(max_keepalive_connections=10, max_connections=100),
         headers={'User-Agent': 'wallet-ui/1.0'},
     )
+    
+    app.state.stock_httpx = httpx.AsyncClient(
+        base_url=settings.STOCK_API_URL.rstrip('/'),
+        timeout=httpx.Timeout(connect=3.0, read=5.0, write=5.0, pool=5.0),
+        limits=httpx.Limits(max_keepalive_connections=10, max_connections=100),
+        headers={'User-Agent': 'wallet-ui/1.0'},
+    )
 
 
 async def shutdown_httpx():
     await app.state.wallet_httpx.aclose()
+    await app.state.stock_httpx.aclose()
+   
+    
+async def startup_storage():
+    await app.storage.initialize()
 
+
+async def shutdown_storage():
+    await app.storage.on_shutdown()
+
+app.on_startup(startup_storage)
+app.on_shutdown(shutdown_storage)
 app.on_startup(startup_httpx)
 app.on_shutdown(shutdown_httpx)
       

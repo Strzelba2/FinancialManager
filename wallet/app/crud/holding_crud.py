@@ -1,6 +1,8 @@
 from __future__ import annotations
 import uuid
 from typing import Optional, List
+from decimal import Decimal
+from fastapi import HTTPException, status
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -8,9 +10,9 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Holding, Instrument, BrokerageAccount
+from app.models.enums import BrokerageEventKind
 from app.schamas.schemas import (
-    HoldingCreate,
-    HoldingUpdate,
+    HoldingCreate, HoldingUpdate, BrokerageEventCreate
 )
 
 
@@ -18,12 +20,40 @@ async def create_holding(session: AsyncSession, data: HoldingCreate) -> Holding:
     obj = Holding(**data.model_dump())
     session.add(obj)
     try:
-        await session.commit()
+        await session.flush()
     except IntegrityError as e:
         await session.rollback()
         raise ValueError("Holding already exists for this account & instrument, or invalid FK.") from e
     await session.refresh(obj)
     return obj
+
+
+async def get_or_create_holding(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    instrument_id: uuid.UUID,
+) -> Holding:
+    stmt = (
+        select(Holding)
+        .where(
+            Holding.account_id == account_id,
+            Holding.instrument_id == instrument_id,
+        )
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    holding = result.scalar_one_or_none()
+
+    if holding is None:
+        data = HoldingCreate(
+            account_id=account_id,
+            instrument_id=instrument_id,
+            quantity=Decimal("0"),
+            avg_cost=Decimal("0"),
+        )
+        holding = await create_holding(session, data)
+
+    return holding
 
 
 async def get_holding(session: AsyncSession, holding_id: uuid.UUID) -> Optional[Holding]:
@@ -120,3 +150,67 @@ async def delete_holding(session: AsyncSession, holding_id: uuid.UUID) -> bool:
     session.delete(obj)
     await session.commit()
     return True
+
+
+def apply_event_to_holding(
+    holding: Holding,
+    payload: BrokerageEventCreate,
+) -> None:
+
+    kind = payload.kind
+    qty = Decimal(payload.quantity)
+    price = Decimal(payload.price)
+    ratio = Decimal(payload.split_ratio)
+
+    old_qty = Decimal(holding.quantity)
+    old_avg = Decimal(holding.avg_cost)
+
+    if kind == BrokerageEventKind.TRADE_BUY:
+        if qty <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="BUY quantity must be positive.",
+            )
+
+        new_qty = old_qty + qty
+        if new_qty == 0:
+            holding.quantity = Decimal("0")
+            holding.avg_cost = Decimal("0")
+        else:
+            total_cost_old = old_qty * old_avg
+            total_cost_new = qty * price
+            holding.quantity = new_qty
+            holding.avg_cost = (total_cost_old + total_cost_new) / new_qty
+
+    elif kind == BrokerageEventKind.TRADE_SELL:
+        if qty <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="SELL quantity must be positive.",
+            )
+
+        new_qty = old_qty - qty
+        if new_qty < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot sell more than holding quantity.",
+            )
+        holding.quantity = new_qty
+
+    elif kind == BrokerageEventKind.SPLIT:
+        if ratio <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Split ratio must be > 0.",
+            )
+        holding.quantity = old_qty * ratio
+        holding.avg_cost = old_avg / ratio if ratio != 0 else old_avg
+
+    elif kind == BrokerageEventKind.DIV:
+        return
+
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported brokerage event kind: {kind}",
+        )

@@ -74,7 +74,7 @@ async def get_current_user_or_create(
         logger.warning(f"Failed to cache user in app.storage.user: {e}")
         
     try:
-        await app.storage.session.delete(sessionid)
+        await app.storage.session.clear(sessionid)
         logger.debug(f"Deleted session key from Redis: {sessionid}")
     except Exception as e:
         logger.warning(f"Failed to delete session key {sessionid}: {e}")

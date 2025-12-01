@@ -16,10 +16,10 @@ from utils.utils import export_csv
 from utils.money import cash_total_in_pln, cash_total_in_eur, cash_total_in_usd, cash_kpi_label
 from demo.factories import create_demo_wallet_payload
 from clients.wallet_client import WalletClient
+from clients.stock_client import StockClient
 from clients.nbp_client import NBPClient
 from schemas.wallet import ClientWalletSyncResponse, Currency, WalletListItem
 from components.context.nav_context import NavContextBase
-from components.account import render_create_account_dialog
 from services.current_user import get_current_user_or_create
 from storage.session_state import set_wallets_from_payload, set_current_user_id
 
@@ -31,10 +31,15 @@ class Wallet(NavContextBase):
         """
         Initialize Wallet context with request, clients
         """
-        super().__init__()
+        
         self.request = request
         self.wallet_client = WalletClient()
+        self.stock_client = StockClient()
         self.nbp_client = NBPClient()
+        
+        self.wallets = []          
+        self.selected_wallet = [] 
+        self.banks = []  
         
         self.months = ['2025-01', '2025-02', '2025-03', '2025-04', '2025-05', '2025-06', '2025-07', '2025-08']
         self.revenue = [120000, 118500, 123400, 125200, 113000, 122500, 145000, 130000]    
@@ -73,7 +78,6 @@ class Wallet(NavContextBase):
         self.banks = data.banks
         
         set_wallets_from_payload(self.wallets)
-        self.accounts = [acc for w in self.wallets for acc in w.accounts]
         set_current_user_id(self.user_id)
 
         self.render_navbar()
@@ -83,7 +87,7 @@ class Wallet(NavContextBase):
         if not self.wallets:
             logger.warning("No wallets found. Rendering wallet onboarding.")
             self.render_no_wallet_onboarding(self.username)
-        elif not self.accounts:
+        elif not [acc for w in self.selected_wallet for acc in w.accounts]:
             logger.warning("No accounts found. Rendering account onboarding.")
             self.render_no_accounts_onboarding(self.username)
         else:
@@ -134,7 +138,8 @@ class Wallet(NavContextBase):
         Updates the displayed cash KPI label accordingly.
         """
         logger.info(f"Currency changed to: {self.view_currency.value}")
-        self.kpi_cash_label.text = self.capture_cash_label()
+        # self.kpi_cash_label.text = self.capture_cash_label()
+        self.build_body()
 
     def build_header(self):
         """
@@ -268,21 +273,7 @@ class Wallet(NavContextBase):
                     month_index=7,    
                 )
 
-                bank_tx = [
-                    {'date': '2025-04-18 13:05', 'payee': 'Biedronka', 'category': 'Żywność', 'amount': -123.45,
-                     'method': 'Karta', 'account': 'mBank', 'id': 'TX1'},
-                    {'date': '2025-04-18 09:11', 'payee': 'Przelew od ACME', 'category': 'Wynagrodzenie',
-                     'amount': 8500, 'method': 'Przelew', 'account': 'mBank', 'id': 'TX2'},
-                    {'date': '2025-04-17', 'payee': 'Media Expert', 'category': 'RTV/AGD', 'amount': -899.99,
-                     'method': 'Karta', 'account': 'mBank', 'id': 'TX3'},
-                    {'date': '2025-04-16', 'payee': 'Zwrot Allegro', 'category': 'Zwroty', 'amount': 219.00,
-                     'method': 'Przelew', 'account': 'mBank', 'id': 'TX4'},
-                    {'date': '2025-04-15', 'payee': 'Czynsz', 'category': 'Mieszkanie', 'amount': -1800,
-                     'method': 'Przelew', 'account': 'mBank', 'id': 'TX5'},
-                    {'date': '2025-04-14', 'payee': 'Orlen', 'category': 'Paliwo', 'amount': -240.50,
-                     'method': 'Karta', 'account': 'mBank', 'id': 'TX6'},
-                ]
-                cash_transactions_table_card(bank_tx, top=5, opening_balance=3200.00)
+                cash_transactions_table_card(self.selected_wallet, top=5, currency=self.view_currency.value, rates=self.currency_rate)
                 
                 tx = [
                     {'date': '2025-04-18 13:05', 'sym': 'AAPL', 'type': 'BUY', 'qty': 10, 'price': 182.35, 
@@ -466,8 +457,6 @@ class Wallet(NavContextBase):
                     '<small class="text-grey-7">Możesz dodać konta w różnych walutach.</small>'
                     '</div>'
                 )
-
-                open_create = render_create_account_dialog(self, self.wallets[0].id)
                 
                 create_btn = ui.button('Dodaj konto', icon='add') \
                     .props('color=primary unelevated size=lg no-caps') \
@@ -478,7 +467,7 @@ class Wallet(NavContextBase):
                         'font-size:16px; letter-spacing:.2px;'
                         'box-shadow:0 16px 34px rgba(59,130,246,.28), 0 6px 12px rgba(59,130,246,.18);'
                         'transition:transform .15s ease, box-shadow .15s ease;'
-                    ).on('click', lambda: open_create())
+                    ).on('click', lambda: self.open_create_account_dialog())
 
                 def lift(_=None):
                     create_btn.style(

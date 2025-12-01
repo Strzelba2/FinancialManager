@@ -3,9 +3,14 @@
 logs/*
 session/config/.env
 ui/.env
+stock/app/core/.envs/.env.local
 session/static/*
 wallet/app/core/.envs/.env.local
 *__pycache__
 
 .flake8
 commends.txt
+*.fontconfig
+*.pki
+html_dumps
+

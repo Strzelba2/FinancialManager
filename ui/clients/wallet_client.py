@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from schemas.wallet import (
     ClientWalletSyncResponse, WalletCreationResponse, AccountCreationResponse
 )
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from nicegui import app
 import uuid
 
@@ -75,6 +75,9 @@ class WalletClient:
         logger.debug("Calling wallet-service POST /wallet/sync/user")
         
         resp = await self._request("POST", "/wallet/sync/user", json_body=payload)
+        if resp is None:
+            logger.warning("sync_user failed: request returned None (network/timeout/exception)")
+            return None
         if not resp or not resp.is_success:
             logger.warning("sync_user failed: HTTP %s", resp.status_code)
             return None
@@ -105,6 +108,10 @@ class WalletClient:
         
         logger.debug("Calling wallet-service POST /wallet/create/wallet")
         resp = await self._request("POST", "/wallet/create/wallet", headers=headers, json_body=payload)
+        if resp is None:
+            logger.warning("create wallet failed: request returned None (network/timeout/exception)")
+            return None
+        
         if not resp or not resp.is_success:
             logger.warning("create_wallet failed: HTTP %s", resp.status_code)
             return None
@@ -182,14 +189,13 @@ class WalletClient:
                     detail = resp.json().get("detail")
                 except json.JSONDecodeError:
                     detail = None
-                logger.info("create_account conflict (wallet_id=%s): %r", wallet_id, detail)
+                logger.info(f"create_account conflict (wallet_id={wallet_id}): {detail}")
                 return detail
-            logger.warning("create_account failed: HTTP %s | body=%s", resp.status_code, _safe_body(resp))
+            logger.warning(f"create_account failed: HTTP {resp.status_code}")
             return None
         
         try:
             data = resp.json()
-            logger.info(data)
             result = AccountCreationResponse.model_validate(data)
             logger.info("Account created in wallet ")
             return result
@@ -216,14 +222,99 @@ class WalletClient:
         
         resp = await self._request("POST", "/wallet/transactions/create", headers=headers, json_body=payload)
         if not resp:
-            return False
+            return None, None
         
         if resp.status_code in (201, 200):
             logger.info("Transaction created for user")
-            return True
+            return "Pomyślnie dodano transakcjie", 'positive'
         
+        if resp.status_code == 422:
+            try:
+                detail = resp.json().get("detail")
+            except Exception:
+                detail = None
+            logger.error(f"Validation error 422 for /transactions/create: {detail}")
+            return detail, 'negative'
+
         if resp.status_code == 404:
             logger.info("Account not found when creating transaction")
         
+            return "Konto nie istnieje", 'negative'
+        
+        return "Nieoczekiwany błąd serwera", 'negative'
+    
+    async def create_brokerage_event(self, user_id: uuid.UUID, payload: dict) -> bool:
+        """
+        Create a single brokerage event for the given user.
+
+        Args:
+            user_id: ID of the user for whom the event is created.
+            payload: Event payload as a dict (must match Wallet API schema).
+
+        Returns:
+            True if the event was created successfully (200 or 201),
+            False otherwise (including no response / 404 / other errors).
+        """
+        headers = {"X-User-Id": str(user_id)}
+        
+        logger.info(
+            f"create_brokerage_event: payload_keys={list(payload.keys())}"
+        )
+
+        resp = await self._request("POST", "/wallet/brokerage/event", headers=headers, json_body=payload)
+        if not resp:
+            logger.error(
+                "create_brokerage_event: no response from Wallet service "
+            )
+            return False
+        
+        if resp.status_code in (200, 201):
+            logger.info("Brokerevent created for user")
+            return True
+        if resp.status_code == 404:
+            logger.info("Account not found when creating event")
+            
+        logger.error(
+            f"create_brokerage_event: unexpected status {resp.status_code} "
+        )
         return False
+    
+    async def import_brokerage_events(self, user_id: uuid.UUID, payload: dict) -> Optional[Dict[str, Any]]:
+        """
+        Import multiple brokerage events for the given user in a single call.
+
+        Args:
+            user_id: ID of the user for whom to import events.
+            payload: Import payload as a dict (typically a batch of events).
+
+        Returns:
+            Parsed JSON response as a dict on success (HTTP 200),
+            or None on failure / non-200 / no response / JSON decode error.
+        """
+        headers = {'X-User-Id': str(user_id)}
+        
+        logger.info(
+            f"import_brokerage_events: payload_keys={list(payload.keys())}"
+        )
+        
+        resp = await self._request(
+            "POST",
+            "/wallet/brokerage/events/import",
+            headers=headers,
+            json_body=payload,
+        )
+        if not resp or resp.status_code != 200:
+            logger.error(f"Brokerage events import failed: {resp}")
+            return None
+        try:
+            data: Dict[str, Any] = resp.json()
+            logger.info(
+                "import_brokerage_events: import succeeded"
+            )
+            return data
+        except Exception as e:
+            logger.exception(
+                f"import_brokerage_events: failed to decode JSON: {e}"
+            )
+            return None
    

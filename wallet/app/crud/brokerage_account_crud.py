@@ -91,7 +91,7 @@ async def list_brokerage_accounts(
 
     stmt = stmt.order_by(BrokerageAccount.created_at.desc()).offset(offset).limit(limit)
     result = await session.execute(stmt)
-    return result.all()
+    return result.scalars().all() 
 
 
 async def update_brokerage_account(

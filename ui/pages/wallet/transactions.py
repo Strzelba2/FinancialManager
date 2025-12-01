@@ -7,6 +7,7 @@ import logging
 from static.style import add_style, add_user_style, add_table_style
 from components.context.nav_context import NavContextBase
 from clients.wallet_client import WalletClient
+from clients.stock_client import StockClient
 from components.navbar_footer import footer
 from utils.utils import fmt_money, parse_date
 
@@ -34,6 +35,7 @@ class Transactions(NavContextBase):
         super().__init__()
         self.request = request
         self.wallet_client = WalletClient()
+        self.stock_client = StockClient()
         
         self.range_btn = None
         self.custom_row = None

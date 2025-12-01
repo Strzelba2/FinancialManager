@@ -16,7 +16,7 @@ class NBPClient:
     """
     BASE_URL = "https://api.nbp.pl/api"
 
-    def __init__(self, *, timeout: float = 5.0):
+    def __init__(self, timeout: float = 5.0):
         """
         Initialize the NBP client.
 

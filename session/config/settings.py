@@ -204,15 +204,15 @@ APP_HMAC_KEY = config("APP_HMAC_KEY")
 
 CELERY_BEAT_SCHEDULE = {
     'delete-old-temp-blocked-ips-daily': {
-        'task': 'delete_old_temporary_blocked_ips',
+        'task': 'userauth.delete_old_temporary_blocked_ips',
         'schedule': crontab(hour='*/15'),
     },
     'delete_inactive_users_older_than_3_days-every-day': {
-        'task': 'delete_inactive_users_older_than_3_days',
+        'task': 'userauth.delete_inactive_users_older_than_3_days',
         'schedule': crontab(hour='*/24'),
     },
     'delete_invalid_sessions-every-day': {
-        'task': 'delete_invalid_sessions',
+        'task': 'userauth.delete_invalid_sessions',
         'schedule': crontab(hour='*/24'),
     },
 }

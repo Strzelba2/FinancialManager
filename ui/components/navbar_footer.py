@@ -44,6 +44,9 @@ def nav(current: str = '', ctx=None):
                         ui.menu_item('Dodaj portfel…', on_click=lambda: ctx.open_create_wallet_dialog()).classes('text-white')
                         ui.menu_item('Usuń portfel…', on_click=lambda: ctx.open_delete_wallet_dialog()).classes('text-white')
                         ui.separator().classes('bg-white')
+                        ui.menu_item('Dodaj konto…', on_click=lambda: ctx.open_create_account_dialog()).classes('text-white')
+                        ui.menu_item('Usuń konto…', on_click=lambda: ctx.open_delete_wallet_dialog()).classes('text-white')
+                        ui.separator().classes('bg-white')
                         ui.menu_item('Zarządzaj portfelami',
                                      on_click=lambda: ui.navigate.to('/wallet/manage')).classes('text-white')
                         ui.separator().classes('bg-white')
@@ -56,7 +59,7 @@ def nav(current: str = '', ctx=None):
                         menu.props('offset=[0,22]')
                         ui.menu_item('Konta', on_click=lambda: ui.navigate.to('/stock/accounts')).classes('text-white')
                         ui.separator().classes('bg-white')
-                        ui.menu_item('Notowania', on_click=lambda: ui.navigate.to('/stock')).classes('text-white')
+                        ui.menu_item('Notowania', on_click=lambda: ui.navigate.to('/stock/quotes/XWAR')).classes('text-white')
                         ui.separator().classes('bg-white')
                         ui.menu_item('alerts', on_click=lambda: ui.navigate.to('/stock/alesrts')).classes('text-white')
             

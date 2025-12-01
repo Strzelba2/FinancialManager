@@ -1,5 +1,5 @@
 from nicegui import ui
-from storage.session_state import upsert_wallet, list_wallets, remove_wallet
+from storage.session_state import upsert_wallet, get_wallets, remove_wallet
 import uuid
 import logging
 
@@ -98,9 +98,7 @@ def render_delete_wallet_dialog(self):
     from nicegui import ui
     import uuid
 
-    items = {}
-    for w in list_wallets() or []:
-        items[str(w.get('id'))] = w.get('name')
+    items = get_wallets()
 
     dlg = ui.dialog()
 

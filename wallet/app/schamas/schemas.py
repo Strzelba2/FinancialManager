@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel, Field
-from pydantic import ConfigDict
+from pydantic import ConfigDict, BaseModel
 from typing import Optional, Annotated, List
 from datetime import datetime
 import uuid
@@ -7,7 +7,8 @@ import uuid
 from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateMixin,  BankBase,
                              AccountBase, BrokerageAccountBase, DepositAccountBalanceBase,
                              InstrumentBase, HoldingBase, TransactionBase, RealEstateBase, 
-                             MetalHoldingBase, WalletBase, BrokerageDepositLinkBase)
+                             MetalHoldingBase, WalletBase, BrokerageDepositLinkBase,
+                             BrokerageEventBase, CapitalGainBase)
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
@@ -16,7 +17,7 @@ from app.validators.validators import (
 
 from app.models.enums import (
     AccountType, Currency, InstrumentType,  MetalType,
-    PropertyType
+    PropertyType, CapitalGainKind
     )
 
 
@@ -91,12 +92,14 @@ class DepositAccountUpdate(PartialUpdateMixin):
     
 class BrokerageAccountCreate(BrokerageAccountBase):
     model_config = ConfigDict(from_attributes=False)
+    
     wallet_id: uuid.UUID
     bank_id: uuid.UUID
     
     
 class BrokerageAccountRead(BrokerageAccountBase, UUIDMixin, TimestampMixin):
     model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+    
     wallet_id: uuid.UUID
     bank_id: uuid.UUID
     
@@ -107,6 +110,44 @@ class BrokerageAccountUpdate(PartialUpdateMixin):
     bank_id: Optional[uuid.UUID] = None
     
     __update_require_any__ = {"name", "bank_id"}
+    
+
+class BrokerageEventCreate(BrokerageEventBase):
+    model_config = ConfigDict(from_attributes=False)
+    
+    brokerage_account_id: uuid.UUID
+    instrument_symbol: str
+    instrument_mic: str  
+
+    instrument_name: str 
+ 
+    
+class BrokerageEventImportRow(BrokerageEventBase):
+    model_config = ConfigDict(from_attributes=False)
+    
+    instrument_symbol: str
+    instrument_mic: str
+    instrument_name: Optional[str] = None
+
+
+class BrokerageEventsImportRequest(BaseModel):
+
+    brokerage_account_id: uuid.UUID
+    events: List[BrokerageEventImportRow]
+ 
+    
+class CapitalGainCreate(CapitalGainBase):
+    model_config = ConfigDict(from_attributes=False)
+    
+    deposit_account_id: uuid.UUID
+    transaction_id: uuid.UUID
+    
+
+class BrokerageEventRead(BrokerageEventBase, UUIDMixin):
+    model_config = ConfigDict(from_attributes=False)
+    
+    brokerage_account_id: uuid.UUID
+    instrument_id: uuid.UUID
     
     
 class BrokerageDepositLinkCreate(BrokerageDepositLinkBase):
@@ -198,7 +239,8 @@ class TransactionIn(SQLModel):
     date: datetime                               
     amount: Q2                          
     description: Optional[str] = None
-    amount_after: Q2 = None
+    amount_after: Optional[Q2] = None
+    capital_gain_kind: Optional[CapitalGainKind] = None
 
 
 class CreateTransactionsRequest(SQLModel):

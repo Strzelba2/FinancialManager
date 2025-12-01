@@ -12,6 +12,19 @@ class AccountType(str, Enum):
     SAVINGS = "SAVINGS" 
     BROKERAGE = "BROKERAGE"
     CREDIT = "CREDIT"
+    
+
+class BrokerageEventKind(str, Enum):
+    TRADE_BUY = "BUY"
+    TRADE_SELL = "SELL"
+    SPLIT = "SPLIT"
+    DIV = "DIV"
+    
+
+class CapitalGainKind(str, Enum):
+    DEPOSIT_INTEREST = "DEPOSIT_INTEREST"  
+    BROKER_REALIZED_PNL = "BROKER_REALIZED_PNL"
+    BROKER_DIVIDEND = "BROKER_DIVIDEND"  
        
 
 class TaxWrapper(str, Enum):
@@ -26,6 +39,7 @@ class InstrumentType(str, Enum):
     BOND = "BOND"
     FUND = "FUND"
     CRYPTO = "CRYPTO"
+    
     
 class PropertyType(str, Enum):
     APARTMENT = "APARTMENT",

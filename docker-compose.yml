@@ -134,12 +134,6 @@ services:
     volumes:
       - ./wallet:/wallet_api
       - ./logs/wallet:/wallet_api/logs
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.wallet.entrypoints=web"
-      - "traefik.http.routers.wallet.rule=Host(`wallet-backend.localhost`)"
-      - "traefik.http.routers.wallet.service=wallet-service"
-      - "traefik.http.services.wallet-service.loadbalancer.server.port=8001"
     expose:
       - 8001
     env_file:
@@ -151,18 +145,55 @@ services:
     networks:
       - financial_manager
 
-
-  celerywalletworker:
+  stock: 
     build:
-      context: ./wallet
+      context: ./stock
       dockerfile: /docker/fastapi/Dockerfile
     volumes:
-      - ./wallet:/wallet_api
+      - ./stock:/stock_api
+      - ./logs/stock:/stock_api/logs
+    expose:
+      - 8001
     env_file:
-      - ./wallet/app/core/.envs/.env.local
+      - ./stock/app/core/.envs/.env.local
     depends_on:
       - wallet-db
-    command: docker/celery/start.sh
+    command: docker/fastapi/start.sh
+    
+    networks:
+      - financial_manager
+
+  celerystockworker:
+    build:
+      context: ./stock
+      dockerfile: /docker/fastapi/Dockerfile
+    volumes:
+      - ./stock:/stock_api
+      - ./logs/stock:/stock_api/logs
+    env_file:
+      - ./stock/app/core/.envs/.env.local
+    depends_on:
+      - wallet-db
+      - redis
+      - rabbitmq
+    command: docker/celery/worker/start.sh
+    networks:
+      - financial_manager
+
+  celerystockbeat:
+    build:
+      context: ./stock
+      dockerfile: /docker/fastapi/Dockerfile
+    volumes:
+      - ./stock:/stock_api
+      - ./logs/stock:/stock_api/logs
+    env_file:
+      - ./stock/app/core/.envs/.env.local
+    depends_on:
+      - wallet-db
+      - redis
+      - rabbitmq
+    command: docker/celery/beat/start.sh
     networks:
       - financial_manager
 
@@ -289,7 +320,14 @@ services:
     command: docker/celery/beat/start.sh
 
   flower:
-    <<: *celery
+    build: 
+      context: ./session
+      dockerfile: docker/session/Dockerfile
+    env_file: ./session/config/.env
+    depends_on:
+      - redis
+      - rabbitmq
+    restart: on-failure
     ports:
       - "5555:5555"
     labels:
@@ -299,6 +337,8 @@ services:
       - "traefik.http.routers.flower.service=flower-service"
       - "traefik.http.services.flower-service.loadbalancer.server.port=5555"
     command: docker/celery/flower/start.sh
+    networks:
+      - financial_manager
 
   pgadmin:
     image: dpage/pgadmin4:latest

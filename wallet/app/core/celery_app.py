@@ -4,8 +4,8 @@ from .config import settings
 
 celery_app = Celery(
     "worker",
-    broker=f"amqp://{settings.RABBITMQ_USER}:{settings.RABBITMQ_PASSWORD}@{settings.RABBITMQ_HOST}:{settings.RABBITMQ_PORT}//",
-    backend=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
+    broker=f"{settings.CELERY_BROKER_URL}",
+    backend=f"{settings.CELERY_RESULT_BACKEND}",
 )
 
 celery_app.conf.update(
@@ -26,7 +26,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_retry_delay=300,
     task_max_retries=3,
-    task_default_queue="financial_tasks",
+    task_default_queue="wallet_tasks",
     task_create_missing_queues=True,
     worker_max_tasks_per_child=1000,
     worker_max_memory_per_child=50000,

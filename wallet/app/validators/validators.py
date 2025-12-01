@@ -1,7 +1,7 @@
 from __future__ import annotations
 import re
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional, Any, Annotated
+from typing import Optional, Any, Annotated, Callable
 
 from pydantic import BeforeValidator, AfterValidator, EmailStr
 
@@ -63,6 +63,16 @@ def require_len_between_1_12(v: str) -> str:
     if not (1 <= len(v) <= 12):
         raise ValueError("must be 1..12 characters")
     return v
+
+
+def require_regex(pattern: str, msg: str) -> Callable[[str], str]:
+    rx = re.compile(pattern)
+    
+    def _check(s: str) -> str:
+        if not rx.fullmatch(s):
+            raise ValueError(msg)
+        return s
+    return _check
 
 
 def require_len_between_1_5(v: str) -> str:
@@ -159,4 +169,10 @@ AreaQ2OptPos = Annotated[
     AfterValidator(lambda v: v if v is None or v > 0 else (
         (_ for _ in ()).throw(ValueError("area_m2 must be > 0"))
     )),
+]
+
+MICCode = Annotated[
+    str,
+    BeforeValidator(strip_upper),
+    AfterValidator(require_regex(r"^[A-Z0-9]{4}$", "MIC must be 4 uppercase letters/digits")),
 ]

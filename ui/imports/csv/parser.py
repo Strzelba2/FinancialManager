@@ -2,9 +2,13 @@ import io
 import re
 import csv
 from typing import Iterable, Tuple
-from schemas.wallet import TransactionCreationRow
-from utils.money import dec, parse_amount
+from schemas.wallet import (
+    TransactionCreationRow, CapitalGainKind, BrokerageEventImportRow, BrokerageEventKind,
+    Currency
+    )
+from utils.money import dec, parse_amount, dec2
 from utils.utils import read_bytes, parse_date
+from clients.stock_client import StockClient
 from exceptions import MissingRequiredColumnsError
 import logging
 
@@ -27,6 +31,8 @@ class BaseBankParser:
     kind = 'CSV'
     accept = '.csv'
     upload_label = 'Drop CSV here or click'
+    
+    supports_brokerage_events: bool = False
     
     def __init__(self):
         self.header_variants = [
@@ -279,12 +285,17 @@ class IngBankParser(BaseBankParser):
             amount = dec(parse_amount(r.get('Kwota transakcji (waluta rachunku)', '0')))
             amount_after = dec(parse_amount(r.get('Saldo po transakcji', '0')))
             desc = ' '.join([r.get('Dane kontrahenta'), r.get('Tytuł')])
+            
+            cg_kind = None
+            if 'odsetki' in desc.lower():
+                cg_kind = CapitalGainKind.DEPOSIT_INTEREST.name
 
             parsed.append(TransactionCreationRow(
                 date=date,
                 amount=amount,
                 description=desc,
-                amount_after=amount_after
+                amount_after=amount_after,
+                capital_gain_kind=cg_kind,
             ))
         return parsed
    
@@ -305,10 +316,12 @@ class SaxoBankParser(BaseBankParser):
         MissingRequiredColumnsError:
             If required columns (e.g., 'Saldo po operacji') are missing.
     """
-    name = 'SaxoBank CSV'
+    name = 'SaxoMakler CSV'
     kind = 'CSV'
     accept = '.csv'
     upload_label = 'Drop CSV here or click'
+    
+    # supports_brokerage_events = True
     
     def __init__(self):
         super().__init__()
@@ -340,12 +353,17 @@ class SaxoBankParser(BaseBankParser):
             amount = dec(parse_amount(r.get('Zablokowana kwota', '0')))
             amount_after = dec(parse_amount(r.get('Saldo po operacji', '0')))
             desc = ' '.join([r.get('Rodzaj'), ":",  r.get('Instrument'), "-",  r.get('Zdarzenie')])
+            
+            cg_kind = None
+            if "Dywidenda" in r.get('Zdarzenie'):
+                cg_kind = CapitalGainKind.BROKER_DIVIDEND.name
 
             parsed.append(TransactionCreationRow(
                 date=date,
                 amount=amount,
                 description=desc,
-                amount_after=amount_after
+                amount_after=amount_after,
+                capital_gain_kind=cg_kind,
             ))
         return parsed
   
@@ -365,10 +383,12 @@ class BossaBankParser(BaseBankParser):
         MissingRequiredColumnsError:
             If required columns (e.g., 'Saldo po operacji') are missing.
     """
-    name = 'BossaBank CSV'
+    name = 'BossaMakler CSV'
     kind = 'CSV'
     accept = '.csv'
     upload_label = 'Drop CSV here or click'
+    
+    supports_brokerage_events = True
     
     def __init__(self):
         super().__init__()
@@ -408,15 +428,120 @@ class BossaBankParser(BaseBankParser):
             amount = dec(parse_amount(r.get('kwota', '0')))
             amount_after = dec(parse_amount(r.get('Saldo po operacji', '0')))
             desc = ' '.join([r.get('tytuł operacji'),  r.get('szczegóły')])
+            
+            cg_kind = None
+            if "dywidendy" in r.get('tytuł operacji'):
+                cg_kind = CapitalGainKind.BROKER_DIVIDEND.name
 
             parsed.append(TransactionCreationRow(
                 date=date,
                 amount=amount,
                 description=desc,
-                amount_after=amount_after
+                amount_after=amount_after,
+                capital_gain_kind=cg_kind,
             ))
         return parsed
     
+    async def parse_brokerage_events(
+        self,
+        rows: Iterable[dict[str, str]],
+        stock_client: "StockClient",
+    ) -> list[BrokerageEventImportRow]:
+        """
+        Parse raw brokerage operation rows into normalized `BrokerageEventImportRow` objects.
+
+        Expected input format (per row, dict with Polish keys):
+            - "data": string date (parsed by `parse_date`)
+            - "tytuł operacji": text describing operation, used to detect BUY/SELL
+            - "szczegóły": details, from which shortname, quantity and currency are extracted
+            - "kwota": operation amount as string
+
+        Logic:
+            - Skip rows with invalid/absent date.
+            - Recognize only BUY/SELL (based on "kupna"/"sprzedaży" in "tytuł operacji").
+            - Extract:
+                * shortname, quantity, currency from "szczegóły".
+                * amount from "kwota".
+            - Resolve instrument using `stock_client.search_instrument_by_shortname`.
+            - Compute price = amount / quantity.
+            - Build `BrokerageEventImportRow` with resolved instrument and parsed values.
+
+        Args:
+            rows: Iterable of dicts representing raw brokerage operation rows.
+            stock_client: Stock service client used to resolve instrument metadata.
+
+        Returns:
+            List of successfully parsed `BrokerageEventImportRow` objects.
+            Invalid / unrecognized rows are silently skipped (with logging).
+        """
+        logger.info("parse_brokerage_events: start parsing brokerage rows")
+
+        events: list[BrokerageEventImportRow] = []
+
+        for r in rows:
+            date = parse_date(r.get("data"))
+            if not date:
+                continue
+
+            kind_raw = (r.get("tytuł operacji") or "").lower()
+            if "kupna" in kind_raw:
+                kind = BrokerageEventKind.BUY
+            elif "sprzedaży" in kind_raw:
+                kind = BrokerageEventKind.SELL
+            else:
+                continue
+
+            try:
+                data = (r.get("szczegóły").strip()).split(" ")
+                shortname = data[0].split("-")[0]
+                quantity_data = data[2]
+                currency_data = data[5]
+            except Exception:
+                continue
+            
+            if not shortname:
+                continue
+
+            try:
+                instr_data = await stock_client.search_instrument_by_shortname(shortname)
+                if not instr_data:
+                    logger.warning(f"No instrument found for shortname='{shortname}'")
+                    continue
+
+                inst = instr_data[0]
+                symbol = inst["symbol"]
+                mic = inst["mic"]
+                name = inst.get("name") or shortname
+                isin = inst.get("isin")
+                inst_short = inst.get("shortname") or shortname
+                currency = Currency(currency_data)
+            except Exception as e:  
+                logger.exception(f"Stock lookup failed for '{shortname}': {e}")
+                continue
+
+            quantity = dec(parse_amount(quantity_data))
+            amount = abs(dec(parse_amount(r.get("kwota", "0"))))
+
+            price = dec2(amount/quantity)
+
+            events.append(
+                BrokerageEventImportRow(
+                    trade_at=date,
+                    instrument_symbol=symbol,
+                    instrument_mic=mic,
+                    instrument_name=name,
+                    instrument_isin=isin,
+                    instrument_shortname=inst_short,
+                    kind=kind,
+                    quantity=quantity,
+                    price=price,
+                    currency=currency,
+                    split_ratio=dec("0"),
+                )
+            )
+
+        return events
+
 
 class IngMaklerBankParser(BaseBankParser):
     """
@@ -437,6 +562,8 @@ class IngMaklerBankParser(BaseBankParser):
     kind = 'CSV'
     accept = '.csv'
     upload_label = 'Drop CSV here or click'
+    
+    supports_brokerage_events = True
     
     def __init__(self):
         super().__init__()
@@ -470,10 +597,108 @@ class IngMaklerBankParser(BaseBankParser):
             amount_after = dec(parse_amount(r.get('Saldo po operacji', '0')))
             desc = ' '.join([r.get('Typ transakcji'), ": ",  r.get('Opis transakcji')])
 
+            cg_kind = None
+            if "Dywidendy" in r.get('Typ transakcji'):
+                cg_kind = CapitalGainKind.BROKER_DIVIDEND.name
+
             parsed.append(TransactionCreationRow(
                 date=date,
                 amount=amount,
                 description=desc,
-                amount_after=amount_after
+                amount_after=amount_after,
+                capital_gain_kind=cg_kind,
             ))
+            
         return parsed
+
+    async def parse_brokerage_events(
+        self,
+        rows: Iterable[dict[str, str]],
+        stock_client: "StockClient",
+    ) -> list[BrokerageEventImportRow]:
+        """
+        Parse ING Makler CSV rows into `BrokerageEventImportRow` objects
+        and enrich instrument data using the stock service.
+
+        Expected CSV column names (Polish):
+            - "Data transakcji": transaction date (parsed via `parse_date`)
+            - "Typ Transakcji": operation type ("kupno", "sprzedaż", etc.)
+            - "Instrument": instrument shortname / name
+            - "Ilość": quantity
+            - "Kwota z Prowizją": total amount including commission
+            - "Waluta": transaction currency code (e.g. "PLN")
+
+        Logic:
+            - Rows without a parsable date are skipped.
+            - Only BUY/SELL operations are recognized, based on "Typ Transakcji".
+            - Instruments are resolved via `stock_client.search_instrument_by_shortname`.
+            - Price is computed as: price = amount / quantity.
+            - Failed lookups or malformed rows are skipped (with logging).
+
+        Args:
+            rows: Iterable of dicts representing CSV rows.
+            stock_client: Stock service client used to resolve instrument metadata.
+
+        Returns:
+            A list of successfully parsed `BrokerageEventImportRow` instances.
+        """
+        logger.info("parse_brokerage_events[ING]: start parsing brokerage rows")
+        events: list[BrokerageEventImportRow] = []
+
+        for r in rows:
+            logger.info(r.get("Data transakcji"))
+            date = parse_date(r.get("Data transakcji"))
+            logger.info(date)
+            if not date:
+                continue
+
+            kind_raw = (r.get("Typ Transakcji") or "").lower()
+            if "kupno" in kind_raw:
+                kind = BrokerageEventKind.BUY
+            elif "sprzeda" in kind_raw:
+                kind = BrokerageEventKind.SELL
+            else:
+                continue
+
+            shortname = (r.get("Instrument") or "").strip()
+            if not shortname:
+                continue
+
+            try:
+                instr_data = await stock_client.search_instrument_by_shortname(shortname)
+                if not instr_data:
+                    logger.warning(f"No instrument found for shortname='{shortname}'")
+                    continue
+
+                inst = instr_data[0]
+                symbol = inst["symbol"]
+                mic = inst["mic"]
+                name = inst.get("name") or shortname
+                isin = inst.get("isin")
+                inst_short = inst.get("shortname") or shortname
+                currency = Currency(r.get("Waluta"))
+            except Exception as e:
+                logger.exception(f"Stock lookup failed for '{shortname}': {e}")
+                continue
+
+            quantity = dec(parse_amount(r.get("Ilość", "0")))
+            amount = abs(dec(parse_amount(r.get("Kwota z Prowizją", "0"))))
+            price = dec2(amount/quantity)
+
+            events.append(
+                BrokerageEventImportRow(
+                    trade_at=date,
+                    instrument_symbol=symbol,
+                    instrument_mic=mic,
+                    instrument_name=name,
+                    instrument_isin=isin,
+                    instrument_shortname=inst_short,
+                    kind=kind,
+                    quantity=quantity,
+                    price=price,
+                    currency=currency,
+                    split_ratio=dec("0"),
+                )
+            )
+
+        return events

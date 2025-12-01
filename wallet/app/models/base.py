@@ -11,14 +11,15 @@ from typing import Optional, ClassVar, Set
 
 from .enums import (
     PropertyType, AccountType, Currency, InstrumentType,
-    MetalType
+    MetalType, BrokerageEventKind, CapitalGainKind
     )
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, 
     Shortname, BICOpt, NonEmptyStr,
     BytesLen32, Q2,  Q6Pos, AreaQ2OptPos,
-    CountryISO2Opt, CityOpt, NoneIfEmpty
+    CountryISO2Opt, CityOpt, NoneIfEmpty,
+    MICCode
 )
 
 
@@ -181,6 +182,42 @@ class BrokerageAccountBase(SQLModel):
         sa_column=sa.Column(sa.String(255), nullable=False),
         description="Human-readable account name (unique within wallet via constraint)."
     )
+    
+    
+class BrokerageEventBase(SQLModel):
+    model_config = ConfigDict(validate_assignment=True, from_attributes=True)
+
+    kind: BrokerageEventKind = Field(
+        sa_column=sa.Column(
+            sa.Enum(
+                BrokerageEventKind,
+                name="brokerage_event_kind",
+            ),
+            nullable=False,
+        )
+    )
+
+    quantity: Q2 = Field(
+        default=Decimal("0"),
+        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        description="quantity envent"
+    )
+    price: Q2 = Field(
+        default=Decimal("0"),
+        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        description="price envent"
+    )
+    currency: Currency = Field(
+        sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False),
+        description="Brokerage event currency."
+    )
+    
+    split_ratio: Q2 = Field(
+        default=Decimal("0"),
+        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        description="Split event"
+    )
+    trade_at: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))  
    
     
 class BrokerageDepositLinkBase(SQLModel):
@@ -202,8 +239,27 @@ class DepositAccountBalanceBase(SQLModel):
         sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
         description="Blocked balance"
     )
-   
     
+    
+class CapitalGainBase(SQLModel):
+    kind: CapitalGainKind = Field(
+        sa_column=sa.Column(
+            sa.Enum(CapitalGainKind, name="capital_gain_kind_enum"),
+            nullable=False,
+        ),
+        description="Source of profit"
+    )
+    amount: Q2 = Field(
+        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False),
+    )
+    currency: Currency = Field(
+        sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False),
+    )
+    occurred_at: datetime = Field(
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False, index=True),
+    )
+
+     
 class HoldingBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True) 
     
@@ -215,6 +271,8 @@ class InstrumentBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True)
     
     symbol: Shortname = Field(sa_column=sa.Column(sa.String(5), unique=True, index=True))
+    mic: MICCode = Field(sa_column=sa.Column(sa.String(4), index=True, nullable=False),
+                         description="MIC: 4 uppercase alphanumeric (ISO 10383 operating MICs like XWAR, XLON, XNAS)" )
     name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255), nullable=False))
     type: InstrumentType = Field(sa_column=sa.Column(sa.Enum(InstrumentType, name="instrument_type_enum"), nullable=False))
     currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))

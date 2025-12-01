@@ -23,6 +23,35 @@ async def create_instrument(session: AsyncSession, data: InstrumentCreate) -> In
     return obj
 
 
+async def get_or_create_instrument(
+    session: AsyncSession,
+    mic: str,
+    symbol: str,
+    name: str | None,
+    currency: Currency,
+) -> Instrument:
+    stmt = (
+        select(Instrument)
+        .where(Instrument.mic == mic, Instrument.symbol == symbol)
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    inst = result.scalar_one_or_none()
+    if inst:
+        return inst
+
+    inst = Instrument(
+        mic=mic,
+        symbol=symbol,
+        name=name,   
+        currency=currency, 
+        type=InstrumentType.STOCK, 
+    )
+    session.add(inst)
+    await session.flush()
+    return inst
+
+
 async def get_instrument(session: AsyncSession, instrument_id: uuid.UUID) -> Optional[Instrument]:
     return await session.get(Instrument, instrument_id)
 

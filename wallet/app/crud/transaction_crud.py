@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Transaction
 from app.schamas.schemas import (
-    TransactionCreate,
+    TransactionCreate, TransactionRead,
     TransactionUpdate,
 )
 
@@ -36,6 +36,8 @@ async def create_transaction_uow(session: AsyncSession, data: TransactionCreate)
         await session.flush()
     except IntegrityError as e:
         raise ValueError("Could not create transaction (invalid account or constraints).") from e
+    await session.refresh(tx)
+    return tx
 
 
 async def get_transaction(session: AsyncSession, tx_id: uuid.UUID) -> Optional[Transaction]:
@@ -50,6 +52,24 @@ async def get_transaction_with_account(session: AsyncSession, tx_id: uuid.UUID) 
     )
     result = await session.execute(stmt)
     return result.first()
+
+
+async def get_last_transactions_for_account(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    limit: int = 5,
+) -> List[TransactionRead]:
+    """
+    Return last `limit` transactions for a single deposit account, ordered by date_transaction DESC.
+    """
+    stmt = (
+        select(Transaction)
+        .where(Transaction.account_id == account_id)
+        .order_by(Transaction.date_transaction.desc(), Transaction.id.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [TransactionRead.model_validate(r, from_attributes=True) for r in rows]
 
 
 async def list_transactions(
@@ -129,3 +149,22 @@ async def account_has_transactions(session: AsyncSession, account_id: uuid.UUID)
     stmt = select(func.count()).select_from(Transaction).where(Transaction.account_id == account_id)
     result = await session.execute(stmt)
     return (result.scalar_one() or 0) > 0
+
+
+async def find_duplicate_transaction(
+    session: AsyncSession,
+    data: TransactionCreate,
+) -> Optional[Transaction]:
+
+    stmt = (
+        select(Transaction)
+        .where(
+            Transaction.account_id == data.account_id,
+            Transaction.date_transaction == data.date_transaction,
+            Transaction.amount == data.amount,
+            Transaction.description == data.description,
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()

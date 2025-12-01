@@ -1,5 +1,5 @@
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
-from typing import Iterable, Dict, Optional
+from typing import Iterable, Dict, Optional, Union
 import re
 import logging
 
@@ -18,6 +18,28 @@ def dec(x) -> Decimal:
     """
     
     return x if isinstance(x, Decimal) else Decimal(str(x or "0"))
+
+
+def dec2(x, q=2):
+    """
+    Convert a numeric-like value to Decimal and quantize it to a given precision.
+
+    This is a convenience wrapper around:
+        - `dec(x)`       → converts input to `Decimal`
+        - `quantize(..)` → rounds to `q` decimal places
+
+    Args:
+        x: Value to convert to Decimal (e.g. str, int, float, Decimal).
+        q: Number of decimal places to keep (default: 2).
+
+    Returns:
+        Quantized `Decimal` value.
+
+    Raises:
+        Whatever `dec` or `quantize` may raise if input is invalid.
+    """
+    amount = dec(x)
+    return quantize(amount, q)
 
 
 def quantize(dec: Decimal, decimals: int) -> Decimal:
@@ -118,6 +140,85 @@ def invert_rate(x: Optional[float | str | Decimal], places: int = 6) -> Decimal:
     return (Decimal("1") / d).quantize(Decimal(10) ** -places, rounding=ROUND_HALF_UP)
 
 
+def fx_rate(src: str, dst: str, rates: Dict) -> Decimal:
+    """
+    Compute an FX rate from `src` currency to `dst` using a rates dict.
+
+    The `rates` dict is expected to contain entries like:
+        "USD/PLN" -> 4.1234
+        "PLN/EUR" -> 0.225
+        ...
+
+    Resolution order:
+        1. Direct pair:  src/dst
+        2. Inverse pair: dst/src  (inverted via `invert_rate`)
+        3. Cross via PLN: src/PLN and PLN/dst
+        4. Cross via PLN inverse: dst/PLN and PLN/src (both inverted)
+        5. Cross via USD: src/USD and USD/dst
+        6. Cross via USD inverse: dst/USD and USD/src (both inverted)
+
+    If no combination is found, returns Decimal("0").
+
+    Args:
+        src: Source currency code (e.g. "PLN", "USD").
+        dst: Destination currency code.
+        rates: Mapping of "CUR1/CUR2" -> numeric rate.
+
+    Returns:
+        Decimal FX rate from src to dst; Decimal("0") if not resolvable.
+    """
+    if src == dst:
+        return Decimal('1')
+    direct = f'{src}/{dst}'
+    if direct in rates:
+        return dec(rates[direct])
+    
+    inv = f"{dst}/{src}"
+    if inv in rates:
+        return invert_rate(rates[inv])
+
+    if f"{src}/PLN" in rates and f"PLN/{dst}" in rates:
+        return dec(rates[f"{src}/PLN"]) * dec(rates[f"PLN/{dst}"])
+    if f"{dst}/PLN" in rates and f"PLN/{src}" in rates:
+        return invert_rate(rates[f"{dst}/PLN"]) * invert_rate(rates[f"PLN/{src}"])
+
+    if f"{src}/USD" in rates and f"USD/{dst}" in rates:
+        return dec(rates[f"{src}/USD"]) * dec(rates[f"USD/{dst}"])
+    if f"{dst}/USD" in rates and f"USD/{src}" in rates:
+        return invert_rate(rates[f"{dst}/USD"]) * invert_rate(rates[f"USD/{src}"])
+
+    return Decimal("0")
+   
+    
+def convert_amount(
+    amount: Decimal,
+    src: str,
+    dst: str,
+    rates: Dict,
+    quant: int = 2,
+) -> Decimal:
+    """
+    Convert a Decimal amount from `src` currency to `dst` using FX rates.
+
+    Steps:
+        1. Compute fx = fx_rate(src, dst, rates)
+        2. Multiply: out = amount * fx
+        3. Quantize with `quantize(out, quant)`
+
+    Args:
+        amount: Monetary amount in `src` currency as Decimal.
+        src: Source currency code.
+        dst: Destination currency code.
+        rates: FX rates mapping (passed to `fx_rate`).
+        quant: Number of decimal places to keep in result.
+
+    Returns:
+        Converted and quantized Decimal value.
+    """
+    out = amount * fx_rate(src, dst, rates)
+    return quantize(out, quant)
+
+
 def cash_total_in_pln(data, rates: Dict) -> Decimal:
     """
     Calculate total cash in PLN by converting from USD and EUR.
@@ -174,6 +275,32 @@ def cash_total_in_eur(data, rates: Dict) -> Decimal:
     if total_usd or total_pln:
         total_eur += total_usd * dec(rates.get("USD/EUR", 4)) + total_pln * dec(rates.get("PLN/EUR", 4))
     return total_eur
+
+
+def change_currency_to(amount: Union[str, float, Decimal], view_currency: str, transaction_currency: str, rates: str) -> Decimal:
+    """
+    High-level helper to convert an amount to a "view" currency.
+
+    Shortcut for typical UI usage: given an amount in `transaction_currency`,
+    convert it to `view_currency` using the FX table.
+
+    If currencies match, the function returns the original amount (as Decimal)
+    without conversion.
+
+    Args:
+        amount: Input amount (str, float, or Decimal).
+        view_currency: Target/display currency code (e.g. "PLN").
+        transaction_currency: Original transaction currency code.
+        rates: FX rate mapping passed to `convert_amount`.
+
+    Returns:
+        Amount expressed in `view_currency` as Decimal.
+    """
+    if view_currency == transaction_currency:
+        return amount
+    
+    converted_amount = convert_amount(amount, transaction_currency, view_currency, rates)
+    return converted_amount
 
 
 def parse_amount(value) -> Decimal | None:

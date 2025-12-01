@@ -7,7 +7,8 @@ from typing import Optional
 from .base import (UserBase, UUIDMixin, TimestampMixin, BankBase,
                    AccountBase, BrokerageAccountBase, DepositAccountBalanceBase,
                    InstrumentBase, HoldingBase, TransactionBase, RealEstateBase, 
-                   MetalHoldingBase, WalletBase, BrokerageDepositLinkBase)
+                   MetalHoldingBase, WalletBase, BrokerageDepositLinkBase,
+                   BrokerageEventBase, CapitalGainBase)
 
 
 class User(UserBase, UUIDMixin, TimestampMixin, table=True):
@@ -87,13 +88,42 @@ class BrokerageAccount(BrokerageAccountBase, UUIDMixin, TimestampMixin, table=Tr
     deposit_links: list["BrokerageDepositLink"] = Relationship(
         back_populates="brokerage_account",
         sa_relationship_kwargs={"cascade": "all, delete-orphan", "passive_deletes": True})
+    
     holdings: list["Holding"] = Relationship(
         back_populates="account",
         sa_relationship_kwargs={"cascade": "all, delete-orphan", "passive_deletes": True})
     
+    events: list["BrokerageEvent"] = Relationship(
+        back_populates="account_event",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan", "passive_deletes": True},
+    )
+    
     __table_args__ = (
         sa.Index("ix_brokerage_wallet_bank", "wallet_id", "bank_id"),
         sa.UniqueConstraint("wallet_id", "bank_id", "name", name="uq_brokerage_name_per_wallet_bank"),
+    )
+    
+
+class BrokerageEvent(BrokerageEventBase, UUIDMixin, table=True):
+    __tablename__ = "brokerage_events"
+    
+    brokerage_account_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True),
+                            sa.ForeignKey("brokerage_accounts.id", ondelete="CASCADE"),
+                            nullable=False, index=True)
+    )
+    
+    instrument_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True),
+                            sa.ForeignKey("instruments.id", ondelete="CASCADE"),
+                            nullable=False, index=True)
+    )
+    
+    account_event: "BrokerageAccount" = Relationship(back_populates="events")
+    
+    __table_args__ = (
+        sa.CheckConstraint("quantity >= 0", name="ck_brokevent_quantity_nonneg"),
+        sa.CheckConstraint("price >= 0",  name="ck_brokevent_price_nonneg"),
     )
     
     
@@ -143,7 +173,7 @@ class DepositAccountBalance(DepositAccountBalanceBase, TimestampMixin, table=Tru
     )
     
 
-class Instrument(InstrumentBase, UUIDMixin, SQLModel, table=True):
+class Instrument(InstrumentBase, UUIDMixin, table=True):
     __tablename__ = "instruments"
    
     __table_args__ = (
@@ -151,7 +181,7 @@ class Instrument(InstrumentBase, UUIDMixin, SQLModel, table=True):
     )
     
     
-class Holding(HoldingBase, UUIDMixin, TimestampMixin, SQLModel, table=True):
+class Holding(HoldingBase, UUIDMixin, TimestampMixin, table=True):
     __tablename__ = "holdings"
 
     account_id: uuid.UUID = Field(
@@ -181,7 +211,7 @@ class Holding(HoldingBase, UUIDMixin, TimestampMixin, SQLModel, table=True):
     )
     
     
-class Transaction(UUIDMixin, TransactionBase, TimestampMixin, SQLModel, table=True):
+class Transaction(UUIDMixin, TransactionBase, TimestampMixin, table=True):
     __tablename__ = "transactions"
     
     account_id: uuid.UUID = Field(
@@ -199,6 +229,29 @@ class Transaction(UUIDMixin, TransactionBase, TimestampMixin, SQLModel, table=Tr
         sa.CheckConstraint("balance_before >= 0", name="ck_tx_balance_before_nonneg"),
         sa.CheckConstraint("balance_after  >= 0", name="ck_tx_balance_after_nonneg"),
     )
+     
+ 
+class CapitalGain(CapitalGainBase, UUIDMixin, table=True):
+    __tablename__ = "capital_gains"
+
+    deposit_account_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("deposit_accounts.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    transaction_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("transactions.id", ondelete="CASCADE"),
+            nullable=True,
+            unique=True,
+            index=True,
+        ),
+    )   
     
     
 class RealEstate(RealEstateBase, UUIDMixin, TimestampMixin, table=True):

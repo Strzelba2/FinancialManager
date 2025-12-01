@@ -1,0 +1,178 @@
+from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List, Any
+import logging
+
+from app.api.services.quotes import get_latest_quote_service, get_latest_bulk_service
+from app.db.session import db
+from app.schemas.schemas import MarketOut, InstrumentOptionOut, InstrumentSearchRead
+from app.crud.market import list_markets
+from app.crud.instrument import list_instruments, search_instruments_by_shortname_or_name
+
+router = APIRouter()
+
+logger = logging.getLogger(__name__)
+
+
+@router.get("quotes/latest")
+async def get_latest_quote(
+    mic: str = Query(..., description="Market MIC, e.g. XWAR, XNCO"), 
+    symbol: str = Query(..., description="Instrument symbol, e.g. PKN, AAPL"), 
+    session: AsyncSession = Depends(db.get_session),
+) -> dict[str, Any]:
+    """
+    Get the latest quote for a single instrument on a given market.
+
+    Args:
+        mic: Market MIC code (e.g. XWAR, XNCO).
+        symbol: Instrument symbol (e.g. PKN, AAPL).
+        session: SQLAlchemy async database session.
+
+    Returns:
+        A JSON-serializable dictionary representing the latest quote.
+
+    Raises:
+        HTTPException(404): If no quote is found for the given MIC and symbol.
+    """
+    logger.info(f"Request: get_latest_quote mic={mic!r}, symbol={symbol!r}")
+    
+    data = await get_latest_quote_service(session, mic, symbol)
+    if data is None:
+        logger.warning(f"No latest quote found for mic={mic!r}, symbol={symbol!r}")
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    dumped = data.model_dump(mode="json")
+    logger.debug(f"Latest quote response for mic={mic!r}, symbol={symbol!r}: {dumped}")
+    return dumped
+   
+    
+@router.get("/quotes/latest/bulk")
+async def get_latest_bulk(
+    mic: str = Query(..., description="Market MIC, e.g. XWAR, XNCO"),
+    session: AsyncSession = Depends(db.get_session),
+):
+    """
+    Get the latest quotes for all instruments on a given market.
+
+    Args:
+        mic: Market MIC code (e.g. XWAR, XNCO).
+        session: SQLAlchemy async database session.
+
+    Returns:
+        A JSON-serializable dictionary with bulk latest quotes for the given market.
+
+    Raises:
+        HTTPException(404): If there are no quotes for the given MIC.
+    """
+    logger.info(f"Request: get_latest_bulk mic={mic!r}")
+    
+    root = (await get_latest_bulk_service(session, mic)).model_dump(mode="json")
+    if not root:
+        logger.warning(f"No bulk quotes found for mic={mic!r}")
+        raise HTTPException(status_code=404, detail="No quotes for MIC")
+    
+    logger.debug(f"Bulk latest quotes response for mic={mic!r}: {root}")
+    return root
+
+
+@router.get("/markets", response_model=list[MarketOut])
+async def get_list_markets(session: AsyncSession = Depends(db.get_session)) -> list[MarketOut]:
+    """
+    List all configured markets.
+
+    Args:
+        session: SQLAlchemy async database session.
+
+    Returns:
+        A list of markets as `MarketOut` models.
+
+    Raises:
+        HTTPException(404): If there are no markets to display.
+    """
+    logger.info("Request: get_list_markets")
+    
+    list_of_markets = await list_markets(session)   
+    if not list_of_markets:
+        logger.warning("No markets found in database")
+        raise HTTPException(status_code=404, detail="No markets to display")
+    
+    result = [MarketOut.model_validate(m) for m in list_of_markets]
+    logger.debug(f"Markets response with {len(result)} items")
+    return result
+
+
+@router.get("/instruments/options", response_model=list[InstrumentOptionOut])
+async def get_instrument_options(
+    mic: str = Query(..., description="Market MIC, e.g. XWAR, XNCO"),
+    session: AsyncSession = Depends(db.get_session),
+) -> list[InstrumentOptionOut]:
+    """
+    Get a list of instruments for a given market as UI options.
+
+    Args:
+        mic: Market MIC code (e.g. XWAR, XNCO).
+        session: SQLAlchemy async database session.
+
+    Returns:
+        A list of instrument options as `InstrumentOptionOut` models.
+
+    Raises:
+        HTTPException(404): If there are no instruments for the given market.
+    """
+    logger.info(f"Request: get_instrument_options mic={mic!r}")
+    
+    instruments = await list_instruments(session, mic=mic)
+
+    if not instruments:
+        logger.warning(f"No instruments found for market mic={mic!r}")
+        raise HTTPException(status_code=404, detail="No instruments for this market")
+
+    result = [InstrumentOptionOut.model_validate(i) for i in instruments]
+    logger.debug(f"Instrument options response for mic={mic!r}: {len(result)} items")
+    return result
+
+
+@router.get(
+    "/instruments/search",
+    response_model=List[InstrumentSearchRead],
+)
+async def search_instruments_endpoint(
+    q: str = Query(..., description="Shortname or fragment of name"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+    session: AsyncSession = Depends(db.get_session),
+) -> list[InstrumentSearchRead]:
+    """
+    Search instruments by shortname or name fragment.
+
+    Args:
+        q: Search query; shortname or a fragment of the full name.
+        limit: Maximum number of results to return (1–100).
+        session: SQLAlchemy async database session.
+
+    Returns:
+        A list of instrument search results as `InstrumentSearchRead` models.
+    """
+    logger.info(f"Request: search_instruments_endpoint q={q!r}, limit={limit}")
+    
+    rows = await search_instruments_by_shortname_or_name(session, q, limit)
+
+    result: list[InstrumentSearchRead] = []
+    for inst, market in rows:
+        result.append(
+            InstrumentSearchRead(
+                id=inst.id,
+                isin=inst.isin,
+                symbol=inst.symbol,
+                shortname=inst.shortname,
+                name=inst.name,
+                type=inst.type,
+                mic=market.mic,
+            )
+        )
+    logger.debug(
+        f"Search instruments response for q={q!r}, limit={limit}: {len(result)} items"
+    )
+    return result
+
+    
+    

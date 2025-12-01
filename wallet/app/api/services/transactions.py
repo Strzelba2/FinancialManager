@@ -1,13 +1,21 @@
 from sqlmodel.ext.asyncio.session import AsyncSession
 from decimal import Decimal
 from datetime import timedelta
+import uuid
 import logging
 
-from app.schamas.schemas import CreateTransactionsRequest, TransactionIn, TransactionCreate
+from app.schamas.schemas import (
+    CreateTransactionsRequest, TransactionIn, TransactionCreate,
+    CapitalGainCreate
+)
+from app.models.enums import CapitalGainKind
 from app.crud.deposit_account_crud import get_deposit_account
 from app.crud.deposit_account_balance import get_deposit_account_balance
+from app.crud.capital_gain_crud import create_capital_gain
 from app.core.exceptions import ImportMismatchError
-from app.crud.transaction_crud import create_transaction_uow, account_has_transactions
+from app.crud.transaction_crud import (
+    create_transaction_uow, account_has_transactions, find_duplicate_transaction
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +23,8 @@ logger = logging.getLogger(__name__)
 async def create_transactions_service(
     session: AsyncSession,
     payload: CreateTransactionsRequest,
-    verify_amount_after: bool = False,    
+    verify_amount_after: bool = False, 
+    return_tr: bool = False   
 ) -> dict:
     """
     Imports multiple transactions into a deposit account and updates the available balance.
@@ -64,7 +73,7 @@ async def create_transactions_service(
         last_balance = Decimal(bal.available or 0)
     
     created = 0
-
+    transaction_ids: list[uuid.UUID] = []
     for i, r in enumerate(rows, start=0):
         amount = Decimal(r.amount)
         before = last_balance
@@ -73,7 +82,7 @@ async def create_transactions_service(
         if r.amount_after is not None:
             provided_after = Decimal(r.amount_after)
             if verify_amount_after and provided_after != computed_after:
-                raise ImportMismatchError()
+                raise ImportMismatchError(f"Saldo po operacji w dniu {r.date} nie zgadza się: {provided_after} != {computed_after}")
             after = provided_after
         else:
             after = computed_after
@@ -86,8 +95,20 @@ async def create_transactions_service(
             balance_after=after,
             date_transaction=r.date + timedelta(seconds=i)
         )
+        
+        dup = await find_duplicate_transaction(session, tx_data)
+        if dup is not None:
+            raise ValueError(
+                f"Duplicate transaction detected for "
+                f"account={payload.account_id}, "
+                f"date={tx_data.date_transaction}, "
+                f"amount={tx_data.amount}, "
+                f"description={tx_data.description!r}"
+            )
 
-        await create_transaction_uow(session, tx_data)
+        tx = await create_transaction_uow(session, tx_data)
+        
+        transaction_ids.append(tx.id)
         created += 1
         last_balance = after
 
@@ -95,6 +116,33 @@ async def create_transactions_service(
         session.add(bal)
         await session.flush()
         
-    logger.info(f"{created} transactions created for account {account.id}")
+        if r.capital_gain_kind in (
+            CapitalGainKind.DEPOSIT_INTEREST,
+            CapitalGainKind.BROKER_DIVIDEND,
+        ) and amount != 0:
+            cg_data = CapitalGainCreate(
+                deposit_account_id=payload.account_id,
+                transaction_id=tx.id,
+                kind=r.capital_gain_kind,
+                amount=amount,                
+                currency=account.currency,  
+                occurred_at=tx.date_transaction,
+                tax_year=tx.date_transaction.year,
+            )
+            await create_capital_gain(session, cg_data)
 
-    return {"created": created, "final_balance": last_balance, "account_id": str(account.id)}
+    logger.info(f"{created} transactions created for account {account.id}")
+    
+    if return_tr:
+        return {
+            "created": created,
+            "final_balance": last_balance,
+            "account_id": str(account.id),
+            "transaction_ids": [str(tid) for tid in transaction_ids],
+        }
+        
+    return {
+        "created": created, 
+        "final_balance": last_balance, 
+        "account_id": str(account.id)
+        }
