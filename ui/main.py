@@ -10,6 +10,8 @@ import pages.login
 import pages.logout
 import pages.register
 import pages.home
+import pages.wallet.brokerage_events
+import pages.wallet.holdings
 import pages.wallet.user_wallet
 import pages.wallet.transactions
 import pages.wallet.quotes

@@ -63,7 +63,6 @@ async def get_instrument_by_symbol(session: AsyncSession, symbol: str) -> Option
 
 async def list_instruments(
     session: AsyncSession,
-    *,
     types: Optional[List[InstrumentType]] = None,
     currency: Optional[Currency] = None,
     search: Optional[str] = None, 

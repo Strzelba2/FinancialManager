@@ -3,6 +3,7 @@ from uuid import UUID
 import logging
 
 from app.clients.auth_client import AuthCryptoClient
+from app.clients.stock_client import StockClient
 
 logger = logging.getLogger(__name__)
 
@@ -41,4 +42,21 @@ def get_auth_crypto(request: Request) -> AuthCryptoClient:
         AuthCryptoClient: The initialized authentication crypto client.
     """
     logger.debug("Retrieving AuthCryptoClient from request.app")
-    return request.app.auth_client
+    return request.app.state.auth_client
+
+
+def get_stock_client(request: Request) -> StockClient:
+    """
+    Retrieve the StockClient instance stored in the Starlette/FastAPI app state.
+
+    This is a small dependency/helper used to access the shared HTTPX-based client:
+        request.app.state.stock_httpx
+
+    Args:
+        request: Current incoming request object.
+
+    Returns:
+        StockClient instance from application state.
+    """
+    logger.debug("get_stock_client: resolved StockClient from app.state")
+    return request.app.state.stock_httpx

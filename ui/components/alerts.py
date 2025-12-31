@@ -142,7 +142,7 @@ def alert_form_dialog(on_save, alert: dict | None = None):
     return dlg
 
 
-def alerts_panel_card(alerts: list[dict], *, title='Alerty giełdowe', top: int = 5):
+def alerts_panel_card(alerts: list[dict], title='Alerty giełdowe', top: int = 5):
 
     def prep(a: dict):
         lbl, col = _status_badge(a.get('status', 'active'))

@@ -2,10 +2,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from sqlmodel import select
-from typing import Optional, List
+from typing import Optional, List, Tuple, Iterable
 import logging
 
-from app.models.models import Instrument, QuoteLatest
+from app.models.models import Instrument, QuoteLatest, Market
+from app.models.enums import InstrumentStatus
 from app.schemas.schemas import QuoteLatesInput
 
 logger = logging.getLogger(__name__)
@@ -110,3 +111,50 @@ async def fetch_latest_for_mic(session: AsyncSession, mic: str) -> List[QuoteLat
     )
     res = await session.execute(stmt)
     return list(res.scalars().all())
+
+
+async def fetch_latest_quotes_by_symbols(
+    session: AsyncSession,
+    symbols: Iterable[str],
+) -> List[Tuple[Instrument, Market, QuoteLatest]]:
+    """
+    Low-level CRUD: fetch Instrument, Market and QuoteLatest rows for given symbols.
+
+    This function contains ALL DB/ORM logic.
+    Service layer should not build queries directly.
+
+    Args:
+        session: SQLAlchemy async session.
+        symbols: iterable of symbols (e.g. ["PKN", "CDR"]).
+
+    Returns:
+        List of tuples: (Instrument, Market, QuoteLatest).
+        Instruments without a QuoteLatest row or inactive markets/instruments
+        are filtered out.
+    """
+    symbols_list = list({s.strip().upper() for s in symbols if s and s.strip()})
+    logger.info(f"symbols_list: {symbols_list}")
+    if not symbols_list:
+        logger.info("fetch_latest_quotes_by_symbols: empty symbols list after normalization")
+        return []
+
+    logger.info(f"fetch_latest_quotes_by_symbols: querying {len(symbols_list)} symbols")
+
+    stmt = (
+        select(Instrument, Market, QuoteLatest)
+        .join(Market, Instrument.market_id == Market.id)
+        .join(QuoteLatest, QuoteLatest.instrument_id == Instrument.id)
+        .where(
+            Instrument.symbol.in_(symbols_list),
+            Instrument.status == InstrumentStatus.ACTIVE,
+            Market.active.is_(True),
+        )
+    )
+
+    result = await session.execute(stmt)
+    rows: List[Tuple[Instrument, Market, QuoteLatest]] = result.all()
+    logger.info(
+        f"fetch_latest_quotes_by_symbols: fetched {len(rows)} rows "
+        f"for {len(symbols_list)} requested symbols"
+    )
+    return rows

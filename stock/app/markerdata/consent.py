@@ -7,7 +7,7 @@ from app.utils.regex_check import BUTTON_RX_ACCEPT, BUTTON_RX_REJECT
 logger = logging.getLogger(__name__)
 
 
-async def click_first_matching(frame: Frame, *, accept_first: bool = True) -> bool:
+async def click_first_matching(frame: Frame, accept_first: bool = True) -> bool:
     """
     Try clicking a matching consent button in a specific frame.
 

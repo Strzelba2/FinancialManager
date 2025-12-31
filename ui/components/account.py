@@ -1,6 +1,6 @@
 from nicegui import ui
 from schemas.wallet import Currency, AccountType
-from storage.session_state import get_wallets
+from storage.session_state import get_wallets, get_banks
 from typing import Dict, Optional
 
 import logging
@@ -100,8 +100,15 @@ def render_create_account_dialog(self):
                         .props('filled clearable use-input')
                         .style('width:100%')
                         )
-
-            banks_map: Dict[str, str] = {str(b.id): b.name for b in (self.banks or [])}
+            
+            banks = getattr(self, "banks", None)
+            
+            banks_map: Dict[str, str] = (
+                {str(b.id): b.name for b in (banks or [])}
+                if banks
+                else get_banks()
+            )
+                
             bank_select = (ui.select(banks_map, label='Bank *')
                            .props('filled clearable use-input')
                            .style('width:100%')

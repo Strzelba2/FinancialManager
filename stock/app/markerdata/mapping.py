@@ -31,7 +31,7 @@ def row_to_instrument(row: IndexRow, cfg: MarketConfig, market_id: uuid.UUID) ->
         symbol=row.symbol[:12],
         shortname=row.name[:12],
         name=None,
-        type=InstrumentType.STOCK,      
+        type=cfg.instrument_type,      
         status=InstrumentStatus.ACTIVE,  
         historical_source=historical_url(row.href, cfg), 
         popularity=0,

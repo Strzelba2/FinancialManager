@@ -6,10 +6,10 @@ from fastapi import HTTPException, status
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
-from sqlmodel import select
+from sqlmodel import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Holding, Instrument, BrokerageAccount
+from app.models.models import Holding, Instrument, BrokerageAccount, Wallet
 from app.models.enums import BrokerageEventKind
 from app.schamas.schemas import (
     HoldingCreate, HoldingUpdate, BrokerageEventCreate
@@ -85,7 +85,6 @@ async def get_holding_with_relations(
 
 async def list_holdings(
     session: AsyncSession,
-    *,
     account_id: Optional[uuid.UUID] = None,
     instrument_id: Optional[uuid.UUID] = None,
     wallet_id: Optional[uuid.UUID] = None, 
@@ -117,7 +116,50 @@ async def list_holdings(
 
     stmt = stmt.order_by(Holding.created_at.desc()).offset(offset).limit(limit)
     result = await session.execute(stmt)
-    return result.all()
+    return list(result.scalars().unique().all())
+
+
+async def list_holdings_rows_for_user(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    brokerage_account_ids: Optional[list[uuid.UUID]] = None,
+    q: Optional[str] = None,
+) -> list[dict]:
+    stmt = (
+        select(
+            BrokerageAccount.id.label("account_id"),
+            BrokerageAccount.name.label("account_name"),
+            Instrument.id.label("instrument_id"),
+            Instrument.symbol.label("instrument_symbol"),
+            Instrument.name.label("instrument_name"),
+            Instrument.currency.label("instrument_currency"),
+            Holding.quantity.label("quantity"),
+            Holding.avg_cost.label("avg_cost"),
+        )
+        .select_from(Holding)
+        .join(BrokerageAccount, BrokerageAccount.id == Holding.account_id)
+        .join(Wallet, Wallet.id == BrokerageAccount.wallet_id)
+        .join(Instrument, Instrument.id == Holding.instrument_id)
+        .where(Wallet.user_id == user_id)
+    )
+
+    if brokerage_account_ids:
+        stmt = stmt.where(Holding.account_id.in_(brokerage_account_ids))
+
+    if q:
+        q_like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Instrument.symbol.ilike(q_like),
+                Instrument.name.ilike(q_like),
+            )
+        )
+
+    stmt = stmt.order_by(Instrument.symbol.asc(), BrokerageAccount.name.asc())
+
+    res = await session.execute(stmt)
+    rows = res.mappings().all()  
+    return [dict(r) for r in rows]
 
 
 async def update_holding(

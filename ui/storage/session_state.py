@@ -2,7 +2,7 @@
 from typing import Dict, Optional, List, TypedDict
 from nicegui import app
 from nicegui.observables import ObservableDict
-from schemas.wallet import WalletListItem
+from schemas.wallet import WalletListItem, Bank
 import logging
 
 logger = logging.getLogger(__name__)
@@ -128,3 +128,20 @@ def set_wallets_from_payload(payload: List[WalletListItem]) -> None:
     state = get_state()
     state["wallets"] = wallets_map
     set_state(state)
+   
+    
+def set_banks(banks: List[Bank]) -> None:
+    banks_map = {
+        str(w.id): str(w.name)
+        for w in banks
+        if getattr(w, "id", None) is not None and getattr(w, "name", None)
+    }
+    
+    state = get_state()
+    state["banks"] = banks_map
+    set_state(state)
+ 
+    
+def get_banks() -> Dict[str, str]:
+    state = get_state()
+    return state["banks"]

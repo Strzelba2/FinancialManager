@@ -1,12 +1,25 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 import uuid
+from datetime import date
+from typing import Optional, List
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import db
-from app.schamas.response import BrokerageEventWithHoldingRead, BrokerageEventsImportSummary
-from app.schamas.schemas import BrokerageEventCreate, HoldingRead, BrokerageEventsImportRequest
-from app.api.services.brokerage_event import create_brokerage_event_and_update_holding
+from app.schamas.response import (
+    BrokerageEventWithHoldingRead, BrokerageEventsImportSummary, BrokerageEventPageOut,
+    BrokerageEventRowOut, BatchUpdateBrokerageEventsRequest
+    )
+from app.schamas.schemas import (
+    BrokerageEventCreate, HoldingRead, BrokerageEventsImportRequest, BrokerageAccountRead
+    )
+from app.api.services.brokerage_event import (
+    create_brokerage_event_and_update_holding
+    )
+from app.crud.broker_event_crud import (
+    list_brokerage_events_page, batch_patch_brokerage_events, delete_brokerage_event_and_rebuild_holding
+    )
+from app.crud.brokerage_account_crud import list_brokerage_accounts_for_user
 from app.api.deps import get_internal_user_id
 from app.crud.user_crud import get_user
 
@@ -14,6 +27,26 @@ from app.crud.user_crud import get_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/brokerage/accounts", response_model=list[BrokerageAccountRead])
+async def get_brokerage_accounts_for_user(
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+) -> list[BrokerageAccountRead]:
+    """
+    Return all brokerage accounts belonging to the authenticated internal user.
+
+    Args:
+        user_id: Authenticated user id (resolved internally).
+        session: SQLAlchemy async session.
+
+    Returns:
+        List of brokerage accounts (response_model).
+    """
+    logger.info("GET /brokerage/accounts:")
+    rows = await list_brokerage_accounts_for_user(session=session, user_id=user_id)
+    return rows
 
 
 @router.post(
@@ -137,7 +170,7 @@ async def import_brokerage_events_endpoint(
         try:
             async with session.begin():
                 event, holding = await create_brokerage_event_and_update_holding(
-                    session, be_payload,
+                    session, be_payload, creat_transaction=False
                 )
             created += 1
         except HTTPException as e:
@@ -158,3 +191,123 @@ async def import_brokerage_events_endpoint(
         failed=failed,
         errors=errors,
     )
+    
+
+@router.get("/brokerage/events", response_model=BrokerageEventPageOut)
+async def get_brokerage_events_page(
+    page: int = Query(1, ge=1),
+    size: int = Query(40, ge=1, le=200),
+    brokerage_account_id: Optional[List[uuid.UUID]] = Query(None),
+    kind: Optional[List[str]] = Query(None),
+    currency: Optional[List[str]] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    q: Optional[str] = Query(None),
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+) -> BrokerageEventPageOut:
+    """
+    Return a paginated list of brokerage events for the user with optional filters.
+
+    Filters:
+        - brokerage_account_id: filter by one or more brokerage accounts
+        - kind: event kinds (strings, e.g. BUY/SELL/...)
+        - currency: currencies (strings, e.g. PLN/USD/...)
+        - date_from/date_to: inclusive boundaries (depends on your CRUD implementation)
+        - q: free-text search
+
+    Args:
+        page: 1-based page index.
+        size: page size (1..200).
+        brokerage_account_id: list of brokerage account UUIDs.
+        kind: list of event kind strings.
+        currency: list of currency strings.
+        date_from: filter start date.
+        date_to: filter end date.
+        q: optional search query.
+        user_id: authenticated user id.
+        session: SQLAlchemy async session.
+
+    Returns:
+        BrokerageEventPageOut with enriched row items (account name + instrument info).
+    """
+    logger.info("GET /brokerage/events: start ")
+    
+    rows, total, page, size, sum_by_ccy = await list_brokerage_events_page(
+        session=session,
+        user_id=user_id,
+        page=page,
+        size=size,
+        brokerage_account_ids=brokerage_account_id,
+        kinds=kind,
+        currencies=currency,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+    )
+
+    items: list[BrokerageEventRowOut] = []
+    for ev, acc, inst, _wallet in rows:
+        items.append(
+            BrokerageEventRowOut(
+                **ev.model_dump(),
+                brokerage_account_name=acc.name,
+                instrument_symbol=inst.symbol,
+                instrument_name=getattr(inst, "name", None),
+            )
+        )
+
+    return BrokerageEventPageOut(items=items, total=total, page=page, size=size, sum_by_ccy=sum_by_ccy)
+
+
+@router.patch("/brokerage/events/batch")
+async def patch_brokerage_events_batch(
+    req: BatchUpdateBrokerageEventsRequest,
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+) -> dict:
+    """
+    Batch-update brokerage events for the user.
+
+    The request contains a list of patch items, which are forwarded to the CRUD layer.
+
+    Args:
+        req: Batch update request payload.
+        user_id: authenticated user id.
+        session: SQLAlchemy async session.
+
+    Returns:
+        {"updated": <count>} where count is number of updated rows.
+    """
+    logger.info("PATCH /brokerage/events/batch: start")
+    async with session.begin():
+        updated = await batch_patch_brokerage_events(session=session, user_id=user_id, items=[i.model_dump() for i in req.items])
+    return {"updated": updated}
+
+
+@router.delete("/brokerage/events/{event_id}")
+async def api_delete_brokerage_event(
+    event_id: uuid.UUID, 
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+) -> dict:
+    """
+    Delete a brokerage event by id and rebuild holdings if needed.
+
+    Args:
+        event_id: brokerage event UUID.
+        user_id: authenticated user id.
+        session: SQLAlchemy async session.
+
+    Returns:
+        {"ok": True} if deleted.
+
+    Raises:
+        HTTPException(404): if the event is not found for this user.
+    """
+    logger.info(f"DELETE /brokerage/events/{event_id}: start")
+    async with session.begin():
+        ok = await delete_brokerage_event_and_rebuild_holding(session=session, user_id=user_id, event_id=event_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Event not found")
+    return {"ok": True}

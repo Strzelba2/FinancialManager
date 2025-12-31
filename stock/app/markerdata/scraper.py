@@ -87,33 +87,35 @@ async def rows_from_page(page: Page, cfg: MarketConfig) -> List[IndexRow]:
     logger.info(f"rows_from_page: found {count} candidate rows, today_pl={today_pl}")
 
     out: List[IndexRow] = []
+    L = cfg.layout
 
     for i in range(count):
         tr = rows.nth(i)
         tds = tr.locator("td")
         td_n = await tds.count()
-        if td_n < 7:
-            logger.debug(f"rows_from_page: skipping row index={i}, td_count={td_n}")
+        if td_n < L.min_cols:
+            logger.info(f"rows_from_page: skipping row index={i}, td_count={td_n}")
             continue 
         
-        sym_a = tds.nth(0).locator("a")
+        sym_a = tds.nth(L.symbol_col).locator("a")
         has_a = await sym_a.count() > 0
         
-        tstr = txt(await tds.nth(6).inner_text())
+        tstr = txt(await tds.nth(L.time_col).inner_text())
         ts_utc = parse_time_to_utc(tstr, page_dt=today_pl, tz=cfg.time_zone)
         if not ts_utc:
-            logger.debug(
+            logger.info(
                 f"rows_from_page: skipping row index={i}, invalid time string={tstr!r}"
             )
             continue
 
-        symbol = txt(await (sym_a.inner_text() if has_a else tds.nth(0).inner_text()))
+        symbol = txt(await (sym_a.inner_text() if has_a else tds.nth(L.symbol_col).inner_text()))
         href = txt(await (sym_a.get_attribute("href") if has_a else None))
-        name = txt(await tds.nth(1).inner_text())
-        price = parse_float_pl(await tds.nth(2).inner_text())
-        chg_pct = parse_float_pl(await tds.nth(3).inner_text()) 
-        volume = parse_int_pl(await tds.nth(5).inner_text())
-
+        name = txt(await tds.nth(L.name_col).inner_text())
+        price = parse_float_pl(await tds.nth(L.price_col).inner_text())
+        chg_pct = parse_float_pl(await tds.nth(L.change_pct_col).inner_text()) 
+        volume = None
+        if L.volume_col is not None and td_n > L.volume_col:
+            volume = parse_int_pl(await tds.nth(L.volume_col).inner_text())
         if symbol:
             out.append(
                 IndexRow(

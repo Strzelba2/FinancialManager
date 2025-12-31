@@ -13,7 +13,6 @@ _CURRENT_USER_KEY = "current_user"
 
 async def get_current_user_or_create(
     request: Request,
-    *,
     use_cache: bool = True,
 ) -> Optional[SessionUser]:
     """

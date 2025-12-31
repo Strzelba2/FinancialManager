@@ -15,6 +15,7 @@ class InstrumentType(str, Enum):
     CRYPTO_ASSET = "CRYPTO_ASSET"
     INDEX = "INDEX"
     REIT = "REIT"
+    COMMODITY = "COMMODITY"
  
   
 class InstrumentStatus(str, Enum):

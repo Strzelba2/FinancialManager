@@ -45,7 +45,6 @@ async def get_market_id_by_mic(session: AsyncSession, mic: str) -> uuid.UUID | N
 
 async def list_markets(
     session: AsyncSession,
-    *,
     limit: int = 50,
     offset: int = 0,
     search: Optional[str] = None,

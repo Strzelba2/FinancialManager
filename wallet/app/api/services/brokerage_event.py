@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 async def create_brokerage_event_and_update_holding(
     session: AsyncSession,
     payload: BrokerageEventCreate,
+    creat_transaction: bool = True
 ) -> Tuple[BrokerageEvent, Optional[Holding]]:
     """
     Create a brokerage event, update (or delete) the related holding, and
@@ -120,7 +121,13 @@ async def create_brokerage_event_and_update_holding(
                 f"No deposit account mapping for brokerage_account_id={payload.brokerage_account_id} "
                 f"and currency={payload.currency}"
             )
-        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="can not found deposit account for this brokerage account",
+            )
+        transaction_id = None
+        
+        if creat_transaction:
             tx_in = TransactionIn(
                 date=payload.trade_at,
                 amount=cash_amount,
@@ -142,19 +149,18 @@ async def create_brokerage_event_and_update_holding(
             )
             
             transaction_id = tx_summary['transaction_ids'][-1]
-            
-            if transaction_id:
-                if realized_pnl != 0:
-                    data = CapitalGainCreate(
-                        kind=CapitalGainKind.BROKER_REALIZED_PNL,
-                        amount=realized_pnl,
-                        currency=payload.currency,
-                        occurred_at=payload.trade_at,
-                        deposit_account_id=deposit.id,
-                        transaction_id=transaction_id
-                    )
 
-                    await create_capital_gain(session, data)
+        if realized_pnl != 0:
+            data = CapitalGainCreate(
+                kind=CapitalGainKind.BROKER_REALIZED_PNL,
+                amount=realized_pnl,
+                currency=payload.currency,
+                occurred_at=payload.trade_at,
+                deposit_account_id=deposit.id,
+                transaction_id=transaction_id
+            )
+
+            await create_capital_gain(session, data)
             
     if not delete_holding:
         await session.refresh(holding)

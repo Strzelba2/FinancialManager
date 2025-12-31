@@ -54,7 +54,6 @@ async def get_wallet_by_user_and_name(
 
 async def list_wallets(
     session: AsyncSession,
-    *,
     user_id: Optional[uuid.UUID] = None,
     search: Optional[str] = None,  
     limit: int = 50,

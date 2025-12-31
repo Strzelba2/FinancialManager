@@ -1,13 +1,14 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 import json
 
 
 from utils.money import parse_amount, dec, format_pl_amount
 from utils.dates import to_pl_local_parts
+from .wallet import Currency
 
 
 class QuotePayload(BaseModel):
@@ -113,3 +114,13 @@ class QuoteRow(BaseModel):
 class Market(BaseModel):
     symbol: str
     name: Optional[str] = None
+   
+    
+class QuoteBySymbolItem(BaseModel):
+    symbol: str
+    price: Decimal
+    currency: Currency
+    
+    
+class QuotesBySymbolsResponse(BaseModel):
+    quotes: List[QuoteBySymbolItem] = Field(default_factory=list)

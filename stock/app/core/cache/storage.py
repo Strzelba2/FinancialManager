@@ -146,7 +146,7 @@ class RedisStorage:
             logger.error(f"Error checking existence of session : {e}")
             return False
         
-    async def hset(self, key: str, field: str, value: Any, *, ttl: Optional[int] = None) -> None:
+    async def hset(self, key: str, field: str, value: Any, ttl: Optional[int] = None) -> None:
         """
         Store a single field in a HASH; optionally set a TTL on the whole hash key.
 
@@ -166,7 +166,7 @@ class RedisStorage:
             await self.redis_client.expire(k, ttl)
             logger.debug(f"TTL set for hash key={k!r}: ttl={ttl}")
 
-    async def hmset(self, key: str, mapping: Dict[str, Any], *, ttl: Optional[int] = None) -> None:
+    async def hmset(self, key: str, mapping: Dict[str, Any], ttl: Optional[int] = None) -> None:
         """
         Store many fields at once into a HASH; mapping values are serialized.
 

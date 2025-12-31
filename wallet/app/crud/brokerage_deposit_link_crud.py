@@ -74,7 +74,6 @@ async def get_link_with_relations(
 
 async def list_brokerage_deposit_links(
     session: AsyncSession,
-    *,
     brokerage_account_id: Optional[uuid.UUID] = None,
     deposit_account_id: Optional[uuid.UUID] = None,
     currency: Optional[Currency] = None,

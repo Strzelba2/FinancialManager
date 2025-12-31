@@ -272,7 +272,7 @@ class InstrumentBase(SQLModel):
     
     symbol: Shortname = Field(sa_column=sa.Column(sa.String(5), unique=True, index=True))
     mic: MICCode = Field(sa_column=sa.Column(sa.String(4), index=True, nullable=False),
-                         description="MIC: 4 uppercase alphanumeric (ISO 10383 operating MICs like XWAR, XLON, XNAS)" )
+                         description="MIC: 4 uppercase alphanumeric (ISO 10383 operating MICs like XWAR, XLON, XNAS)")
     name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255), nullable=False))
     type: InstrumentType = Field(sa_column=sa.Column(sa.Enum(InstrumentType, name="instrument_type_enum"), nullable=False))
     currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
@@ -287,6 +287,8 @@ class TransactionBase(SQLModel):
     
     amount: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
     description: NoneIfEmpty = Field(default=None, sa_column=sa.Column(sa.String(255)))
+    category: NoneIfEmpty = Field(default=None, sa_column=sa.Column(sa.String(64), nullable=True))
+    status: NoneIfEmpty = Field(default=None, sa_column=sa.Column(sa.String(32), nullable=True))
     balance_before: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
     balance_after:  Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
     date_transaction: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
@@ -298,7 +300,13 @@ class MetalHoldingBase(SQLModel):
     metal: MetalType = Field(sa_column=sa.Column(sa.Enum(MetalType, name="metal_enum"), nullable=False))
     grams: Q6Pos = Field(sa_column=sa.Column(sa.Numeric(20, 6), nullable=False))
     cost_basis: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2)))
-    cost_currency: Currency | None = Field(default=None, sa_column=sa.Column(sa.Enum(Currency, name="currency_enum")))
+    cost_currency: Optional[Currency] = Field(default=None, sa_column=sa.Column(sa.Enum(Currency, name="currency_enum")))
+    
+    quote_symbol: Optional[str] = Field(
+        default=None,
+        sa_column=sa.Column(sa.String(16), nullable=True, index=True),
+        description="Symbol used to fetch metal quotes, e.g. GC.F, SI.F",
+    )
   
     
 class RealEstateBase(SQLModel):
@@ -310,10 +318,83 @@ class RealEstateBase(SQLModel):
     type: PropertyType = Field(sa_column=sa.Column(sa.Enum(PropertyType, name="propertyt_type_enum"), nullable=False))
     area_m2: AreaQ2OptPos = Field(default=None, sa_column=sa.Column(sa.Numeric(12, 2)))
     purchase_price: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2)))
-    purchase_currency: Currency | None = Field(default=None, sa_column=sa.Column(sa.Enum(Currency, name="currency_enum")))
+    purchase_currency: Optional[Currency] = Field(default=None, sa_column=sa.Column(sa.Enum(Currency, name="currency_enum")))
 
 
+class RealEstatePriceBase(SQLModel):
+    model_config = ConfigDict(validate_assignment=True, from_attributes=True)
+
+    country: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(2), nullable=True, index=True))
+    city: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(64), nullable=True, index=True))
+
+    type: PropertyType = Field(
+        sa_column=sa.Column(sa.Enum(PropertyType, name="propertyt_type_enum"), nullable=False, index=True)
+    )
+
+    currency: Currency = Field(
+        sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False, index=True)
+    )
+
+    avg_price_per_m2: Decimal = Field(
+        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False),
+        description="Average price per square meter.",
+    )
+ 
+    
 class WalletBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True)
     
     name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255),  nullable=False))
+   
+    
+class DebtBase(SQLModel):
+    model_config = ConfigDict(validate_assignment=True, from_attributes=True)
+    
+    name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255), nullable=False)) 
+    lander: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255), nullable=False)) 
+    amount: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False),
+                       description="Remaining debt amount (positive number).",)
+    currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
+    interest_rate_pct: Q2 = Field(
+        default=Decimal("0"),
+        sa_column=sa.Column(sa.Numeric(10, 2), nullable=False, server_default="0"),
+        description="Annual interest rate in percent (e.g. 6.20 for 6.20%)."
+    )
+    monthly_payment: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False),
+                                description="Monthly payment amount.",)
+    end_date: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+                               description="Planned end date (timezone-aware).",)
+    
+    
+class RecurringExpenseBase(SQLModel):
+    name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255), nullable=False))
+    category: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(64), nullable=True))
+    amount: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
+    currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
+
+    due_day: int = Field(
+        sa_column=sa.Column(sa.Integer, nullable=False),
+        description="Day of month 1..31"
+    )
+
+    account: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(64), nullable=True))
+    note: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(255), nullable=True))
+    
+
+class UserNoteBase(SQLModel):
+    text: str = Field(
+        default="",
+        sa_column=sa.Column(sa.Text, nullable=False, server_default=""),
+        description="Single note text for user",
+    )
+
+
+class YearGoalBase(SQLModel):
+    year: int = Field(sa_column=sa.Column(sa.Integer, nullable=False, index=True))
+
+    rev_target_year: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
+    exp_budget_year: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
+
+    currency: Currency = Field(
+        sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False)
+    )

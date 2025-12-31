@@ -76,7 +76,7 @@ celery_app.autodiscover_tasks(
 celery_app.conf.beat_schedule = {
     "ingest-gpw-quarter-main": {
         "task": "ingest_gpw_quarter",
-        "schedule": crontab(minute="30", hour="9-17", day_of_week="0-6"),
+        "schedule": crontab(minute="30", hour="9-17", day_of_week="1-5"),
         "options": {"queue": "stock_tasks"},
     },
 

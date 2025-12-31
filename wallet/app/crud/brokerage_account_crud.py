@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import BrokerageAccount
+from app.models.models import BrokerageAccount, Wallet, Bank
 from app.schamas.schemas import (
     BrokerageAccountCreate,
     BrokerageAccountUpdate,
@@ -64,7 +64,6 @@ async def get_brokerage_by_wallet_bank_name(
 
 async def list_brokerage_accounts(
     session: AsyncSession,
-    *,
     wallet_id: Optional[uuid.UUID] = None,
     bank_id: Optional[uuid.UUID] = None,
     search: Optional[str] = None, 
@@ -92,6 +91,21 @@ async def list_brokerage_accounts(
     stmt = stmt.order_by(BrokerageAccount.created_at.desc()).offset(offset).limit(limit)
     result = await session.execute(stmt)
     return result.scalars().all() 
+
+
+async def list_brokerage_accounts_for_user(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+):
+    stmt = (
+        select(BrokerageAccount, Bank)
+        .join(Wallet, Wallet.id == BrokerageAccount.wallet_id)
+        .outerjoin(Bank, Bank.id == BrokerageAccount.bank_id)
+        .where(Wallet.user_id == user_id)
+        .order_by(BrokerageAccount.name.asc())
+    )
+    res = await session.execute(stmt)
+    return res.scalars().all()
 
 
 async def update_brokerage_account(

@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select, or_, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import DepositAccount, BrokerageDepositLink
+from app.models.models import DepositAccount, BrokerageDepositLink, Wallet
 from app.models.enums import Currency
 from app.schamas.schemas import (
     DepositAccountCreate,
@@ -61,7 +61,6 @@ async def get_deposit_by_wallet_and_name(
 
 async def list_deposit_accounts(
     session: AsyncSession,
-    *,
     wallet_id: Optional[uuid.UUID] = None,
     search: Optional[str] = None,  
     limit: int = 50,
@@ -119,6 +118,18 @@ async def list_deposit_accounts_for_wallets(
         )
         .order_by(DepositAccount.created_at.desc())
     )
+    res = await session.execute(stmt)
+    return res.scalars().all()
+
+
+async def list_accounts_for_user(session: AsyncSession, user_id: uuid.UUID) -> list[DepositAccount]:
+    stmt = (
+        select(DepositAccount)
+        .join(Wallet, Wallet.id == DepositAccount.wallet_id)
+        .where(Wallet.user_id == user_id)
+        .order_by(DepositAccount.name)
+    )
+    
     res = await session.execute(stmt)
     return res.scalars().all()
 

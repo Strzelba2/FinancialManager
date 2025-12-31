@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Any
 import logging
@@ -6,8 +6,10 @@ import logging
 from app.api.services.quotes import get_latest_quote_service, get_latest_bulk_service
 from app.db.session import db
 from app.schemas.schemas import MarketOut, InstrumentOptionOut, InstrumentSearchRead
+from app.schemas.quates import LatestQuoteBySymbol, QuotesBySymbolsRequest
 from app.crud.market import list_markets
 from app.crud.instrument import list_instruments, search_instruments_by_shortname_or_name
+from app.api.services.quotes import get_latest_quotes_by_symbols
 
 router = APIRouter()
 
@@ -173,6 +175,41 @@ async def search_instruments_endpoint(
         f"Search instruments response for q={q!r}, limit={limit}: {len(result)} items"
     )
     return result
+
+
+@router.post("/quotes/latest/symbols", response_model=list[LatestQuoteBySymbol])
+async def get_latest_by_symbols(
+    payload: QuotesBySymbolsRequest,
+    session: AsyncSession = Depends(db.get_session),
+) -> list[LatestQuoteBySymbol]:
+    """
+    Get the latest quotes for a list of symbols.
+
+    Args:
+        payload: Request body containing `symbols` (list of instrument symbols).
+        session: SQLAlchemy async database session.
+
+    Returns:
+        A list of latest quotes as `LatestQuoteBySymbol` models.
+
+    Raises:
+        HTTPException: 404 if no quotes were found for the provided symbols.
+    """
+    symbols = payload.symbols
+    logger.info(f"Request: get_latest_by_symbols symbols_count={len(symbols)} symbols={symbols!r}")
+                
+    quotes = await get_latest_quotes_by_symbols(session, symbols)
+    
+    if not quotes:
+        logger.warning(f"No quotes found for symbols={symbols!r}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No quotes for given symbols",
+        )
+        
+    logger.debug(f"Response: get_latest_by_symbols returned {len(quotes)} quotes for symbols={symbols!r}")
+    return quotes
+
 
     
     

@@ -14,3 +14,4 @@ commends.txt
 *.pki
 html_dumps
 
+stock/celerybeat-schedule

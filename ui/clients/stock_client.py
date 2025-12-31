@@ -3,7 +3,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from nicegui import app
 
-from schemas.quotes import QuoteRow
+from schemas.quotes import QuoteRow, QuoteBySymbolItem, QuotesBySymbolsResponse
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ class StockClient:
     MARKETS_PATH = "/stock/markets"
     INSTRUMENTS_OPTIONS_PATH = "/stock/instruments/options"
     INSTRUMENT_SEARCH_PATH = "/stock/instruments/search"
+    QUOTES_BY_SYMBOLS_PATH = "/stock/quotes/latest/symbols"
     
     def __init__(self) -> None:
         """
@@ -32,7 +33,6 @@ class StockClient:
         self,
         method: str,
         url: str,
-        *,
         headers: Optional[dict] = None,
         json_body: Optional[dict] = None,
         params: Optional[Dict[str, Any]] = None,
@@ -306,3 +306,53 @@ class StockClient:
             f"search_instrument_by_shortname('{shortname}') -> {len(data)} results"
         )
         return data
+    
+    async def get_latest_quotes_for_symbols(
+        self,
+        symbols: List[str],
+    ) -> Dict[str, QuoteBySymbolItem]:
+        """
+        Fetch the latest quotes for the given symbols from the stock service.
+
+        Sends a POST request to the stock service endpoint and returns a dictionary
+        keyed by symbol.
+
+        Args:
+            symbols: List of instrument symbols to query (e.g., ["AAPL", "MSFT"]).
+
+        Returns:
+            A dictionary mapping symbol -> `QuoteBySymbolItem`.
+            Returns an empty dict on request/response/parsing errors.
+        """
+        if not symbols:
+            logger.info("get_latest_quotes_for_symbols called with empty symbols")
+            return {}
+
+        payload: Dict[str, Any] = {"symbols": symbols}
+
+        resp = await self._request(
+            "POST",
+            self.QUOTES_BY_SYMBOLS_PATH,
+            json_body=payload,
+        )
+        if resp is None:
+            logger.error("get_latest_quotes_for_symbols: no response from stock service")
+            return {}
+
+        if resp.status_code != 200:
+            logger.error(
+                f"get_latest_quotes_for_symbols: status {resp.status_code}, body={resp.text}"
+            )
+            return {}
+
+        try:
+            data = resp.json()
+            parsed = QuotesBySymbolsResponse(quotes=data) 
+        except Exception:
+            logger.exception("get_latest_quotes_for_symbols: failed to parse response")
+            return {}
+
+        result: Dict[str, QuoteBySymbolItem] = {
+            q.symbol: q for q in parsed.quotes
+        }
+        return result

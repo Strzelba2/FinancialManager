@@ -57,7 +57,7 @@ def quantize(dec: Decimal, decimals: int) -> Decimal:
     return dec.quantize(q, rounding=ROUND_HALF_UP)
 
 
-def format_pl_amount(amount: Decimal, *, decimals: int = 0) -> str:
+def format_pl_amount(amount: Decimal, decimals: int = 0) -> str:
     """
     Format a Decimal value for display using Polish locale (space as thousand separator, comma as decimal).
 
@@ -75,7 +75,7 @@ def format_pl_amount(amount: Decimal, *, decimals: int = 0) -> str:
     return s
 
 
-def cash_sum_for_wallet(wallet, *, currency: str) -> Decimal:
+def cash_sum_for_wallet(wallet, currency: str) -> Decimal:
     """
     Sum available cash across all accounts in a wallet for a specific currency.
 
@@ -93,7 +93,7 @@ def cash_sum_for_wallet(wallet, *, currency: str) -> Decimal:
     return total
 
 
-def cash_sum_all_wallets(wallets: Iterable, *, currency: str) -> Decimal:
+def cash_sum_all_wallets(wallets: Iterable, currency: str) -> Decimal:
     """
     Sum available cash across all wallets for a specific currency.
 
@@ -110,7 +110,7 @@ def cash_sum_all_wallets(wallets: Iterable, *, currency: str) -> Decimal:
     return total
 
 
-def cash_kpi_label(amount: Decimal, currency: str, *, decimals: int = 0) -> str:
+def cash_kpi_label(amount: Decimal, currency: str, decimals: int = 0) -> str:
     """
     Generate KPI label for cash amount with currency and formatting.
 
@@ -303,7 +303,7 @@ def change_currency_to(amount: Union[str, float, Decimal], view_currency: str, t
     return converted_amount
 
 
-def parse_amount(value) -> Decimal | None:
+def parse_amount(value, allow_empty: bool = True) -> Optional[Decimal]:
     """
     Parse a potentially localized amount string to Decimal.
 
@@ -313,6 +313,7 @@ def parse_amount(value) -> Decimal | None:
 
     Args:
         value: String, float, or Decimal representation of a number.
+        allow_empty: bool
 
     Returns:
         Decimal if valid, otherwise None.
@@ -321,7 +322,7 @@ def parse_amount(value) -> Decimal | None:
     s = str(value or "").strip().replace("\u00A0", " ") 
     m = re.search(r'[-+]?\d[\d\s.,]*', s)
     if not m:
-        return None
+        return None if allow_empty else Decimal("0")
     num = m.group(0)
 
     num = num.replace(" ", "")
@@ -334,4 +335,75 @@ def parse_amount(value) -> Decimal | None:
     try:
         return Decimal(num)
     except InvalidOperation:
-        return None
+        return None if allow_empty else Decimal("0")
+    
+    
+def allocation_series_from_totals(totals: dict[str, Decimal]) -> list[dict]:
+    """
+    Convert currency totals into a percentage allocation series.
+
+    Rules:
+    - Only strictly positive values are included.
+    - Values are converted into percentages that sum (approximately) to 100.
+    - Output is sorted by descending percentage.
+
+    Args:
+        totals: Mapping of {key (e.g. currency): amount}.
+
+    Returns:
+        List of {"name": <key>, "value": <percent_as_float>} sorted by value desc.
+        Returns [] when there are no positive totals.
+    """
+
+    grand = sum((v for v in totals.values() if v and v > 0), Decimal("0"))
+    if grand <= 0:
+        return []
+
+    series = []
+    for ccy, amt in totals.items():
+        if amt and amt > 0:
+            pct = (amt / grand) * Decimal("100")
+            series.append({"name": ccy, "value": float(pct)})
+
+    series.sort(key=lambda x: x["value"], reverse=True)
+    return series
+
+
+def series_from_amounts(
+    totals: Dict[str, Decimal],
+    as_percent: bool = True,
+) -> list[dict]:
+    """
+    Convert named totals into a chart series, as percent-of-total or raw amounts.
+
+    Rules:
+    - Only strictly positive values are included.
+    - If `as_percent=True`, each value is (amt / grand) * 100.
+    - If `as_percent=False`, values are raw amounts (Decimal -> float).
+    - Output is sorted descending by value.
+
+    Args:
+        totals: Mapping of {name: amount}.
+        as_percent: Whether to output percentages (default True) or raw amounts.
+
+    Returns:
+        List of {"name": <name>, "value": <float>} sorted by value desc.
+        Returns [] when there are no positive totals.
+    """
+
+    positive = {k: v for k, v in totals.items() if v and v > 0}
+    grand = sum(positive.values(), Decimal("0"))
+    if grand <= 0:
+        return []
+
+    series: list[dict] = []
+    for name, amt in positive.items():
+        if as_percent:
+            pct = (amt / grand) * Decimal("100")
+            series.append({"name": name, "value": float(pct)})
+        else:
+            series.append({"name": name, "value": float(amt)})
+
+    series.sort(key=lambda x: x["value"], reverse=True)
+    return series 
+

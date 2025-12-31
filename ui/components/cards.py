@@ -1,77 +1,14 @@
 from nicegui import ui
+from typing import Optional, Any
+import inspect
 import datetime
 
 from .panel.card import panel 
 from utils.utils import colorize_numbers
-
-
-def expenses_table_card(
-    rows,
-    *,
-    title: str = 'Stałe miesięczne wydatki',
-    top: int = 5,
-    sort_by: str = 'amount',
-    reverse: bool = True,
-):
-
-    key_map = {
-        'amount': lambda r: float(r.get('amount') or 0),
-        'due_day': lambda r: int(r.get('due_day') or 0),
-        'name': lambda r: str(r.get('name', '')).lower(),
-        'category': lambda r: str(r.get('category', '')).lower(),
-    }
-    data = sorted(rows, key=key_map.get(sort_by, key_map['amount']), reverse=reverse)
-
-    def fmt_pln(v): return f"{float(v or 0):,.2f} PLN".replace(',', ' ')
-
-    prepared = [{
-        'name': r.get('name', ''),
-        'category': r.get('category', ''),
-        'amount': float(r.get('amount') or 0.0),
-        'amount_fmt': fmt_pln(r.get('amount')),
-        'due_day': r.get('due_day'),
-        'account': r.get('account', ''),
-        'note': r.get('note', ''),
-    } for r in data]
-
-    cols_compact = [
-        {'name': 'name', 'label': 'Nazwa', 'field': 'name', 'align': 'left', 'headerStyle': 'font-weight:700'},
-        {'name': 'category', 'label': 'Kategoria', 'field': 'category', 'align': 'left', 'headerStyle': 'font-weight:700'},
-        {'name': 'amount_fmt', 'label': 'Kwota', 'field': 'amount_fmt', 'align': 'right', 'classes': 'num', 
-         'style': 'width:120px', 'headerStyle': 'font-weight:700'},
-        {'name': 'due_day', 'label': 'Dzień', 'field': 'due_day', 'align': 'center', 'style': 'width:70px', 
-         'headerStyle': 'font-weight:700'},
-    ]
-    cols_full = cols_compact + [
-        {'name': 'account', 'label': 'Konto', 'field': 'account', 'align': 'left', 'headerStyle': 'font-weight:700'},
-        {'name': 'note', 'label': 'Notatka', 'field': 'note', 'align': 'left', 'headerStyle': 'font-weight:700'},
-    ]
-
-    dlg = ui.dialog()
-    with dlg, ui.card().classes('w-[min(1100px,95vw)]'):
-        ui.label(title).classes('text-base font-semibold q-mb-sm')
-        ui.table(columns=cols_full, rows=prepared, row_key='name') \
-          .props('flat dense separator=horizontal rows-per-page-options=[10,25,50,0]') \
-          .classes('q-mt-none w-full')
-
-        ui.button('Zamknij', on_click=dlg.close).classes('q-mt-sm self-end')
-
-    top_rows = prepared[:top]
-    with panel() as card:
-        card.classes('w-full max-w-none cursor-pointer p-0').style('width:100%') 
-        card.on('click', lambda e: dlg.open()) 
-
-        ui.label(title).classes('text-sm font-semibold').style('padding:6px 12px 2px 12px')
-
-        ui.table(columns=cols_compact, rows=top_rows, row_key='name') \
-          .props('flat dense separator=horizontal hide-bottom hide-pagination rows-per-page-options=[5]') \
-          .classes('q-mt-none w-full') \
-          .style('margin:0;padding:0')
-          
+         
                 
 def goals_bullet_card(
     title,
-    *,
     rev_target_year,   
     exp_budget_year,  
     rev_actual_ytd,  
@@ -81,6 +18,7 @@ def goals_bullet_card(
     unit=' PLN',
     stretch=True,
     full_bleed=True,
+    on_click: Optional[callable] = None
 ):
     if ytd_share is None:
         if month_index is None:
@@ -103,6 +41,16 @@ def goals_bullet_card(
     ]
 
     with panel() as card:
+        if on_click:
+            card.classes('cursor-pointer')
+            
+            async def _click_handler(_: Any) -> None:
+                result = on_click() 
+                if inspect.isawaitable(result):
+                    await result
+
+            card.on('click', _click_handler)
+            
         if stretch:
             card.classes('w-full max-w-none').style('width:100%')
         if full_bleed:
@@ -161,7 +109,7 @@ def goals_bullet_card(
         }).classes('w-full h-48').style('width:100%;display:block')
      
         
-def render_top5_table_observer(rows, *, tone: str | None = None, top: int = 5):
+def render_top5_table_observer(rows, tone: str | None = None, top: int = 5):
 
     data = sorted(rows, key=lambda r: r.get('pl_pct', 0.0), reverse=True)[:top]
 
@@ -214,8 +162,8 @@ def render_top5_table_observer(rows, *, tone: str | None = None, top: int = 5):
     """)
     
     
-def render_top5_table(rows, *, tone: str | None = None, top: int = 5):
-    data = sorted(rows, key=lambda r: r.get('pl_pct', 0.0), reverse=True)[:top]
+def render_top5_table(rows, tone: str | None = None, top: int = 5, reverse=True, currency="PLN"):
+    data = sorted(rows, key=lambda r: r.get('pl_pct', 0.0), reverse=reverse)[:top]
 
     prepared = []
     for i, r in enumerate(data, start=1):
@@ -225,7 +173,7 @@ def render_top5_table(rows, *, tone: str | None = None, top: int = 5):
             'sym': r.get('sym', ''),
             'pl_pct': pl,
             'pl_pct_fmt': f"{pl:+.2f}%",
-            'pl_abs_fmt': f"{r.get('pl_abs', 0.0):+,.0f} PLN".replace(',', ' '),
+            'pl_abs_fmt': f"{r.get('pl_abs', 0.0):+,.0f} {currency}".replace(',', ' '),
         })
 
     pl_col_classes = 'num'
@@ -240,7 +188,7 @@ def render_top5_table(rows, *, tone: str | None = None, top: int = 5):
         {'name': 'sym', 'label': 'Ticker', 'field': 'sym', 'align': 'left', 'headerStyle': 'font-weight:700'},
         {'name': 'pl_pct_fmt', 'label': 'P/L %', 'field': 'pl_pct_fmt', 'align': 'right',
          'classes': pl_col_classes, 'style': 'width:110px', 'headerStyle': 'font-weight:700'},
-        {'name': 'pl_abs_fmt', 'label': 'P/L (PLN)', 'field': 'pl_abs_fmt', 'align': 'right',
+        {'name': 'pl_abs_fmt', 'label': f'P/L ({currency})', 'field': 'pl_abs_fmt', 'align': 'right',
          'classes': 'num', 'style': 'width:140px', 'headerStyle': 'font-weight:700'},
     ]
 
@@ -284,7 +232,7 @@ def pie_card(title, series):
         }).classes('w-full h-52')
     
         
-def line_card(title, x, y, *, infl_pct=None, cpi=None, base='first',
+def line_card(title, x, y, infl_pct=None, cpi=None, base='first',
               y_suffix=' PLN', show_nominal=True,
               stretch: bool = True, full_bleed: bool = True):
 
@@ -406,15 +354,24 @@ def line_card(title, x, y, *, infl_pct=None, cpi=None, base='first',
         }).classes('w-full h-80').style('width:100%;display:block')
    
         
-def kpi_card(title: str, value: str,  sub: str):
-    with panel():
+def kpi_card(title: str, value: str,  sub: str, on_click: Optional[callable] = None):
+    with panel() as card:
+        if on_click:
+            card.classes('cursor-pointer')
+            
+            async def _click_handler(_: Any) -> None:
+                result = on_click()  
+                if inspect.isawaitable(result):
+                    await result
+
+            card.on('click', _click_handler)
         ui.label(title).classes('text-sm text-gray-500')
         value_label = ui.label(value).classes('text-xl font-semibold')
         ui.html(f'<div class="text-xs text-gray-500">{colorize_numbers(sub)}</div>')
     return value_label
 
         
-def bar_card(title, x, inc, exp, *, cap=None, unit=' PLN',
+def bar_card(title, x, inc, exp, cap=None, unit=' PLN',
              show_profit: bool = True, show_capital: bool = True,
              profit_includes_capital: bool = True,
              stretch: bool = True, full_bleed: bool = True,
@@ -479,7 +436,7 @@ def bar_card(title, x, inc, exp, *, cap=None, unit=' PLN',
         ui.label(title).classes('text-sm font-semibold').style(f'padding-left:{title_padding_left}px;padding-top:6px')
 
         ui.echart({
-            'legend': {'data': legend, 'top': 4},  # wyżej
+            'legend': {'data': legend, 'top': 4}, 
             'tooltip': {'trigger': 'axis', 'axisPointer': {'type': 'shadow'}, 'confine': True},
             'xAxis': {'type': 'category', 'data': x, 'axisTick': {'alignWithLabel': True}},
             'yAxis': {'type': 'value', 'axisLabel': {'formatter': f"{{{{value}}}}{unit}"}, 

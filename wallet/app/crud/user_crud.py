@@ -45,7 +45,6 @@ async def get_user_by_email(session: AsyncSession, email: str) -> Optional[User]
 
 async def list_users(
     session: AsyncSession,
-    *,
     limit: int = 50,
     offset: int = 0,
     search: Optional[str] = None,

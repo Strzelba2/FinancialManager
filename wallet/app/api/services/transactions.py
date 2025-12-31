@@ -1,6 +1,7 @@
 from sqlmodel.ext.asyncio.session import AsyncSession
 from decimal import Decimal
 from datetime import timedelta
+from typing import Tuple, Dict
 import uuid
 import logging
 
@@ -8,13 +9,14 @@ from app.schamas.schemas import (
     CreateTransactionsRequest, TransactionIn, TransactionCreate,
     CapitalGainCreate
 )
-from app.models.enums import CapitalGainKind
+from app.models.enums import CapitalGainKind, Currency
 from app.crud.deposit_account_crud import get_deposit_account
 from app.crud.deposit_account_balance import get_deposit_account_balance
 from app.crud.capital_gain_crud import create_capital_gain
 from app.core.exceptions import ImportMismatchError
 from app.crud.transaction_crud import (
-    create_transaction_uow, account_has_transactions, find_duplicate_transaction
+    create_transaction_uow, account_has_transactions, find_duplicate_transaction,
+    sum_income_expense_for_wallet_year
     )
 
 logger = logging.getLogger(__name__)
@@ -146,3 +148,40 @@ async def create_transactions_service(
         "final_balance": last_balance, 
         "account_id": str(account.id)
         }
+    
+
+async def compute_wallet_ytd_income_expense_maps(
+    session: AsyncSession,
+    wallet_id: uuid.UUID,
+    year: int,
+) -> Tuple[Dict[Currency, Decimal], Dict[Currency, Decimal]]:
+    """
+    Compute year-to-date income and expense totals for a wallet grouped by currency.
+
+    This function expects the underlying query `sum_income_expense_for_wallet_year`
+    to return rows in the form:
+        (status: str, currency: Currency, total: Decimal | None)
+
+    Args:
+        session: SQLAlchemy async session.
+        wallet_id: Wallet UUID.
+        year: Year to aggregate (e.g., 2025).
+
+    Returns:
+        Tuple of:
+            - income_by_currency: Dict[Currency, Decimal]
+            - expense_by_currency: Dict[Currency, Decimal]
+    """
+    rows = await sum_income_expense_for_wallet_year(session, wallet_id=wallet_id, year=year)
+
+    income: Dict[Currency, Decimal] = {}
+    expense: Dict[Currency, Decimal] = {}
+
+    for status_s, ccy, total in rows:
+        total_dec = total or Decimal("0")
+        if status_s == "INCOME":
+            income[ccy] = income.get(ccy, Decimal("0")) + total_dec
+        else:
+            expense[ccy] = expense.get(ccy, Decimal("0")) + total_dec
+
+    return income, expense

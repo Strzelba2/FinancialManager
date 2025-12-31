@@ -1,7 +1,9 @@
-from typing import Optional, Dict
-from pydantic import BaseModel, ConfigDict, field_serializer, RootModel
+from typing import Optional, Dict, List
+from pydantic import BaseModel, ConfigDict, field_serializer, RootModel, Field
 from decimal import Decimal
 from datetime import datetime
+
+from app.models.enums import Currency
 
 
 class QuotePayloadOut(BaseModel):
@@ -24,3 +26,15 @@ class QuotePayloadOut(BaseModel):
 
 class BulkQuotesOut(RootModel[Dict[str, QuotePayloadOut]]):
     pass
+
+
+class LatestQuoteBySymbol(BaseModel):
+    symbol: str
+    price: Decimal
+    currency: Currency
+    
+
+class QuotesBySymbolsRequest(BaseModel):
+    symbols: List[str] = Field(
+        ..., min_length=1, description="Instrument symbols, e.g. PKN, AAPL"
+    )

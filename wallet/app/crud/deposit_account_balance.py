@@ -44,7 +44,6 @@ async def get_deposit_account_balance_with_account(
 
 async def list_deposit_account_balances(
     session: AsyncSession,
-    *,
     wallet_id: Optional[uuid.UUID] = None,   
     account_ids: Optional[List[uuid.UUID]] = None,
     min_available: Optional[float] = None,  

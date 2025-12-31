@@ -9,7 +9,7 @@ from app.schemas.schemas import InstrumentCreate
 logger = logging.getLogger(__name__)
 
 
-async def count_by_market_id(session: AsyncSession, *, market_id: uuid.UUID) -> int:
+async def count_by_market_id(session: AsyncSession, market_id: uuid.UUID) -> int:
     """
     Count instruments belonging to a given market.
 
@@ -27,7 +27,7 @@ async def count_by_market_id(session: AsyncSession, *, market_id: uuid.UUID) -> 
     return int(res.scalar_one())
 
 
-async def get_by_symbol_in_market(session: AsyncSession, *, market_id: uuid.UUID, symbol: str) -> Instrument | None:
+async def get_by_symbol_in_market(session: AsyncSession, market_id: uuid.UUID, symbol: str) -> Instrument | None:
     """
     Fetch a single instrument by symbol within a specific market.
 

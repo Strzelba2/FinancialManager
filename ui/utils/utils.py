@@ -5,7 +5,8 @@ import io
 import html
 import re
 import datetime
-from typing import Optional
+import uuid
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ def export_csv() -> bytes:
     return buf.getvalue().encode('utf-8')
 
 
-def colorize_numbers(sub: str, *, bold_percent: bool = True, color_negatives: bool = True) -> str:
+def colorize_numbers(sub: str, bold_percent: bool = True, color_negatives: bool = True) -> str:
     """
     Wrap numeric tokens in HTML spans for color/emphasis.
 
@@ -359,4 +360,81 @@ def truncate_string(text: Optional[str], n: int, suffix: str = "***", keep_words
     return s.rstrip() + (suffix or "")
 
 
+def build_missing_price_message(missing_price: list[tuple[Optional[str], str]]) -> str:
+    """
+    Build a user-facing message explaining which (city, property_type) pairs are missing a price per m².
 
+    Args:
+        missing_price: Sequence of tuples (city, type_label). City may be None.
+
+    Returns:
+        A Polish message listing missing (city, type) combos and explaining the fallback behavior.
+    """
+    parts: list[str] = []
+    for city, typ in missing_price:
+        c = (city or "—").strip() or "—"
+        parts.append(f"({c}, {typ})")
+
+    combos = " / ".join(parts)
+    return (
+        f"Brak wyceny m² dla: {combos}\n"
+        "Wartość liczona z ceny zakupu (purchase_price). "
+        "Dodaj odpowiednie rekordy w „Ceny m²”."
+    )
+    
+    
+def to_uuid(x) -> uuid.UUID:
+    """
+    Convert value to UUID.
+
+    Args:
+        x: UUID instance or something string-convertible (e.g., str, int-like).
+
+    Returns:
+        uuid.UUID
+    """
+    return x if isinstance(x, uuid.UUID) else uuid.UUID(str(x))
+
+
+def ccy_to_str(c: Any) -> str:
+    """
+    Convert a currency-like object to a string code.
+
+    Supports:
+    - Enum-like objects with `.value`
+    - Plain strings
+    - Any object convertible to str
+
+    Args:
+        c: currency representation.
+
+    Returns:
+        Currency code as string (e.g., 'PLN', 'USD').
+    """
+    return c.value if hasattr(c, "value") else str(c)
+
+
+def is_current_account(a) -> bool:
+    """
+    Check whether an account is of type CURRENT.
+
+    Works when `account_type` is:
+    - a string: 'CURRENT' (case-insensitive)
+    - an Enum-like object with `.value` or `.name` containing 'CURRENT'
+
+    Args:
+        a: account-like object with attribute `account_type`.
+
+    Returns:
+        True if account_type resolves to CURRENT, otherwise False.
+    """
+    t = getattr(a, "account_type", None)
+    if t is None:
+        return False
+
+    if isinstance(t, str):
+        return t.upper() == "CURRENT"
+
+    val = getattr(t, "value", None)
+    name = getattr(t, "name", None)
+    return (str(val).upper() == "CURRENT") or (str(name).upper() == "CURRENT")

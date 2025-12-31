@@ -1,5 +1,5 @@
 import uuid
-from sqlmodel import Field, Relationship, SQLModel
+from sqlmodel import Field, Relationship
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql as pg
 from typing import Optional
@@ -8,7 +8,8 @@ from .base import (UserBase, UUIDMixin, TimestampMixin, BankBase,
                    AccountBase, BrokerageAccountBase, DepositAccountBalanceBase,
                    InstrumentBase, HoldingBase, TransactionBase, RealEstateBase, 
                    MetalHoldingBase, WalletBase, BrokerageDepositLinkBase,
-                   BrokerageEventBase, CapitalGainBase)
+                   BrokerageEventBase, CapitalGainBase, RealEstatePriceBase,
+                   DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase)
 
 
 class User(UserBase, UUIDMixin, TimestampMixin, table=True):
@@ -272,7 +273,23 @@ class RealEstate(RealEstateBase, UUIDMixin, TimestampMixin, table=True):
         sa.CheckConstraint("char_length(btrim(name)) > 0", name="ck_re_name_not_empty"),
     )
 
+
+class RealEstatePrice(RealEstatePriceBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "real_estate_prices"
+
+    __table_args__ = (
+        sa.Index(
+            "ix_re_price_lookup_latest",
+            "type",
+            "country",
+            "city",
+            "currency",
+            "created_at",
+        ),
+        sa.CheckConstraint("avg_price_per_m2 >= 0", name="ck_re_price_m2_nonneg"),
+    )
     
+      
 class MetalHolding(MetalHoldingBase, UUIDMixin, TimestampMixin, table=True):
     __tablename__ = "metal_holdings"
 
@@ -320,8 +337,85 @@ class Wallet(WalletBase, UUIDMixin, TimestampMixin, table=True):
     metal_holdings: list["MetalHolding"] = Relationship(back_populates="wallet",
                                                         sa_relationship_kwargs={"cascade": "all, delete-orphan", 
                                                                                 "passive_deletes": True})
+    debts: list["Debt"] = Relationship(back_populates="wallet",
+                                       sa_relationship_kwargs={"cascade": "all, delete-orphan", 
+                                                               "passive_deletes": True})
     
     __table_args__ = (
         sa.UniqueConstraint("user_id", "name", name="uq_wallet_owner_name"),
         sa.CheckConstraint("char_length(btrim(name)) > 0", name="ck_wallet_name_not_empty"),
+    )
+    
+    
+class Debt(DebtBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "debt"
+
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True
+        )
+    )
+
+    wallet: "Wallet" = Relationship(back_populates="debts")
+    
+    __table_args__ = (
+        sa.CheckConstraint("char_length(btrim(name)) > 0", name="ck_debt_name_not_empty"),
+        sa.CheckConstraint("char_length(btrim(lander)) > 0", name="ck_debt_lander_not_empty"),
+        sa.CheckConstraint("amount >= 0", name="ck_debt_amount_nonneg"),
+        sa.CheckConstraint("interest_rate_pct >= 0", name="ck_debt_rate_nonneg"),
+        sa.CheckConstraint("monthly_payment >= 0", name="ck_debt_payment_nonneg"),
+    )
+    
+    
+class RecurringExpense(RecurringExpenseBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "recurring_expenses"
+
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            sa.Uuid(as_uuid=True),
+            sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint("amount >= 0", name="ck_recurring_exp_amount_nonneg"),
+        sa.CheckConstraint("due_day >= 1 AND due_day <= 31", name="ck_recurring_exp_due_day_range"),
+        sa.Index("ix_recurring_exp_wallet_due_day", "wallet_id", "due_day"),
+    )
+    
+    
+class UserNote(UserNoteBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "user_notes"
+
+    user_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+            unique=True,
+            index=True,
+        )
+    )
+
+
+class YearGoal(YearGoalBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "year_goals"
+
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("wallet_id", "year", name="uq_year_goals_wallet_year"),
+        sa.CheckConstraint("year >= 1970 AND year <= 2100", name="ck_year_goals_year_range"),
     )

@@ -81,6 +81,8 @@ async def ingest_market(session: AsyncSession,
         gpw_client = GpwListingsClient()
         try:
             symbol_map = await gpw_client.get_symbol_map()
+        except Exception:
+            logger.warning("Instrument Talble is empty")
         finally:
             await gpw_client.aclose()
     

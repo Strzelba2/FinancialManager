@@ -8,7 +8,8 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
                              AccountBase, BrokerageAccountBase, DepositAccountBalanceBase,
                              InstrumentBase, HoldingBase, TransactionBase, RealEstateBase, 
                              MetalHoldingBase, WalletBase, BrokerageDepositLinkBase,
-                             BrokerageEventBase, CapitalGainBase)
+                             BrokerageEventBase, CapitalGainBase, RealEstatePriceBase,
+                             DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase)
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
@@ -17,7 +18,7 @@ from app.validators.validators import (
 
 from app.models.enums import (
     AccountType, Currency, InstrumentType,  MetalType,
-    PropertyType, CapitalGainKind
+    PropertyType, CapitalGainKind, BrokerageEventKind
     )
 
 
@@ -148,6 +149,18 @@ class BrokerageEventRead(BrokerageEventBase, UUIDMixin):
     
     brokerage_account_id: uuid.UUID
     instrument_id: uuid.UUID
+   
+    
+class BrokerageEventUpdate(PartialUpdateMixin):
+    
+    kind: Optional[BrokerageEventKind] = None
+    quantity: Optional[Q2] = None
+    price: Optional[Q2] = None
+    currency: Optional[Currency] = None
+    split_ratio: Optional[Q2] = None
+    trade_at: Optional[datetime] = None  
+    
+    __update_require_any__ = {"kind", "quantity", "price", "currency", "split_ratio", "trade_at"}
     
     
 class BrokerageDepositLinkCreate(BrokerageDepositLinkBase):
@@ -240,6 +253,8 @@ class TransactionIn(SQLModel):
     amount: Q2                          
     description: Optional[str] = None
     amount_after: Optional[Q2] = None
+    category: Optional[str] = None
+    status: Optional[str] = None
     capital_gain_kind: Optional[CapitalGainKind] = None
 
 
@@ -261,8 +276,17 @@ class TransactionUpdate(PartialUpdateMixin):
     description: NoneIfEmpty = None
     balance_before: Optional[Q2] = None
     balance_after: Optional[Q2] = None
+    category: NoneIfEmpty = None
+    status: NoneIfEmpty = None
     
-    __update_require_any__ = {"type", "amount", "description", "balance_before", "balance_after"}
+    __update_require_any__ = {
+                              "amount", 
+                              "description", 
+                              "balance_before", 
+                              "balance_after",
+                              "category",
+                              "status"
+                              }
     
     
 class MetalHoldingCreate(MetalHoldingBase):
@@ -287,11 +311,19 @@ class MetalHoldingUpdate(PartialUpdateMixin):
     __update_require_any__ = {"metal", "grams", "cost_basis", "cost_currency"}
     
     
+class RealEstatePriceCreate(RealEstatePriceBase):
+    model_config = ConfigDict(from_attributes=False)
+    
+    
+class RealEstatePriceRead(RealEstatePriceBase):
+    model_config = ConfigDict(from_attributes=True)
+    
+    
 class RealEstateCreate(RealEstateBase):
     model_config = ConfigDict(from_attributes=False)
 
     wallet_id: uuid.UUID
-    
+       
     
 class RealEstateRead(RealEstateBase, UUIDMixin, TimestampMixin):
     model_config = ConfigDict(from_attributes=True, validate_assignment=False)
@@ -333,3 +365,82 @@ class WalletUpdate(PartialUpdateMixin):
     name: Optional[NonEmptyStr] = None
     
     __update_require_any__ = {"name"}
+    
+    
+class DebtCreate(DebtBase):
+    model_config = ConfigDict(from_attributes=False)
+
+    wallet_id: uuid.UUID
+       
+    
+class DebtRead(DebtBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+    
+    wallet_id: uuid.UUID
+    
+    
+class DebtUpdate(PartialUpdateMixin):
+
+    name: Optional[NonEmptyStr] = None
+    lander: Optional[NonEmptyStr] = None
+    amount: Optional[Q2] = None
+    currency: Optional[Currency] = None
+    interest_rate_pct: Optional[Q2] = None
+    monthly_payment: Optional[Q2] = None
+    end_date: Optional[datetime] = None
+    
+    __update_require_any__ = {"name", "lander", "amount", "type", "currency", "interest_rate_pct", "monthly_payment", "end_date"}
+    
+
+class RecurringExpenseCreate(RecurringExpenseBase):
+    wallet_id: uuid.UUID
+
+
+class RecurringExpenseRead(RecurringExpenseBase, UUIDMixin, TimestampMixin):
+    wallet_id: uuid.UUID
+
+
+class RecurringExpenseUpdate(PartialUpdateMixin):
+    name: Optional[NonEmptyStr] = None
+    category: Optional[NonEmptyStr] = None
+    amount: Optional[Q2] = None
+    currency: Optional[Currency] = None
+    due_day: Optional[int] = None
+    account: Optional[NonEmptyStr] = None
+    note: Optional[NonEmptyStr] = None
+
+    __update_require_any__ = {
+        "name", "category", "amount", "currency", "due_day", "account", "note"
+    }
+    
+    
+class UserNoteUpsert(UserNoteBase):
+    model_config = ConfigDict(from_attributes=False)
+
+
+class UserNoteRead(UserNoteBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+    user_id: uuid.UUID
+    
+    
+class YearGoalCreate(YearGoalBase):
+    model_config = ConfigDict(from_attributes=False)
+
+    wallet_id: uuid.UUID
+
+
+class YearGoalRead(YearGoalBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True)
+
+    wallet_id: uuid.UUID
+
+
+class YearGoalUpdate(PartialUpdateMixin):
+    rev_target_year: Optional[Q2] = None
+    exp_budget_year: Optional[Q2] = None
+    currency: Optional[Currency] = None
+    
+    __update_require_any__ = {
+        "rev_target_year", "exp_budget_year", "currency", 
+    }
+    

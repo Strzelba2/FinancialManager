@@ -120,3 +120,20 @@ def to_pl_local_parts(iso_or_dt: Optional[datetime]):
     date_fmt = dt_pl.strftime('%d.%m.%Y')
     time_fmt = dt_pl.strftime('%H:%M')
     return iso, pretty, date_fmt, time_fmt
+
+
+def month_floor(dt: datetime) -> datetime:
+    """
+    Return the first moment of the month containing `dt`.
+
+    The result preserves the original timezone info (tzinfo) if present:
+    - Input:  2025-12-31 18:20:00+01:00
+    - Output: 2025-12-01 00:00:00+01:00
+
+    Args:
+        dt: Any datetime (naive or timezone-aware).
+
+    Returns:
+        A datetime set to day=1 and time=00:00:00.000000 for the same month/year as `dt`.
+    """
+    return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)

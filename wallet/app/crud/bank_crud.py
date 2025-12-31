@@ -52,7 +52,6 @@ async def get_bank_by_shortname(session: AsyncSession, shortname: str) -> Option
 
 async def list_banks(
     session: AsyncSession,
-    *,
     limit: int = 50,
     offset: int = 0,
     search: Optional[str] = None,

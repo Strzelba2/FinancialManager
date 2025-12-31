@@ -34,6 +34,7 @@ async def market_lock(storage: Storage, market_id: str, ttl_sec: int = 13 * 60):
         bool: True if the lock was acquired, False otherwise.
     """
     key = f"lock:ingest:{market_id}"
+    await storage._client.delete(key)
     logger.info(
         f"Trying to acquire market_lock for market_id={market_id!r}, ttl_sec={ttl_sec}"
     )

@@ -7,9 +7,10 @@ from typing import Iterable, Callable, List, Optional, Any, Dict
 from .panel.card import panel
 from .date import attach_date_time_popups
 from schemas.wallet import (
-    TransactionCreationRow, WalletListItem, Currency, CapitalGainKind,
+    TransactionCreationRow, WalletListItem, CapitalGainKind,
     BrokerageEventImportRow
 )
+from .brokerage_event import render_brokerage_event_form
 
 from services.wallet import make_transaction_rows
 from utils.utils import parse_date
@@ -18,6 +19,160 @@ from imports.parsers import PARSERS
 from exceptions import MissingRequiredColumnsError
 
 logger = logging.getLogger(__name__)
+
+
+async def render_manual_transaction_form(
+    self: Any,                      
+    container: Any,                 
+    accounts: Dict[uuid.UUID, str],  
+    on_success: Callable[[], Any],   
+    on_cancel: Optional[Callable[[], Any]] = None,
+    default_account_id: Optional[uuid.UUID] = None,
+) -> None:
+    """
+    Render a manual transaction creation form into a given NiceGUI container.
+
+    The form collects:
+    - account (required)
+    - amount (required)
+    - description (required in current validation)
+    - transaction type / capital gain kind (required; "TRANSACTION" maps to None in payload)
+    - balance after transaction (required)
+    - date (required)
+
+    On submit, it builds a payload compatible with `self.wallet_client.create_transaction(...)`
+    and calls `on_success()` after a successful API response.
+
+    Args:
+        self:
+            Page/controller instance that provides:
+            - self.get_user_id() -> uuid.UUID (or string convertible)
+            - self.wallet_client.create_transaction(user_id, payload) -> Awaitable[truthy/falsey]
+        container:
+            NiceGUI container element where the form is rendered (must support `.clear()` and context manager usage).
+        accounts:
+            Mapping of account_id -> account label.
+        on_success:
+            Async callback invoked after successful transaction creation.
+        on_cancel:
+            Optional callback invoked when the user clicks Cancel.
+        default_account_id:
+            If provided and present in `accounts`, preselect it in the account dropdown.
+    """
+
+    logger.info("render_manual_transaction_form: render")
+    container.clear()
+
+    with container:
+        account_select = (
+            ui.select(accounts, label="Account *")
+            .props("filled clearable use-input")
+            .style("width:100%")
+        )
+        if default_account_id and default_account_id in accounts:
+            account_select.value = default_account_id
+
+        amount_input = (
+            ui.input(label="Kwota *", placeholder="e.g., 123.45")
+            .props("filled clearable input-class=text-center maxlength=32")
+            .style("width:100%")
+        )
+
+        description_input = (
+            ui.input(label="Description")
+            .props("filled clearable counter maxlength=255")
+            .style("width:100%")
+        )
+
+        capital_gain_kind = {c.name: c.value for c in CapitalGainKind}
+        capital_select = (
+            ui.select(capital_gain_kind, value="TRANSACTION", label="Typ *")
+            .props("filled clearable use-input")
+            .style("width:100%")
+        )
+
+        balance_input = (
+            ui.input(label="Saldo po transakcji", placeholder="e.g., 123.45")
+            .props("filled clearable input-class=text-center maxlength=32")
+            .style("width:100%")
+        )
+
+        date_input = ui.input("Date *").props("filled").style("width:100%")
+        attach_date_time_popups(date_input)
+
+        with ui.row().classes("justify-center q-gutter-md q-mt-sm"):
+            if on_cancel:
+                ui.button("Cancel").props("no-caps flat").style("min-width:110px;height:44px").on_click(on_cancel)
+
+            submit_btn = (
+                ui.button("Add", icon="add")
+                .props("no-caps color=primary")
+                .style("min-width:140px;height:44px;border-radius:8px")
+            )
+
+    async def do_add() -> None:
+        """Handle form submission: validate input, call API, notify user, then run on_success()."""
+        logger.info("render_manual_transaction_form: submit clicked")
+        try:
+            if not account_select.value:
+                ui.notify("Choose account.", color="negative")
+                logger.warning("do_add: account not selected")
+                return
+
+            if not amount_input.value:
+                ui.notify("Provide amount.", color="negative")
+                logger.warning("do_add: amount not provided")
+                return
+
+            if not balance_input.value:
+                ui.notify("Provide balance after.", color="negative")
+                logger.warning("do_add: balance_after not provided")
+                return
+
+            if not description_input.value:
+                ui.notify("Provide description.", color="negative")
+                logger.warning("do_add: description not provided")
+                return
+
+            capital_gain = None if capital_select.value == CapitalGainKind.TRANSACTION.name else capital_select.value
+
+            acc_id: uuid.UUID = account_select.value
+            amount = dec(amount_input.value)
+            balance = dec(balance_input.value)
+
+            user_id = self.get_user_id()
+
+            payload = {
+                "account_id": str(acc_id),
+                "transactions": [
+                    {
+                        "date": f"{date_input.value}",
+                        "amount": str(amount),
+                        "description": description_input.value,
+                        "amount_after": str(balance),
+                        "capital_gain_kind": capital_gain,
+                    }
+                ],
+            }
+
+            submit_btn.props("loading")
+            res = await self.wallet_client.create_transaction(user_id, payload)
+            if not res:
+                logger.error("do_add: wallet_client.create_transaction returned falsy result")
+                ui.notify("Failed to create transaction.", color="negative")
+                return
+
+            logger.info("do_add: transaction created successfully")
+            ui.notify("Transaction added.", color="positive")
+            await on_success()
+
+        except Exception as e:
+            logger.exception("Create transaction error")
+            ui.notify(f"Error: {e}", color="negative")
+        finally:
+            submit_btn.props(remove="loading")
+
+    submit_btn.on_click(do_add)
 
 
 def render_lack_transactions():
@@ -129,7 +284,6 @@ def transactions_table_card(
                          'headerStyle': 'font-weight:700'})
     cols_full += [
         {'name': 'account', 'label': 'Konto', 'field': 'account', 'align': 'left', 'headerStyle': 'font-weight:700'},
-        {'name': 'note', 'label': 'Notatka', 'field': 'note', 'align': 'left', 'headerStyle': 'font-weight:700'},
     ]
 
     dlg = ui.dialog()
@@ -214,7 +368,7 @@ def cash_transactions_table_card(
     logger.debug(
         f"cash_transactions_table_card: top5 rows computed -> {len(top5)} rows"
     )
-    
+
     all_sorted = make_transaction_rows(wallets, n=top, account_type=account_type, 
                                        all_last=True, description_lenght=70, currency=currency, rates=rates)
 
@@ -321,116 +475,20 @@ def render_create_transaction_dialog(self):
     logger.info("render_create_transaction_dialog: initializing dialog")
     dlg = ui.dialog()
     
-    def fill_manual():
-        """
-        Build and render the 'Manual' tab content for creating a single transaction.
-        """
-        logger.info("render_create_transaction_dialog.fill_manual: building manual form")
-        self.manual_body.clear()
-        with self.manual_body:    
-            account_select = (ui.select(self.accounts, label='Account *')
-                              .props('filled clearable use-input')
-                              .style('width:100%')
-                              )
+    async def fill_manual():
+        accounts = self.accounts 
+        
+        async def _after():
+            dlg.close()
 
-            amount_input = (ui.input(label='Kwota *', placeholder='e.g., 123.45')
-                            .props('filled clearable input-class=text-center maxlength=32')
-                            .style('width:100%')
-                            )
-
-            description_input = (ui.input(label='Description')
-                                 .props('filled clearable counter maxlength=255')
-                                 .style('width:100%')
-                                 )
-                
-            capital_gain_kind = {c.name: c.value for c in CapitalGainKind}
-            capital_select = (ui.select(capital_gain_kind, value='TRANSACTION', label='Typ *')
-                              .props('filled clearable use-input')
-                              .style('width:100%')
-                              )
-                
-            balance_input = (ui.input(label='Saldo po transakcji', placeholder='e.g., 123.45')
-                             .props('filled clearable input-class=text-center maxlength=32')
-                             .style('width:100%')
-                             )
-                
-            date_input = ui.input('Date *').props('filled').style('width:100%')
-            
-            attach_date_time_popups(date_input)
-
-            with ui.row().classes('justify-center q-gutter-md q-mt-sm'):
-                ui.button('Cancel').props('no-caps flat').style('min-width:110px;height:44px').on_click(dlg.close)
-                submit_btn = (ui.button('Add', icon='add').props('no-caps color=primary')
-                              .style('min-width:140px;height:44px;border-radius:8px')
-                              )
-
-        async def do_add():
-            """
-            Validate 'Manual' tab inputs and create a single transaction via WalletClient.
-            """
-            logger.info("render_create_transaction_dialog.do_add: submit clicked in Manual tab")
-            try:
-                if not account_select.value:
-                    ui.notify('Choose account.', color='negative')
-                    logger.warning("do_add: account not selected")
-                    return
-
-                if not amount_input.value:
-                    ui.notify('Provide amount.', color='negative')
-                    logger.warning("do_add: amount not provided")
-                    return
-                
-                if not balance_input.value:
-                    ui.notify('Provide amount.', color='negative')
-                    logger.warning("do_add: balance_after not provided")
-                    return
-                
-                if not description_input.value:
-                    ui.notify('Provide description.', color='negative')
-                    logger.warning("do_add: description not provided")
-                    return
-                
-                if capital_select.value == CapitalGainKind.TRANSACTION.name:
-                    capital_gain = None
-                else:
-                    capital_gain = capital_select.value
-
-                acc_id: uuid.UUID = account_select.value 
-                amount = dec(amount_input.value)
-                balance = dec(balance_input.value)
-                
-                user_id = self.get_user_id()
-
-                payload = {
-                    'account_id': str(acc_id),
-                    'transactions': [{
-                        'date': f"{date_input.value}",
-                        'amount': str(amount),
-                        'description': (description_input.value),
-                        'amount_after': str(balance),
-                        'capital_gain_kind': capital_gain
-                    }]
-                }
-
-                submit_btn.props('loading')
-                res = await self.wallet_client.create_transaction(user_id, payload)
-                if not res:
-                    logger.error("do_add: wallet_client.create_transaction returned falsy result")
-                    ui.notify('Failed to create transaction.', color='negative')
-                    return
-
-                logger.info("do_add: transaction created successfully")
-                ui.notify('Transaction added.', color='positive')
-                dlg.close()
-
-            except Exception as e:
-                logger.exception('Create transaction error')
-                ui.notify(f'Error: {e}', color='negative')
-            finally:
-                submit_btn.props(remove='loading')
-
-        submit_btn.on_click(do_add)  
-    
+        await render_manual_transaction_form(
+            self=self,
+            container=self.manual_body,
+            accounts=accounts,
+            on_success=_after,
+            on_cancel=dlg.close,
+        )
+        
     def fill_import():
         """
         Build and render the 'Import CSV' tab content for importing transactions/brokerage events.
@@ -527,10 +585,16 @@ def render_create_transaction_dialog(self):
                     ui.notify('Parse error. Check selected format/file.', color='negative')
                     return
                 
-            upload = ui.upload(label=PARSERS[0].upload_label, on_upload=on_upload,
-                               on_rejected=lambda: ui.notify('This file type is not allowed here. Please chose correct format', color='negative')) \
-                .props('accept=.csv max-files=1') \
-                .style('width:100%')
+            upload = (ui.upload(
+                                label=PARSERS[0].upload_label, 
+                                on_upload=on_upload,
+                                on_rejected=lambda: ui.notify(
+                                    'This file type is not allowed here. Please chose correct format', 
+                                    color='negative')
+                                )
+                        .props('accept=.csv max-files=1')
+                        .style('width:100%')
+                      )
                 
             def on_format_change():
                 """
@@ -683,257 +747,24 @@ def render_create_transaction_dialog(self):
                 import_btn.props(remove='loading')
 
         import_btn.on_click(do_import)
-       
-    def fill_broker():
-        """
-        Build and render the 'Maklerska' tab for creating a single brokerage event.
-        """
-        logger.info("render_create_transaction_dialog.fill_broker: building broker tab")
-        self.broker_body.clear()
-        with self.broker_body:     
-            dep_brokerage_accounts = {
-                a.id: a.name
-                for w in (self.wallets or [])
-                for a in (w.brokerage_accounts or [])
-            }
-            if not dep_brokerage_accounts:
-                logger.warning(
-                    "fill_broker: no brokerage accounts found – rendering empty state"
-                )
-                with ui.element('div') as body:
-                    body.classes('items-center').style('width:100%; text-align:center;')
-
-                    (ui.icon('account_balance_wallet')
-                     .classes('text-grey-7')
-                     .style('font-size:36px; margin-top:8px; display:block; margin-left:auto; margin-right:auto;')
-                     )
-
-                    (ui.label('Nie masz jeszcze żadnego konta maklerskiego.')
-                     .classes('text-subtitle1 text-center')
-                     )
-
-                    (ui.label('Najpierw utwórz konto, a następnie dodaj transakcje.')
-                     .classes('text-body2 text-grey-7 text-center q-mb-md')
-                     )
-
-                    with ui.row().classes('justify-center q-gutter-md q-mt-md').style('width:100%;'):
-                        (ui.button('Utwórz konto', icon='add')
-                         .props('color=primary no-caps')
-                         ).on_click(lambda: (dlg.close(), self.open_create_account_dialog()))
-
-                        ui.button('Anuluj').props('flat no-caps').on_click(lambda: dlg.close())
-
-            else:
-                
-                ui.label('Wybierz konto, rynek i instrument').classes('text-subtitle2 text-weight-medium q-mb-sm')
-
-                self.dep_sel = ui.select(dep_brokerage_accounts, label='Rachunek depozytowy (BROKERAGE) *')
-                self.dep_sel.props('filled clearable use-input')
-                self.dep_sel.style('width:420px')
-                
-                market_slot = ui.element('div')
-                instrument_slot = ui.element('div')
-                form_slot = ui.element('div')
-                
-                self.market_sel = None
-                self.instr_sel = None
-                self.instruments = []
-                
-                async def load_markets_if_needed():
-                    """
-                    Load markets from stock service and set options on market selector.
-                    """
-                    logger.info("load_markets_if_needed: loading list of markets")
-                    try:
-                        self.market_sel.props('loading')
-                        data = await self.stock_client.get_markets()  
-                        if data:
-                            markets = {m.get("mic"): m.get("name") for m in (data or [])}
-                        else:
-                            logger.warning(
-                                "load_markets_if_needed: no markets returned from stock_client"
-                            )
-                            ui.notify("Any stock market is not available")
-                            return
-                        self.market_sel.options = markets
-                    finally:
-                        self.market_sel.props(remove='loading')
-                        
-                async def load_instruments_for_market():
-                    """
-                    Load instruments for selected market and set options on instrument selector.
-                    """
-                    mic = self.market_sel.value
-                    if not mic:
-                        self.instr_sel.set_options([])
-                        return
-
-                    try:
-                        self.instr_sel.props('loading')
-                        data = await self.stock_client.list_instruments(mic=mic) 
-                        if data:
-                            self.instruments = {m.get("symbol"): m.get("shortname") for m in (data or [])}
-                        else:
-                            ui.notify(f"Any stock instrument for {mic} is not available")
-                            return
-                    finally:
-                        self.instr_sel.props(remove='loading')
-                    self.instr_sel.options = self.instruments 
-                    
-                def on_dep_change():
-                    """
-                    Rebuild market panel when brokerage account selection changes.
-                    """
-                    logger.info(
-                        f"on_dep_change: dep_sel changed to {self.dep_sel.value}" 
-                    )
-                    market_slot.clear()
-                    instrument_slot.clear()
-                    form_slot.clear()
-                    if not self.dep_sel.value:
-                        return
-
-                    with market_slot:
-                        row = ui.row().classes('items-center q-gutter-sm q-mt-sm')
-                        row.style('width:100%')
-
-                        ui.label('Rynek *').classes('text-caption text-grey-7')
-                        self.market_sel = ui.select({}, label='Rynek *')
-                        self.market_sel.props('filled clearable use-input')
-                        self.market_sel.style('width:420px')
-                        
-                        self.market_sel.on('update:model-value', on_market_change)
-                        
-                        ui.timer(0.01, load_markets_if_needed, once=True)
-
-                def on_market_change():
-                    """
-                    Rebuild instrument and form panel when market selection changes.
-                    """
-                    instrument_slot.clear()
-                    form_slot.clear()
-                    mic = self.market_sel.value
-                    if not mic:
-                        return
-
-                    with instrument_slot:
-                        row2 = ui.row().classes('items-center q-gutter-sm q-mt-sm')
-                        row2.style('width:100%')
-
-                        self.instr_sel = ui.select({}, label='Instrument *')
-                        self.instr_sel.props('filled clearable use-input virtual-scroll')
-                        self.instr_sel.style('width:420px')
-
-                        self.instr_sel.on('filter', local_filter)
-                        self.instr_sel.on('update:model-value', on_instr_change)
-
-                        ui.timer(0.01, load_instruments_for_market, once=True)
-                        
-                def local_filter(e):
-                    """
-                    Local filter for instrument selector, matching by symbol or name.
-                    """
-                    
-                    if isinstance(e.args, str):
-                        raw = e.args
-                        
-                    elif isinstance(e.args, list) and e.args:
-                        raw = e.args[0] 
-
-                    query = (raw or '').strip().lower()
-                    
-                    if not query:
-                        self.instr_sel.set_options(self.instruments)
-                        
-                    filtered = {
-                        key: value
-                        for key, value in self.instruments.items()
-                        if query in key.lower() or query in value.lower()
-                    }
-
-                    self.instr_sel.set_options(filtered)
-                    
-                def on_instr_change():
-                    """
-                    Build brokerage event form when instrument selection changes.
-                    """
-                    form_slot.clear()
-                    instr_symbol = self.instr_sel.value
-
-                    with form_slot:
-                        with ui.row().classes('justify-center q-gutter-md q-mt-sm'):
-                            with ui.column().classes('w-full q-gutter-sm'):
-                                kind = ui.select({'BUY': 'BUY', 'SELL': 'SELL', 'DIV': 'DIV'},
-                                                 value='BUY', label='Rodzaj *')
-                                kind.props('filled clearable use-input')
-                                kind.style('width:420px')
-
-                                qty = ui.input(label='Ilość', value='0')
-                                qty.props('filled clearable use-input')
-                                qty.style('width:420px')
-
-                                price = ui.input(label='Cena / Kwota', value='0')
-                                price.props('filled clearable use-input')
-                                price.style('width:420px')
-                                
-                                currenncy = ui.select([c.value for c in Currency], value='PLN')
-
-                                currenncy.props('filled clearable use-input').style('flex:0 0 auto;')
-                                currenncy.style('width:420px')
-
-                                trade_dt = ui.input('Data *', value=datetime.datetime.now().strftime('%Y-%m-%dT%H:%M'))
-                                trade_dt.props('filled clearable use-input')
-                                trade_dt.style('width:420px')
-
-                                attach_date_time_popups(trade_dt)
-                        
-                        with ui.row().classes('justify-center q-gutter-md q-mt-sm'):
-
-                            ui.button('Cancel').props('no-caps flat').style('min-width:110px;height:44px').on_click(dlg.close)
-
-                            submit_btn = ui.button('Post event', icon='addchart')
-                            submit_btn.props('color=primary no-caps').style('min-width:160px;height:44px;border-radius:8px')
-
-                        async def do_submit():
-                            """
-                            Validate brokerage event form and send it to WalletClient.
-                            """
-                            
-                            try:
-                                payload = {
-                                        "brokerage_account_id": str(self.dep_sel.value),
-                                        "instrument_symbol": instr_symbol,
-                                        "instrument_mic": self.market_sel.value,
-                                        "instrument_name": self.instruments.get(instr_symbol),
-                                        "kind": kind.value,
-                                        "quantity": qty.value,    
-                                        "price": price.value,
-                                        "currency": currenncy.value,
-                                        "split_ratio": "0",   
-                                        "trade_at": trade_dt.value,
-                                    }
-                                
-                                submit_btn.props('loading')
-                                user_id = self.get_user_id()
-                                ok = await self.wallet_client.create_brokerage_event(user_id, payload)
-                                if not ok:
-                                    logger.error("do_submit: failed to save brokerage event")
-                                    ui.notify('Nie udało się zapisać zdarzenia.', color='negative')
-                                    return
-                                
-                                logger.info("do_submit: brokerage event saved successfully")
-                                ui.notify('Zdarzenie maklerskie zapisane.', color='positive')
-                                dlg.close()
-                            except Exception as e:
-                                logger.exception(f"Brokerage event error: {e}")
-                                ui.notify(f'Error: {e}', color='negative')
-                            finally:
-                                submit_btn.props(remove='loading')
-
-                        submit_btn.on_click(do_submit)
     
-                self.dep_sel.on('update:model-value', on_dep_change)
-    
+    async def fill_broker():
+        dep_brokerage_accounts = {
+            a.id: a.name
+            for w in (self.wallets or [])
+            for a in (w.brokerage_accounts or [])
+        }
+
+        async def _after():
+            dlg.close()
+
+        await render_brokerage_event_form(
+            self=self,
+            container=self.broker_body,
+            brokerage_accounts=dep_brokerage_accounts,
+            on_success=_after,
+        )
+        
     with dlg:
         with ui.card().style('''
             max-width: 720px;
@@ -983,11 +814,11 @@ def render_create_transaction_dialog(self):
         active = tabs.value
         logger.info(f"fill_active_panel: active tab={active!r}")
         if active == 'Manual':
-            fill_manual()
+            ui.timer(0.01, fill_manual, once=True)
         elif active == 'Import CSV':
             fill_import()
         elif active == 'Maklerska':
-            fill_broker()
+            ui.timer(0.01, fill_broker, once=True)
 
     def on_tab_change():
         """
@@ -1039,7 +870,7 @@ def open_import_preview_dialog(
 
     columns = [
         {"name": "date",         "label": "Data",           "field": "date",         "align": "left",  "sortable": True},
-        {"name": "description",  "label": "Opis transakcji","field": "description",  "align": "left"},
+        {"name": "description",  "label": "Opis transakcji", "field": "description",  "align": "left"},
         {"name": "amount",       "label": "Kwota",          "field": "amount",       "align": "right"},
         {"name": "amount_after", "label": "Saldo po",       "field": "amount_after", "align": "right"},
         

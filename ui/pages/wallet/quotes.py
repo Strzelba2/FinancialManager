@@ -15,7 +15,7 @@ from utils.dates import next_quarter_business, TZ
 
 logger = logging.getLogger(__name__)
 
-MIC_CHOICES = {'GPW': 'XWAR', 'NEWCONNECT': 'XNCO'}
+MIC_CHOICES = {'GPW': 'XWAR', 'NEWCONNECT': 'XNCO', 'RAW': 'STCM'}
 MIC_BY_CODE = {v: k for k, v in MIC_CHOICES.items()}
 
 

@@ -4,9 +4,9 @@ import logging
 import uuid
 
 from app.crud.wallet_crud import get_wallet
-from app.crud.deposit_account_crud import delete_deposit_account
+from app.crud.deposit_account_crud import delete_deposit_account, list_accounts_for_user
 from app.api.services.accounts import create_deposit_account_service, create_brokeage_account_service
-from app.schamas.response import AccountCreateResponse
+from app.schamas.response import AccountCreateResponse, AccountOut
 from app.schamas.schemas import (
     AccountCreation, DepositAccountRead, AccountType, BrokerageAccountCreate
 )
@@ -63,3 +63,14 @@ async def create_account(
         name=account.name,
         account_type=account.account_type
     )
+  
+    
+@router.get("/accounts", response_model=list[AccountOut])
+async def get_accounts(
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+) -> list[AccountOut]:
+    logger.info("get_accounts")
+    accounts = await list_accounts_for_user(session=session, user_id=user_id)
+    
+    return [AccountOut(id=a.id, name=a.name, currency=a.currency) for a in accounts]

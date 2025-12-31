@@ -8,7 +8,7 @@ from sqlalchemy.dialects import postgresql as pg
 from sqlalchemy.sql import func, text
 from sqlalchemy.types import DateTime
 from pydantic import ConfigDict, field_validator
-from .enums import InstrumentType, InstrumentStatus
+from .enums import InstrumentType, InstrumentStatus, Currency
 from app.validators.validators import (
     Shortname, MICCode, ISINOpt, Name,
     g0int, datetimeUTC, Q2, NonEmptyStrUpperOpt, url_to_str
@@ -63,6 +63,10 @@ class MarketBase(SQLModel):
         default=True,
         sa_column=sa.Column(Boolean, nullable=False, server_default="1"),
         description="if market is activated"
+    )
+    currency: Currency = Field( 
+        sa_column=sa.Column(sa.String(3), nullable=False, index=True),
+        description="ISO currency code for instruments traded on this market (e.g. PLN, USD).",
     )
     
     

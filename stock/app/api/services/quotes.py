@@ -1,8 +1,8 @@
-from typing import Optional
+from typing import Optional, Iterable, List
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.crud.quote_latest import fetch_latest_quote, fetch_latest_for_mic
-from app.schemas.quates import QuotePayloadOut, BulkQuotesOut
+from app.crud.quote_latest import fetch_latest_quote, fetch_latest_for_mic, fetch_latest_quotes_by_symbols
+from app.schemas.quates import QuotePayloadOut, BulkQuotesOut, LatestQuoteBySymbol
 
 logger = logging.getLogger(__name__)
 
@@ -71,3 +71,51 @@ async def get_latest_bulk_service(session: AsyncSession, mic: str) -> BulkQuotes
         f"Built BulkQuotesOut for mic={mic!r} with {len(payload)} instruments"
     )
     return bulk
+
+
+async def get_latest_quotes_by_symbols(
+    session: AsyncSession,
+    symbols: Iterable[str],
+) -> List[LatestQuoteBySymbol]:
+    """
+    Fetch the latest quotes for a set of instrument symbols.
+
+    The function queries the database for the most recent quote per symbol and
+    returns a normalized list of `LatestQuoteBySymbol`.
+
+    Args:
+        session: SQLAlchemy async database session.
+        symbols: Iterable of instrument symbols (e.g., ["AAPL", "MSFT"]).
+
+    Returns:
+        A list of `LatestQuoteBySymbol` objects. If nothing is found, returns an empty list.
+        Instruments without a `QuoteLatest` row are skipped.
+    """
+    rows = await fetch_latest_quotes_by_symbols(session=session, symbols=symbols)
+
+    if not rows:
+        logger.warning(
+            f"get_latest_quotes_by_symbols: no rows returned for symbols={list(symbols)}"
+        )
+        return []
+
+    out: List[LatestQuoteBySymbol] = []
+    for inst, market, ql in rows:
+        if ql is None:
+            logger.warning(
+                f"Instrument id={inst.id} symbol={inst.symbol} has no QuoteLatest row"
+            )
+            continue
+
+        out.append(
+            LatestQuoteBySymbol(
+                symbol=inst.symbol,
+                price=ql.last_price,
+                currency=market.currency,
+            )
+        )
+
+    logger.info(
+        f"get_latest_quotes_by_symbols: returning {len(out)} quotes "
+    )
+    return out
