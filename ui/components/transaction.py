@@ -65,11 +65,13 @@ async def render_manual_transaction_form(
 
     with container:
         account_select = (
-            ui.select(accounts, label="Account *")
+            ui.select(accounts, 
+                      label="Account *")
             .props("filled clearable use-input")
             .style("width:100%")
         )
-        if default_account_id and default_account_id in accounts:
+        
+        if default_account_id and default_account_id in accounts.keys():
             account_select.value = default_account_id
 
         amount_input = (
@@ -137,8 +139,8 @@ async def render_manual_transaction_form(
             capital_gain = None if capital_select.value == CapitalGainKind.TRANSACTION.name else capital_select.value
 
             acc_id: uuid.UUID = account_select.value
-            amount = dec(amount_input.value)
-            balance = dec(balance_input.value)
+            amount = dec(str(amount_input.value).replace(',', '.'))
+            balance = dec(str(balance_input.value).replace(',', '.'))
 
             user_id = self.get_user_id()
 
@@ -156,14 +158,13 @@ async def render_manual_transaction_form(
             }
 
             submit_btn.props("loading")
-            res = await self.wallet_client.create_transaction(user_id, payload)
-            if not res:
+            msg, color = await self.wallet_client.create_transaction(user_id, payload)
+            if color == 'negative':
                 logger.error("do_add: wallet_client.create_transaction returned falsy result")
-                ui.notify("Failed to create transaction.", color="negative")
+                ui.notify(msg, color=color)
                 return
 
-            logger.info("do_add: transaction created successfully")
-            ui.notify("Transaction added.", color="positive")
+            ui.notify(msg, color=color)
             await on_success()
 
         except Exception as e:
@@ -1089,3 +1090,68 @@ def open_instructions_dialog():
                 ui.button('Zamknij').props('color=primary no-caps').on_click(dlg.close)
 
     dlg.open()
+    
+    
+def render_add_transaction_dialog(self):
+    """
+    Create (once) and return an `open_dialog(selected_account)` function for adding a manual transaction.
+
+    The dialog is created a single time and reused. Calling the returned function sets the selected
+    account, opens the dialog, and renders the manual transaction form asynchronously.
+
+    Args:
+        self: Page/controller object (must provide `_after()` and `render_manual_transaction_form(...)`).
+
+    Returns:
+        A callable `open_dialog(account_dict | None) -> None` that opens the dialog.
+        If `None` (or invalid dict) is provided, the dialog shows a warning and does not render the form.
+    """
+    logger.debug("Request: render_add_transaction_dialog (create dialog instance)")
+    
+    dlg = ui.dialog()
+    st: dict[str, dict] = {"acc": {}}
+
+    with dlg:
+        with ui.card().style('''
+            max-width: 720px; width: 92vw;
+            padding: 28px 24px;
+            border-radius: 24px;
+            background: linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%);
+            box-shadow: 0 10px 24px rgba(15,23,42,.06);
+            border: 1px solid rgba(2,6,23,.06);
+        '''):
+            ui.icon('receipt_long').style(
+                'font-size:44px;color:#2563eb;background:#e0ecff;'
+                'padding:16px;border-radius:50%'
+            )
+            ui.label('Add transaction').classes('text-h5 text-weight-medium q-mb-xs text-center')
+            ui.label('Create a manual transaction.').classes('text-body2 text-grey-8 q-mb-md text-center')
+
+            with ui.element('div').style('max-height: 520px; overflow-y: auto; width:100%;'):
+                with ui.row().classes('w-full justify-center'):
+                    body = ui.column().classes('q-gutter-sm').style('width:420px; max-width:100%;')
+
+    async def _after_transaction():
+        dlg.close()
+        await self._after()
+
+    async def _render_form():
+        body.clear()
+        a = st["acc"]
+
+        accounts = {str(a["id"]): a.get("name")}
+        await render_manual_transaction_form(
+            self=self,
+            container=body,
+            accounts=accounts,
+            on_success=_after_transaction,
+            on_cancel=dlg.close,
+            default_account_id=str(a["id"]),
+        )
+
+    def open_dialog(a: dict) -> None:
+        st["acc"] = a
+        dlg.open()
+        ui.timer(0.0, _render_form, once=True)
+
+    return open_dialog

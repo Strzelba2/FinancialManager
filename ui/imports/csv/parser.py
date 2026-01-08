@@ -320,9 +320,7 @@ class SaxoBankParser(BaseBankParser):
     kind = 'CSV'
     accept = '.csv'
     upload_label = 'Drop CSV here or click'
-    
-    # supports_brokerage_events = True
-    
+
     def __init__(self):
         super().__init__()
 

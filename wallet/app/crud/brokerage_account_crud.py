@@ -62,9 +62,24 @@ async def get_brokerage_by_wallet_bank_name(
     return (await session.execute(stmt)).first()
 
 
+async def get_brokerage_account_for_user(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    brokerage_account_id: uuid.UUID,
+) -> Optional[BrokerageAccount]:
+    stmt = (
+        select(BrokerageAccount)
+        .join(Wallet, Wallet.id == BrokerageAccount.wallet_id)
+        .where(Wallet.user_id == user_id, BrokerageAccount.id == brokerage_account_id)
+    )
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
 async def list_brokerage_accounts(
     session: AsyncSession,
     wallet_id: Optional[uuid.UUID] = None,
+    wallet_ids: Optional[list[uuid.UUID]] = None,
     bank_id: Optional[uuid.UUID] = None,
     search: Optional[str] = None, 
     limit: int = 50,
@@ -74,6 +89,8 @@ async def list_brokerage_accounts(
     stmt = select(BrokerageAccount)
     if wallet_id:
         stmt = stmt.where(BrokerageAccount.wallet_id == wallet_id)
+    if wallet_ids:
+        stmt = stmt.where(BrokerageAccount.wallet_id.in_(wallet_ids))
     if bank_id:
         stmt = stmt.where(BrokerageAccount.bank_id == bank_id)
     if search:

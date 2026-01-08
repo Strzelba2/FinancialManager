@@ -75,6 +75,7 @@ async def get_link_with_relations(
 async def list_brokerage_deposit_links(
     session: AsyncSession,
     brokerage_account_id: Optional[uuid.UUID] = None,
+    brokerage_account_ids: Optional[list[uuid.UUID]] = None,
     deposit_account_id: Optional[uuid.UUID] = None,
     currency: Optional[Currency] = None,
     limit: int = 50,
@@ -84,6 +85,8 @@ async def list_brokerage_deposit_links(
     stmt = select(BrokerageDepositLink)
     if brokerage_account_id:
         stmt = stmt.where(BrokerageDepositLink.brokerage_account_id == brokerage_account_id)
+    if brokerage_account_ids:
+        stmt = stmt.where(BrokerageDepositLink.brokerage_account_id.in_(brokerage_account_ids))
     if deposit_account_id:
         stmt = stmt.where(BrokerageDepositLink.deposit_account_id == deposit_account_id)
     if currency:
@@ -97,7 +100,7 @@ async def list_brokerage_deposit_links(
 
     stmt = stmt.offset(offset).limit(limit)
     result = await session.execute(stmt)
-    return result.all()
+    return result.scalars().all()
 
 
 async def update_brokerage_deposit_link(

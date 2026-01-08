@@ -1,3 +1,4 @@
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 from datetime import datetime, timezone
@@ -143,3 +144,43 @@ async def dash_flow_8m(
         flow[ms].capital_by_currency[ccy] = flow[ms].capital_by_currency.get(ccy, Decimal("0")) + total_dec
     
     return [flow[m] for m in months_str]
+
+
+async def rename_wallet_service(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    wallet_id: uuid.UUID,
+    name: str,
+) -> Wallet:
+    """
+    Rename a wallet that belongs to the given user.
+
+    Args:
+        session: SQLAlchemy async database session.
+        user_id: Owner user UUID (authorization scope).
+        wallet_id: Wallet UUID to rename.
+        name: New wallet name (will be stripped).
+
+    Returns:
+        Updated `Wallet` ORM object.
+
+    Raises:
+        HTTPException:
+            - 400 if `name` is empty/invalid or too long.
+            - 404 if the wallet does not exist or does not belong to the user.
+    """
+    new_name = (name or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Wallet name is required.")
+    if len(new_name) > 40:
+        raise HTTPException(status_code=400, detail="Wallet name too long.")
+
+    async with session.begin():
+        w = await get_wallet(session, wallet_id)
+        if w is None or w.user_id != user_id:
+            raise HTTPException(status_code=404, detail="Wallet not found.")
+
+        w.name = new_name
+        session.add(w)
+        await session.flush()
+        return w

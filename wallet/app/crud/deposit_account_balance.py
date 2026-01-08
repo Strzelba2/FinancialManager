@@ -1,5 +1,6 @@
 from __future__ import annotations
 import uuid
+from decimal import Decimal
 from typing import Optional, List
 
 from sqlalchemy.exc import IntegrityError
@@ -40,6 +41,26 @@ async def get_deposit_account_balance_with_account(
         .where(DepositAccountBalance.account_id == account_id)
     )
     return (await session.execute(stmt)).first()
+
+
+async def get_or_create_balance_for_update(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+) -> DepositAccountBalance:
+    bal = await session.scalar(
+        select(DepositAccountBalance)
+        .where(DepositAccountBalance.account_id == account_id)
+        .with_for_update()
+    )
+    if bal is None:
+        bal = DepositAccountBalance(
+            account_id=account_id,
+            available=Decimal("0"),
+            blocked=Decimal("0"),
+        )
+        session.add(bal)
+        await session.flush()
+    return bal
 
 
 async def list_deposit_account_balances(

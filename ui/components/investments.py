@@ -1,6 +1,7 @@
 from nicegui import ui
+import inspect
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import logging
@@ -318,6 +319,148 @@ def show_sell_property_dialog(wallet, row: dict, on_refresh=None) -> None:
                 sell_btn
 
     dlg.open()
+    
+    
+def render_add_metal_content(
+    wallet,                
+    container,             
+    on_success,          
+    on_cancel,             
+    default_wallet_id: Optional[str] = None,
+    view_ccy: Optional[str] = None,
+) -> None:
+    """Render the 'Add metal' form into container (no ui.dialog here)."""
+
+    wallets = wallet.selected_wallet or []
+    if not wallets:
+        ui.notify("Brak portfeli do wyboru.", color="negative", timeout=0, close_button="OK")
+        return
+
+    if view_ccy is None:
+        view_ccy = getattr(getattr(wallet, "view_currency", None), "value", None) or "PLN"
+
+    with container:
+        with ui.column().classes("items-center justify-center").style("width:100%"):
+            ui.icon("sym_o_insights").style("""
+                font-size: 48px;
+                color: #3b82f6;
+                background: #e6f0ff;
+                padding: 20px;
+                border-radius: 50%;
+                margin-bottom: 18px;
+            """)
+            ui.label("Dodaj metal szlachetny").classes("text-h5 text-weight-medium q-mb-xs text-center")
+            ui.label("Uzupełnij ilość i koszt bazowy. Pola z gwiazdką (*) są wymagane.")\
+                .classes("text-body2 text-grey-8 q-mb-lg text-center")
+
+        wallet_options = {
+            str(w.id): w.name
+            for w in (wallets or [])
+            if any(
+                (getattr(a, "account_type", None) == "CURRENT") or
+                (getattr(getattr(a, "account_type", None), "value", None) == "CURRENT")
+                for a in (getattr(w, "accounts", None) or [])
+            )
+        }
+        if not wallet_options:
+            ui.notify(
+                "Proszę stworzyć konto bankowe typu Konto Bankowe dla portfela",
+                color="negative",
+                timeout=0,
+                close_button=True,
+            )
+            return
+
+        if default_wallet_id not in wallet_options:
+            default_wallet_id = next(iter(wallet_options.keys()))
+
+        wallet_sel = ui.select(
+            options=wallet_options,
+            value=default_wallet_id,
+            label="Portfel *",
+        ).props("filled dense").style("width: 100%").classes("q-mb-sm")
+
+        metal_sel = ui.select(
+            options=[m.value for m in MetalType],
+            value=(MetalType.GOLD.value if hasattr(MetalType, "GOLD") else list(MetalType)[0].value),
+            label="Metal *",
+        ).props("filled dense").style("width: 100%").classes("q-mb-sm")
+
+        grams_in = ui.input(label="Ilość (g) *", placeholder="np. 12.345")\
+            .props("filled dense").style("width: 100%").classes("q-mb-sm")
+
+        cost_basis_in = ui.input(label="Koszt bazowy (opcjonalnie)", placeholder="np. 12000.00")\
+            .props("filled dense").style("width: 100%").classes("q-mb-sm")
+
+        currency_sel = ui.select(
+            options=[c.value for c in Currency],
+            value=view_ccy,
+            label="Waluta kosztu (opcjonalnie)",
+        ).props("filled dense").style("width: 100%").classes("q-mb-md")
+
+        with ui.row().classes("justify-end q-gutter-sm q-mt-md").style("width:100%"):
+            submit_btn = ui.button("Dodaj", icon="add").props("no-caps color=primary")\
+                .style("min-width: 140px; height: 44px; border-radius: 10px; padding: 0 22px;")
+            cancel_btn = ui.button("Anuluj").props("no-caps flat")\
+                .style("min-width: 110px; height: 44px; padding: 0 18px;")
+
+        cancel_btn.on_click(on_cancel)
+
+        async def save() -> None:
+            try:
+                wallet_id = uuid.UUID(str(wallet_sel.value))
+            except Exception:
+                ui.notify("Niepoprawny portfel.", color="negative", timeout=0, close_button="OK")
+                return
+
+            metal = str(metal_sel.value or "").strip()
+            if not metal:
+                ui.notify("Wybierz metal.", color="negative", timeout=0, close_button="OK")
+                return
+
+            try:
+                grams = parse_amount(grams_in.value)
+            except Exception:
+                ui.notify("Podaj poprawną ilość gramów.", color="negative", timeout=0, close_button="OK")
+                return
+            if grams is None or grams <= 0:
+                ui.notify("Ilość gramów musi być > 0.", color="negative", timeout=0, close_button="OK")
+                return
+
+            try:
+                cost_basis = parse_amount(cost_basis_in.value)
+            except Exception:
+                ui.notify("Niepoprawny koszt bazowy.", color="negative", timeout=0, close_button="OK")
+                return
+
+            cost_currency = str(currency_sel.value or "").strip() or None
+            if cost_basis is None:
+                cost_currency = None
+
+            submit_btn.props("loading")
+            try:
+                user_id = wallet.get_user_id()
+                res = await wallet.wallet_client.create_metal_holding(
+                    user_id=user_id,
+                    wallet_id=wallet_id,
+                    metal=metal,
+                    grams=grams,
+                    cost_basis=cost_basis,
+                    cost_currency=cost_currency,
+                )
+                if not res:
+                    ui.notify("Nie udało się dodać metalu.", color="negative", timeout=0, close_button="OK")
+                    return
+
+                ui.notify("Dodano metal.", color="positive")
+
+                r = on_success()
+                if inspect.isawaitable(r):
+                    await r
+            finally:
+                submit_btn.props(remove="loading")
+
+        submit_btn.on_click(save)
 
 
 def show_add_metal_dialog(wallet, on_refresh=None) -> None:
@@ -332,14 +475,6 @@ def show_add_metal_dialog(wallet, on_refresh=None) -> None:
         None. Opens a NiceGUI dialog.
     """
 
-    wallets = wallet.selected_wallet or []
-    if not wallets:
-        logger.info("show_add_metal_dialog: no wallets to choose from")
-        ui.notify("Brak portfeli do wyboru.", color="negative", timeout=0, close_button="OK")
-        return
-
-    view_ccy = wallet.view_currency.value or "PLN"
-
     dlg = ui.dialog()
     with dlg:
         with ui.card().style("""
@@ -350,138 +485,65 @@ def show_add_metal_dialog(wallet, on_refresh=None) -> None:
             box-shadow: 0 10px 24px rgba(15,23,42,.06);
             border: 1px solid rgba(2,6,23,.06);
         """):
+            body = ui.column().classes("q-gutter-sm").style("width:100%")
 
-            with ui.column().classes("items-center justify-center").style("width:100%"):
-                ui.icon("sym_o_insights").style("""
-                    font-size: 48px;
-                    color: #3b82f6;
-                    background: #e6f0ff;
-                    padding: 20px;
-                    border-radius: 50%;
-                    margin-bottom: 18px;
-                """)
-
-                ui.label("Dodaj metal szlachetny").classes("text-h5 text-weight-medium q-mb-xs text-center")
-                ui.label("Uzupełnij ilość i koszt bazowy. Pola z gwiazdką (*) są wymagane.")\
-                    .classes("text-body2 text-grey-8 q-mb-lg text-center")
-
-            wallet_options = {
-                str(w.id): w.name
-                for w in (wallets or [])
-                if any(
-                    (getattr(a, "account_type", None) == "CURRENT") or
-                    (getattr(getattr(a, "account_type", None), "value", None) == "CURRENT")  
-                    for a in (getattr(w, "accounts", None) or [])
-                )
-            }
-            if not wallet_options:
-                ui.notify(
-                    "Proszę stworzyć konto bankowe typu Konto Bankowe dla portfela ", 
-                    color='negative', timeout=0, 
-                    close_button=True,
-                    )
-                return
-            wallet_sel = ui.select(
-                options=wallet_options,
-                value=str(wallets[0].id),
-                label="Portfel *",
-            ).props("filled dense").style("width: 100%").classes("q-mb-sm")
-
-            metal_sel = ui.select(
-                options=[m.value for m in MetalType],
-                value=(MetalType.GOLD.value if hasattr(MetalType, "GOLD") else list(MetalType)[0].value),
-                label="Metal *",
-            ).props("filled dense").style("width: 100%").classes("q-mb-sm")
-
-            grams_in = ui.input(
-                label="Ilość (g) *",
-                placeholder="np. 12.345",
-            ).props("filled dense").style("width: 100%").classes("q-mb-sm")
-
-            cost_basis_in = ui.input(
-                label="Koszt bazowy (opcjonalnie)",
-                placeholder="np. 12000.00",
-            ).props("filled dense").style("width: 100%").classes("q-mb-sm")
-
-            currency_sel = ui.select(
-                options=[c.value for c in Currency],
-                value=view_ccy,
-                label="Waluta kosztu (opcjonalnie)",
-            ).props("filled dense").style("width: 100%").classes("q-mb-md")
-                        
-            with ui.row().classes('justify-end q-gutter-sm q-mt-md').style('width:100%'):
-                submit_btn = ui.button('Dodaj', icon='add').props("no-caps color=primary")\
-                    .style("min-width: 140px; height: 44px; border-radius: 10px; padding: 0 22px;")
-                cancel_btn = ui.button("Anuluj").props("no-caps flat")\
-                    .style("min-width: 110px; height: 44px; padding: 0 18px;")
-
-            async def save() -> None:
-                """
-                Validate inputs and create metal holding via API.
-                """
-                try:
-                    wallet_id = uuid.UUID(str(wallet_sel.value))
-                except Exception:
-                    logger.info(f"show_add_metal_dialog.save: invalid wallet_id value={wallet_sel.value!r}")
-                    ui.notify("Niepoprawny portfel.", color="negative", timeout=0, close_button="OK")
-                    return
-
-                metal = str(metal_sel.value or "").strip()
-                if not metal:
-                    logger.info("show_add_metal_dialog.save: empty metal")
-                    ui.notify("Wybierz metal.", color="negative", timeout=0, close_button="OK")
-                    return
-
-                try:
-                    grams = parse_amount(grams_in.value)
-                except Exception:
-                    logger.info(f"show_add_metal_dialog.save: invalid grams raw={grams_in.value!r}")
-                    ui.notify("Podaj poprawną ilość gramów.", color="negative", timeout=0, close_button="OK")
-                    return
-
-                if grams is None or grams <= 0:
-                    logger.info(f"show_add_metal_dialog.save: non-positive grams grams={grams}")
-                    ui.notify("Ilość gramów musi być > 0.", color="negative", timeout=0, close_button="OK")
-                    return
-
-                try:
-                    cost_basis = parse_amount(cost_basis_in.value)
-                except Exception:
-                    logger.info(f"show_add_metal_dialog.save: invalid cost_basis raw={cost_basis_in.value!r}")
-                    ui.notify("Niepoprawny koszt bazowy.", color="negative", timeout=0, close_button="OK")
-                    return
-
-                cost_currency = str(currency_sel.value or "").strip() or None
-                if cost_basis is None:
-                    cost_currency = None
-
-                submit_btn.props("loading")
-                user_id = wallet.get_user_id()
-                try:
-                    res = await wallet.wallet_client.create_metal_holding(
-                        user_id=user_id,
-                        wallet_id=wallet_id,
-                        metal=metal,
-                        grams=grams,
-                        cost_basis=cost_basis,
-                        cost_currency=cost_currency,
-                    )
-                    if not res:
-                        ui.notify("Nie udało się dodać metalu.", color="negative", timeout=0, close_button="OK")
-                        return
-
-                    ui.notify("Dodano metal.", color="positive")
-                    dlg.close()
-
+            async def _after():
+                dlg.close()
+                if on_refresh:
+                    r = on_refresh()
+                    if inspect.isawaitable(r):
+                        await r
+                else:
                     ui.navigate.reload()
-                        
-                finally:
-                    submit_btn.props(remove="loading")
 
-            submit_btn.on_click(save)
-            cancel_btn.on_click(dlg.close)
-
+            render_add_metal_content(
+                wallet=wallet,
+                container=body,
+                on_success=_after,
+                on_cancel=dlg.close,
+            )
     dlg.open()
+    
+    
+def render_add_metal_dialog(self):
+    dlg = ui.dialog()
+    st: dict[str, dict] = {"wallet_dict": {}}
+
+    with dlg:
+        with ui.card().style("""
+            max-width: 520px;
+            padding: 44px 34px 28px;
+            border-radius: 24px;
+            background: linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%);
+            box-shadow: 0 10px 24px rgba(15,23,42,.06);
+            border: 1px solid rgba(2,6,23,.06);
+        """):
+            body = ui.column().classes("q-gutter-sm").style("width:100%")
+
+    async def _after_transaction():
+        dlg.close()
+        await self._after()
+
+    async def _render_form():
+        body.clear()
+        ww = st["wallet_dict"]
+
+        adapter = self._adapter_for_metal_dialog(ww)  
+        render_add_metal_content(
+            wallet=adapter,
+            container=body,
+            on_success=_after_transaction,
+            on_cancel=dlg.close,
+            default_wallet_id=str(ww.get("id")),
+            view_ccy=(self.state.get("view_ccy") or "PLN"),
+        )
+
+    def open_dialog(ww: dict) -> None:
+        st["wallet_dict"] = ww
+        dlg.open()
+        ui.timer(0.0, _render_form, once=True)  
+
+    return open_dialog
 
 
 async def fetch_metal_rows(wallet) -> List[Dict[str, Any]]:
@@ -591,10 +653,8 @@ def open_prices_dialog(wallet) -> None:
                     'Dodaj nową wycenę referencyjną. Najnowszy wpis będzie używany do obliczenia wartości nieruchomości.'
                 ).classes('text-body2 text-grey-8 q-mb-lg text-center').style('padding: 0 10px;')
 
-                # Inputs container
                 with ui.column().classes('q-gutter-sm').style('width: 100%;'):
 
-                    # country + city in one row, responsive
                     with ui.row().classes('q-gutter-sm w-full'):
                         country = ui.input(
                             label='Kraj (ISO2)',
@@ -686,22 +746,146 @@ def open_prices_dialog(wallet) -> None:
     dlg.open()
 
 
-def show_add_property_dialog(wallet) -> None:
-    """
-    Open dialog to create a new real estate entry.
+def render_add_property_content(
+    wallet,                
+    container,           
+    on_success,          
+    on_cancel,             
+    default_wallet_id: Optional[str] = None,
+) -> None:
+    """Render the 'Add property' form into an existing container (no ui.dialog here)."""
 
-    Args:
-        wallet: Wallet page/controller providing `wallets`, `get_user_id()`,
-                and `wallet_client.create_real_estate(...)`.
+    all_wallets = getattr(wallet, "wallets", None) or []
+    if not all_wallets:
+        ui.notify("Brak portfeli do wyboru.", color="negative", timeout=0, close_button=True)
+        return
 
-    Returns:
-        None. Opens a NiceGUI dialog.
-    """
-    logger.info("show_add_property_dialog: open")
+    wallet_options = {
+        str(w.id): w.name
+        for w in (all_wallets or [])
+        if any(
+            (getattr(a, "account_type", None) == "CURRENT")
+            or (getattr(getattr(a, "account_type", None), "value", None) == "CURRENT")
+            for a in (getattr(w, "accounts", None) or [])
+        )
+    }
+    if not wallet_options:
+        ui.notify(
+            "Proszę stworzyć konto bankowe typu Konto Bankowe dla portfela",
+            color="negative",
+            timeout=0,
+            close_button=True,
+        )
+        return
+
+    if default_wallet_id not in wallet_options:
+        default_wallet_id = next(iter(wallet_options.keys()))
+
+    with container:
+        with ui.column().classes("items-center justify-center q-gutter-md").style("width: 100%"):
+            ui.icon("sym_o_home").style("""
+                font-size: 40px;
+                color: #0ea5e9;
+                background: #e0f2fe;
+                padding: 16px;
+                border-radius: 50%;
+            """)
+            ui.label("Dodaj nieruchomość").classes("text-h6 text-weight-medium text-center")
+            ui.label("Uzupełnij podstawowe dane nieruchomości. Pola z gwiazdką (*) są wymagane.")\
+                .classes("text-body2 text-grey-7 text-center")
+
+        wallet_select = ui.select(
+            wallet_options,
+            value=str(default_wallet_id),
+            label="Portfel *",
+        ).props("filled dense").style("width:100%")
+
+        name_input = ui.input("Nazwa nieruchomości *")\
+            .props("filled clearable counter maxlength=80")\
+            .style("width:100%")
+
+        with ui.row().classes("w-full q-gutter-sm"):
+            country_input = ui.input("Kraj (ISO2)").props("filled").classes("col")
+            city_input = ui.input("Miasto").props("filled").classes("col")
+
+        type_options = {t.name: t.value for t in PropertyType}
+        type_select = ui.select(type_options, label="Typ nieruchomości *")\
+            .props("filled dense").style("width:100%")
+
+        with ui.row().classes("w-full q-gutter-sm"):
+            area_input = ui.input("Powierzchnia (m²)").props("filled").classes("col")
+            price_input = ui.input("Cena zakupu *").props("filled").classes("col")
+
+        currency_options = {c.name: c.value for c in Currency}
+        currency_select = ui.select(currency_options, label="Waluta zakupu *")\
+            .props("filled dense").style("width:100%")
+
+        with ui.row().classes("justify-end q-gutter-sm q-mt-md").style("width:100%"):
+            cancel_btn = ui.button("Anuluj").props("no-caps flat").style("min-width:100px;height:40px;")
+            submit_btn = ui.button("Dodaj", icon="add").props("no-caps color=primary").style("min-width:120px;height:40px;")
+
+    cancel_btn.on_click(on_cancel)
+
+    async def create_real_estate_action() -> None:
+        wid = wallet_select.value or None
+        nm = (name_input.value or "").strip()
+        if not wid or not nm:
+            ui.notify("Wybierz portfel i podaj nazwę.", color="negative")
+            return
+
+        try:
+            wallet_id = uuid.UUID(str(wid))
+        except ValueError:
+            ui.notify("Niepoprawny portfel.", color="negative")
+            return
+
+        try:
+            price = Decimal(str(price_input.value or "").replace(",", "."))
+        except (InvalidOperation, TypeError):
+            ui.notify("Niepoprawna cena zakupu.", color="negative")
+            return
+
+        area_val: Optional[Decimal] = None
+        raw_area = (area_input.value or "").strip()
+        if raw_area:
+            try:
+                area_val = Decimal(raw_area.replace(",", "."))
+            except InvalidOperation:
+                ui.notify("Niepoprawna powierzchnia (m²).", color="negative")
+                return
+
+        payload: Dict[str, Any] = {
+            "name": nm,
+            "country": (country_input.value or "").strip() or None,
+            "city": (city_input.value or "").strip() or None,
+            "type": type_select.value,
+            "area_m2": str(area_val) if area_val is not None else None,
+            "purchase_price": str(price),
+            "purchase_currency": currency_select.value,
+            "wallet_id": str(wallet_id),
+        }
+
+        submit_btn.props("loading")
+        try:
+            user_id = wallet.get_user_id()
+            res = await wallet.wallet_client.create_real_estate(user_id=user_id, payload=payload)
+            if not res:
+                ui.notify("Nie udało się dodać nieruchomości.", color="negative")
+                return
+
+            ui.notify("Nieruchomość została dodana.", color="positive")
+            r = on_success()
+            if inspect.isawaitable(r):
+                await r
+        finally:
+            submit_btn.props(remove="loading")
+
+    submit_btn.on_click(create_real_estate_action)
+
+
+def render_add_property_dialog(self):
     dlg = ui.dialog()
-    
-    all_wallets = wallet.wallets or []
-    default_wallet_id = all_wallets[0].name if len(all_wallets) == 1 else None
+    st: dict[str, dict] = {"wallet_dict": {}}
 
     with dlg:
         with ui.card().style('''
@@ -712,148 +896,74 @@ def show_add_property_dialog(wallet) -> None:
             box-shadow: 0 10px 24px rgba(15,23,42,.06);
             border: 1px solid rgba(2,6,23,.06);
         '''):
+            body = ui.column().classes("q-gutter-sm").style("width:100%")
 
-            with ui.column().classes('items-center justify-center q-gutter-md').style('width: 100%'):
+    async def _after_transaction():
+        dlg.close()
+        await self._after()
 
-                ui.icon('sym_o_home').style(
-                    '''
-                    font-size: 40px;
-                    color: #0ea5e9;
-                    background: #e0f2fe;
-                    padding: 16px;
-                    border-radius: 50%;
-                    '''
-                )
+    def _render_form():
+        body.clear()
+        ww = st["wallet_dict"]
+        adapter = self._adapter_for_property(ww)
 
-                ui.label('Dodaj nieruchomość').classes(
-                    'text-h6 text-weight-medium text-center'
-                )
+        render_add_property_content(
+            wallet=adapter,
+            container=body,
+            on_success=_after_transaction,
+            on_cancel=dlg.close,
+            default_wallet_id=str(ww.get("id")),
+        )
 
-                ui.label(
-                    'Uzupełnij podstawowe dane nieruchomości. Pola z gwiazdką (*) są wymagane.'
-                ).classes('text-body2 text-grey-7 text-center')
+    def open_dialog(ww: dict) -> None:
+        st["wallet_dict"] = ww
+        dlg.open()
+        ui.timer(0.0, _render_form, once=True)
 
-                wallet_options = {
-                    str(w.id): w.name
-                    for w in (all_wallets or [])
-                    if any(
-                        (getattr(a, "account_type", None) == "CURRENT") or
-                        (getattr(getattr(a, "account_type", None), "value", None) == "CURRENT")  # if enum
-                        for a in (getattr(w, "accounts", None) or [])
-                    )
-                }
-                if not wallet_options:
-                    ui.notify(
-                        "Proszę stworzyć konto bankowe typu Konto Bankowe dla portfela ", 
-                        color='negative', timeout=0, 
-                        close_button=True,
-                        )
-                    return
-                
-                wallet_select = ui.select(
-                    wallet_options,
-                    value=str(default_wallet_id) if default_wallet_id else None,
-                    label='Portfel *',
-                ).props('filled dense').style('width:100%')
+    return open_dialog
 
-                name_input = ui.input('Nazwa nieruchomości *') \
-                    .props('filled clearable counter maxlength=80') \
-                    .style('width: 100%')
 
-                with ui.row().classes('w-full q-gutter-sm'):
-                    country_input = ui.input('Kraj (ISO2)').props('filled').classes('col')
-                    city_input = ui.input('Miasto').props('filled').classes('col')
+def show_add_property_dialog(wallet, on_refresh=None) -> None:
+    """
+    Open dialog to create a new real estate entry.
 
-                type_options = {t.name: t.value for t in PropertyType}
-                type_select = ui.select(
-                    type_options,
-                    label='Typ nieruchomości *',
-                ).props('filled dense').style('width:100%')
+    Args:
+        wallet: Wallet page/controller providing `wallets`, `get_user_id()`,
+                and `wallet_client.create_real_estate(...)`.
+        on_refresh: Optional async callback invoked after successful create.
 
-                with ui.row().classes('w-full q-gutter-sm'):
-                    area_input = ui.input('Powierzchnia (m²)').props('filled').classes('col')
-                    price_input = ui.input('Cena zakupu *').props('filled').classes('col')
+    Returns:
+        None. Opens a NiceGUI dialog.
+    """
+    logger.info("show_add_property_dialog: open")
 
-                currency_options = {c.name: c.value for c in Currency}
-                currency_select = ui.select(
-                    currency_options,
-                    label='Waluta zakupu *',
-                ).props('filled dense').style('width:100%')
+    dlg = ui.dialog()
+    with dlg:
+        with ui.card().style("""
+            max-width: 520px;
+            padding: 44px 34px 28px;
+            border-radius: 24px;
+            background: linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%);
+            box-shadow: 0 10px 24px rgba(15,23,42,.06);
+            border: 1px solid rgba(2,6,23,.06);
+        """):
+            body = ui.column().classes("q-gutter-sm").style("width:100%")
 
-                with ui.row().classes('justify-end q-gutter-sm q-mt-md').style('width:100%'):
-                    ui.button('Anuluj', on_click=dlg.close) \
-                        .props('no-caps flat') \
-                        .style('min-width: 100px; height: 40px;')
-                    submit_btn = ui.button('Dodaj', icon='add') \
-                        .props('no-caps color=primary') \
-                        .style('min-width: 120px; height: 40px;')
-
-                async def create_real_estate_action() -> None:
-                    """
-                    Validate inputs and create real estate via wallet service.
-                    """
-                    wid = wallet_select.value or None
-                    nm = (name_input.value or '').strip()
-                    if not wid or not nm:
-                        logger.info(f"show_add_property_dialog.create: missing required fields wid={wid!r} nm={nm!r}")
-                        ui.notify('Wybierz portfel i podaj nazwę.', color='negative')
-                        return
-                    try:
-                        wallet_id = uuid.UUID(str(wid))
-                    except ValueError:
-                        logger.info(f"show_add_property_dialog.create: invalid wallet_id wid={wid!r}")
-                        ui.notify('Niepoprawny portfel.', color='negative')
-                        return
-
-                    try:
-                        price = Decimal((price_input.value or '').replace(',', '.'))
-                    except (InvalidOperation, TypeError):
-                        logger.info(f"show_add_property_dialog.create: invalid purchase_price raw={price_input.value!r}")
-                        ui.notify('Niepoprawna cena zakupu.', color='negative')
-                        return
-
-                    area_val: Decimal | None = None
-                    raw_area = (area_input.value or '').strip()
-                    if raw_area:
-                        try:
-                            area_val = Decimal(raw_area.replace(',', '.'))
-                        except InvalidOperation:
-                            logger.info(f"show_add_property_dialog.create: invalid area_m2 raw_area={raw_area!r}")
-                            ui.notify('Niepoprawna powierzchnia (m²).', color='negative')
-                            return
-
-                    type_val = type_select.value
-                    ccy_val = currency_select.value
-
-                    submit_btn.props('loading')
+            async def _after():
+                dlg.close()
+                if on_refresh:
+                    r = on_refresh()
+                    if inspect.isawaitable(r):
+                        await r
+                else:
+                    ui.navigate.reload()
                     
-                    payload: Dict[str, Any] = {
-                        "name": nm,
-                        "country": (country_input.value or '').strip() or None,
-                        "city": (city_input.value or '').strip() or None,
-                        "type": type_val,
-                        "area_m2": str(area_val),
-                        "purchase_price": str(price),
-                        "purchase_currency": ccy_val,
-                        "wallet_id": str(wallet_id),
-                    }
-                    try:
-                        user_id = wallet.get_user_id()
-                        res = await wallet.wallet_client.create_real_estate(
-                            user_id=user_id,
-                            payload=payload,
-                        )
-                        if not res:
-                            ui.notify('Nie udało się dodać nieruchomości.', color='negative')
-                            return
-
-                        ui.notify('Nieruchomość została dodana.', color='positive')
-                        dlg.close()
-                        ui.navigate.reload()
-                    finally:
-                        submit_btn.props(remove='loading')
-
-                submit_btn.on_click(create_real_estate_action)
+            render_add_property_content(
+                wallet=wallet,
+                container=body,
+                on_success=_after,
+                on_cancel=dlg.close,
+            )
 
     dlg.open()
 
@@ -1010,7 +1120,7 @@ async def render_properties_table(wallet, on_refresh=None) -> None:
 
         ok = await wallet.wallet_client.delete_real_estate(user_id=user_id, real_estate_id=re_id)
         if not ok:
-            logger.error(f"render_properties_table.handle_delete: delete failed")
+            logger.error("render_properties_table.handle_delete: delete failed")
             ui.notify('Nie udało się usunąć nieruchomości.', color='negative')
             return
 
@@ -1161,7 +1271,7 @@ async def render_metals_table(
             ui.notify("Podaj poprawną ilość gramów.", color="negative")
             return
         if grams <= 0:
-            logger.info(f"render_metals_table.handle_save: invalid grams mh_id={mh_id} raw={raw!r}")
+            logger.info(f"render_metals_table.handle_save: invalid grams mh_id={mh_id}")
             ui.notify("Ilość gramów musi być > 0.", color="negative")
             return
 

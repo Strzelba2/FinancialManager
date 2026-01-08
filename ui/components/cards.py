@@ -1,5 +1,7 @@
 from nicegui import ui
 from typing import Optional, Any
+from decimal import Decimal
+import math
 import inspect
 import datetime
 
@@ -232,39 +234,130 @@ def pie_card(title, series):
         }).classes('w-full h-52')
     
         
-def line_card(title, x, y, infl_pct=None, cpi=None, base='first',
-              y_suffix=' PLN', show_nominal=True,
-              stretch: bool = True, full_bleed: bool = True):
+def line_card(
+    title,
+    x,
+    y,
+    infl_pct=None,
+    cpi=None,
+    base='first',
+    y_suffix=' PLN',
+    show_nominal=True,
+    show_real=True,
+    stretch: bool = True,
+    full_bleed: bool = True,
+    show_mom: bool = True,
+    cpi_kind: str = "auto",
+):
 
-    cpi_list = None
-    if infl_pct is None and cpi is not None:
-        cpi_list = [cpi.get(k) for k in x] if isinstance(cpi, dict) else list(cpi)
-        base_cpi = None
+    def _series_to_list(series: Any) -> Optional[list]:
+        if series is None:
+            return None
+        if isinstance(series, dict):
+            return [series.get(k) for k in x]
+        return list(series)
+
+    cpi_list = _series_to_list(cpi)
+    infl_list = _series_to_list(infl_pct)
+
+    if cpi_kind == "auto" and infl_list is None and cpi_list is not None:
+        vals = [float(v) for v in cpi_list if v not in (None, 0)]
+
+        if vals and max(map(abs, vals)) < 50:
+            infl_list = cpi_list
+            cpi_list = None
+            cpi_kind = "infl_yoy"
+
+    if cpi_kind in ("infl_yoy", "infl_mom") and infl_list is None and cpi_list is not None:
+        infl_list = cpi_list
+        cpi_list = None
+
+    cpi_index_list: Optional[list[Optional[float]]] = None
+
+    if cpi_kind == "index":
+        cpi_index_list = [None if v in (None, 0) else float(v) for v in (cpi_list or [])]
+
+    elif infl_list is not None:
+        cpi_index_list = []
+        cur = 100.0
+        for i in range(len(x)):
+            p = infl_list[i] if i < len(infl_list) else None
+
+            if i == 0:
+                cpi_index_list.append(cur)
+                continue
+
+            if p in (None, 0):
+                cpi_index_list.append(cpi_index_list[-1] if cpi_index_list else None)
+                continue
+
+            p = float(p)
+
+            if cpi_kind == "infl_mom":
+                factor = 1.0 + (p / 100.0)
+            else:
+                factor = math.pow(1.0 + (p / 100.0), 1.0 / 12.0)
+
+            cur = cur * factor
+            cpi_index_list.append(cur)
+
+    base_cpi = None
+    if cpi_index_list is not None:
         if isinstance(base, (int, float)):
             base_cpi = float(base)
         elif base == 'first':
-            base_cpi = next((v for v in cpi_list if v not in (None, 0)), None)
+            base_cpi = next((v for v in cpi_index_list if v not in (None, 0)), None)
         elif base == 'last':
-            for v in reversed(cpi_list):
+            for v in reversed(cpi_index_list):
                 if v not in (None, 0):
-                    base_cpi = v 
+                    base_cpi = v
                     break
         else:
             try:
-                base_cpi = cpi_list[x.index(base)]
+                base_cpi = cpi_index_list[x.index(base)]
             except Exception:
                 base_cpi = None
-        if base_cpi and base_cpi != 0:
-            infl_pct = [None if v in (None, 0) else round((float(v)/float(base_cpi)-1) * 100.0, 2) for v in cpi_list]
+
+    if infl_list is None and cpi_index_list is not None and base_cpi not in (None, 0):
+        infl_list = [
+            None if v in (None, 0) else round((float(v) / float(base_cpi) - 1) * 100.0, 2)
+            for v in cpi_index_list
+        ]
 
     source = []
-    for xi, yi, pi in zip(x, y, infl_pct or [None]*len(x)):
-        row = {'Okres': xi, 'Przychody': yi}
+    for i, xi in enumerate(x):
+        yi = y[i] if i < len(y) else None
+        row = {'Okres': xi, 'Assets': yi}
+
+        if show_real and yi is not None and cpi_index_list and base_cpi and i < len(cpi_index_list):
+            idx = cpi_index_list[i]
+            if idx not in (None, 0) and base_cpi not in (None, 0):
+                try:
+                    factor = Decimal(str(idx)) / Decimal(str(base_cpi))
+                    row['AssetsReal'] = (Decimal(str(yi)) / factor) if factor != 0 else None
+                except Exception:
+                    row['AssetsReal'] = None
+
+        pi = infl_list[i] if (infl_list and i < len(infl_list)) else None
         if pi is not None:
-            row['Inflacja%'] = pi
+            row['Inflacja%'] = float(pi)
+            
+        if show_mom and i > 0:
+            prev = y[i - 1]
+            try:
+                prev_d = Decimal(str(prev)) if prev not in (None, "") else None
+                cur_d = Decimal(str(yi)) if yi not in (None, "") else None
+                if prev_d is not None and cur_d is not None and prev_d != 0:
+                    row["MoM%"] = float(((cur_d / prev_d) - Decimal("1")) * Decimal("100"))
+                else:
+                    row["MoM%"] = None
+            except Exception:
+                row["MoM%"] = None
+
         source.append(row)
 
     series, legend = [], []
+
     if show_nominal:
         legend.append('Nominalnie')
         series.append({
@@ -277,14 +370,30 @@ def line_card(title, x, y, infl_pct=None, cpi=None, base='first',
             'smooth': True,
             'connectNulls': True,
             'lineStyle': {'width': 2},
-            'areaStyle': {'opacity': 0.18},
+            'areaStyle': {'opacity': 0.12},
             'yAxisIndex': 0,
-            'encode': {'x': 'Okres', 'y': 'Przychody', 'itemName': 'Okres', 'tooltip': ['Przychody']},
+            'encode': {'x': 'Okres', 'y': 'Assets', 'itemName': 'Okres', 'tooltip': ['Assets']},
+        })
+
+    if show_real and any(r.get('AssetsReal') is not None for r in source):
+        legend.append('Realnie (CPI)')
+        series.append({
+            'name': 'Realnie (CPI)',
+            'type': 'line',
+            'datasetId': 'ds_all',
+            'showSymbol': True,
+            'symbol': 'circle',
+            'symbolSize': 6,
+            'smooth': True,
+            'connectNulls': True,
+            'lineStyle': {'width': 2, 'type': 'dashed'},
+            'yAxisIndex': 0,
+            'encode': {'x': 'Okres', 'y': 'AssetsReal', 'itemName': 'Okres', 'tooltip': ['AssetsReal']},
         })
 
     has_infl = any(r.get('Inflacja%') is not None for r in source)
     if has_infl:
-        name_infl = f"Inflacja % (baza: {base})" if cpi_list or (cpi is not None and infl_pct is None) else "Inflacja %"
+        name_infl = f"Inflacja % (baza: {base})"
         legend.append(name_infl)
         series.append({
             'name': name_infl,
@@ -297,8 +406,23 @@ def line_card(title, x, y, infl_pct=None, cpi=None, base='first',
             'connectNulls': True,
             'yAxisIndex': 1,
             'lineStyle': {'width': 2},
-            'itemStyle': {'color': '#C10015'},
             'encode': {'x': 'Okres', 'y': 'Inflacja%', 'itemName': 'Okres', 'tooltip': ['Inflacja%']},
+        })
+        
+    if show_mom:
+        legend.append("Zmiana m/m")
+        series.append({
+            "name": "Zmiana m/m",
+            "type": "line",
+            "datasetId": "ds_all",
+            "showSymbol": True,
+            "symbol": "circle",
+            "symbolSize": 6,
+            "smooth": True,
+            "connectNulls": True,
+            "yAxisIndex": 2,
+            "lineStyle": {"width": 2},
+            "encode": {"x": "Okres", "y": "MoM%", "itemName": "Okres", "tooltip": ["MoM%"]},
         })
 
     with panel() as card:
@@ -307,49 +431,23 @@ def line_card(title, x, y, infl_pct=None, cpi=None, base='first',
             card.style('width:100%')
         if full_bleed:
             card.classes('p-0')
-            
+
         ui.label(title).classes('text-sm font-semibold').style('padding-left:25px;padding-top:15px')
 
         ui.echart({
             'dataset': [{'id': 'ds_all', 'source': source}],
             'legend': {'top': 0, 'data': legend},
-            'tooltip': {
-                'trigger': 'axis',
-                'triggerOn': 'mousemove|click',
-                'confine': True,
-                'axisPointer': {'type': 'cross', 'snap': True, 'label': {'show': True}},
-            },
-            'axisPointer': {'type': 'cross', 'snap': True, 'label': {'show': True}},
-            'xAxis': {
-                'type': 'category',
-                'nameLocation': 'middle',
-                'boundaryGap': False,
-                'axisTick': {'alignWithLabel': True},
-                'axisLabel': {'hideOverlap': True, 'margin': 6}, 
-            },
+            'tooltip': {'trigger': 'axis', 'confine': True, 'axisPointer': {'type': 'cross', 'snap': True}},
+            'xAxis': {'type': 'category', 'boundaryGap': False, 'axisLabel': {'hideOverlap': True, 'margin': 6}},
             'yAxis': [
-                {
-                    'type': 'value',
-                    'name': y_suffix.strip(),
-                    'nameGap': 16,                
-                    'axisLabel': {'formatter': f"{{{{value}}}}{y_suffix}", 'margin': 6},
-                    'splitLine': {'show': True},
-                    'scale': True,
-                },
-                {
-                    'type': 'value',
-                    'name': 'Inflacja %',
-                    'position': 'right',
-                    'nameGap': 16,
-                    'axisLabel': {'formatter': '{value}%', 'margin': 6},
-                    'splitLine': {'show': False},
-                    'scale': True,
-                }
+                {'type': 'value', 'axisLabel': {'formatter': f"{{{{value}}}}{y_suffix}"}},
+                {'type': 'value', 'position': 'right', 'axisLabel': {'formatter': '{value}%'},
+                 'splitLine': {'show': False}},
+                {'type': 'value', 'position': 'right', 'offset': 56,
+                 'axisLabel': {'formatter': '{value}%'},
+                 'splitLine': {'show': False}},
             ],
-            'grid': {
-                'left': 40, 'right': 48, 'bottom': 36, 'top': 36,
-                'containLabel': True,
-            },
+            'grid': {'left': 40, 'right': 92, 'bottom': 36, 'top': 36, 'containLabel': True},
             'series': series,
         }).classes('w-full h-80').style('width:100%;display:block')
    

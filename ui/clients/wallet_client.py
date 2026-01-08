@@ -14,7 +14,9 @@ from schemas.wallet import (
     RealEstateOut, RealEstatePriceOut, MetalHoldingOut, Currency, MetalType,
     DebtOut, RecurringExpenseOut, UserNoteOut, TransactionPageOut, BatchUpdateTransactionsRequest,
     BatchUpdateTransactionsResponse, AccountOut, SellRealEstateRequest, SellMetalRequest, 
-    YearGoalOut, BrokerageEventPageOut, BatchUpdateBrokerageEventsRequest, HoldingRowOut
+    YearGoalOut, BrokerageEventPageOut, BatchUpdateBrokerageEventsRequest, HoldingRowOut,
+    ClientCreateMonthlySnapshotResponse, WalletRenameResponse
+    
 )
 
 logger = logging.getLogger(__name__)
@@ -229,7 +231,7 @@ class WalletClient:
         
         logger.debug("Calling wallet-service POST")
         
-        resp = await self._request("POST", "/wallet/transactions/create", headers=headers, json_body=payload)
+        resp = await self._request("POST", "/wallet/transactions/create/rebalance", headers=headers, json_body=payload)
         if not resp:
             return None, None
         
@@ -1878,6 +1880,136 @@ class WalletClient:
         except Exception:
             logger.exception("list_holdings_for_user: failed to parse response")
             return None
+        
+    async def get_wallet_manager_tree(
+        self,
+        user_id: uuid.UUID,
+        currency_rate: Dict[str, Decimal],
+        months: int = 2,
+    ) -> Optional[list[dict[str, Any]]]:
+        """
+        Fetch the wallet-manager tree structure for a user.
+
+        Args:
+            user_id: User UUID forwarded via `X-User-Id` header.
+            currency_rate: Currency-rate mapping used by the wallet service; values are serialized to strings.
+            months: How many months of data to include (service-specific meaning).
+
+        Returns:
+            A list of dictionaries representing the wallet-manager tree, or `None` on failure/invalid payload.
+        """
+        headers = {"X-User-Id": str(user_id)}
+
+        payload = {
+            "months": months,
+            "currency_rate": {k: str(v) for k, v in (currency_rate or {}).items()},
+        }
+
+        resp = await self._request("POST", "/wallet/manager/tree", headers=headers, json_body=payload)
+        if resp is None or not resp.is_success:
+            logger.warning(f"get_wallet_manager_tree failed: {None if resp is None else resp.status_code}")
+            return None
+
+        try:
+            data = resp.json()
+            if not isinstance(data, list):
+                logger.error(f"get_wallet_manager_tree invalid payload type: {type(data)}")
+                return None
+            return data
+        except Exception:
+            logger.exception("get_wallet_manager_tree failed while parsing JSON")
+            return None
+        
+    async def create_monthly_snapshot(
+        self,
+        user_id: uuid.UUID,
+        month_key: str,
+        currency_rate: Dict[str, Decimal],
+    ) -> Optional[ClientCreateMonthlySnapshotResponse]:
+        """
+        Create a monthly snapshot in the wallet service.
+
+        Args:
+            user_id: User UUID forwarded via `X-User-Id` header.
+            month_key: Month identifier (e.g. "2026-01") expected by the wallet service.
+            currency_rate: Currency-rate mapping; values are serialized to strings.
+
+        Returns:
+            A validated `ClientCreateMonthlySnapshotResponse`, or `None` on failure/invalid payload.
+        """
+        headers = {"X-User-Id": str(user_id)}
+        payload = {"month_key": month_key, "currency_rate": {k: str(v) for k, v in (currency_rate or {}).items()}}
+
+        resp = await self._request("POST", "/wallet/snapshots/monthly", headers=headers, json_body=payload)
+        if resp is None or not resp.is_success:
+            logger.warning(f"create_monthly_snapshot failed: {None if resp is None else resp.status_code}")
+            return None
+        try:
+            return ClientCreateMonthlySnapshotResponse.model_validate(resp.json())
+        except (ValueError, ValidationError) as e:
+            logger.error(f"Wallet service invalid JSON/Schema (create_monthly_snapshot): {e}")
+            return None
+        
+    async def rename_wallet(
+        self,
+        wallet_id: uuid.UUID,
+        user_id: uuid.UUID,
+        name: str,
+    ) -> Optional[WalletRenameResponse]:
+        """
+        Rename a wallet.
+
+        Args:
+            wallet_id: Wallet UUID to rename.
+            user_id: User UUID forwarded via `X-User-Id` header.
+            name: New wallet name.
+
+        Returns:
+            A validated `WalletRenameResponse`, or `None` on failure/invalid payload.
+        """
+        headers = {"X-User-Id": str(user_id)}
+        payload = {"name": name}
+
+        resp = await self._request("PATCH", f"/wallet/{wallet_id}/name", headers=headers, json_body=payload)
+        if resp is None or not resp.is_success:
+            logger.warning(f"rename_wallet failed: {None if resp is None else resp.status_code}")
+            return None
+
+        try:
+            return WalletRenameResponse.model_validate(resp.json())
+        except (ValueError, ValidationError) as e:
+            logger.error(f"Wallet service invalid JSON/Schema (rename_wallet): {e}")
+            return None
+        
+    async def delete_deposit_account(self, deposit_account_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """
+        Delete a deposit account.
+
+        Args:
+            deposit_account_id: Deposit account UUID to delete.
+            user_id: User UUID forwarded via `X-User-Id` header.
+
+        Returns:
+            `True` if the wallet service returned a success status, otherwise `False`.
+        """
+        headers = {"X-User-Id": str(user_id)}
+        resp = await self._request("DELETE", f"/wallet/account/{deposit_account_id}", headers=headers)
+        return bool(resp and resp.is_success)
+
+    async def delete_brokerage_account(self, brokerage_account_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """
+        Delete a brokerage account.
+
+        Args:
+            brokerage_account_id: Brokerage account UUID to delete.
+            user_id: User UUID forwarded via `X-User-Id` header.
+
+        Returns:
+            `True` if the wallet service returned a success status, otherwise `False`.
+        """
+        headers = {"X-User-Id": str(user_id)}
+        resp = await self._request("DELETE", f"/wallet/brokerage/{brokerage_account_id}", headers=headers)
+        return bool(resp and resp.is_success)
     
         
     

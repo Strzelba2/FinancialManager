@@ -979,6 +979,7 @@ class Transactions(NavContextBase):
         with dlg:
             with ui.card().style('''
                 max-width: 720px; width: 92vw;
+                min-height:92vh;
                 padding: 28px 24px;
                 border-radius: 24px;
                 background: linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%);
@@ -992,7 +993,7 @@ class Transactions(NavContextBase):
                 ui.label('Add transaction').classes('text-h5 text-weight-medium q-mb-xs text-center')
                 ui.label('Create a manual transaction.').classes('text-body2 text-grey-8 q-mb-md text-center')
 
-                with ui.element('div').style('max-height: 520px; overflow-y: auto; width:100%;'):
+                with ui.element('div').style('max-height: 680px; overflow-y: auto; width:100%;'):
                     with ui.row().classes('w-full justify-center'):
                         body = ui.column().classes('q-gutter-sm').style('width:420px; max-width:100%;')
 

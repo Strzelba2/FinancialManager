@@ -3,7 +3,7 @@ from .config import MarketConfig, TableLayout
 from app.core.config import settings
 from app.models.enums import InstrumentType
 
-STOOQ_MARKETS = {
+MARKETS = {
     "pl-wse": MarketConfig(
         id="pl-wse",
         base_url=settings.ST_BASE_URL,
@@ -20,18 +20,26 @@ STOOQ_MARKETS = {
         instrument_type=InstrumentType.STOCK,
         layout=TableLayout(min_cols=7, volume_col=5, time_col=6),
     ),
-    "stooq-commodities": MarketConfig(
-        id="stooq-commodities",
+    "commodities": MarketConfig(
+        id="commodities",
         base_url=settings.ST_BASE_URL,
         start_path=settings.ST_START_COMMODITIES_QUOTE_URL,
         mic="STCM",  
         instrument_type=InstrumentType.COMMODITY, 
         layout=TableLayout(min_cols=6, volume_col=None, time_col=5),
     ),
+    "cpi": MarketConfig(
+        id="commodities",
+        base_url=settings.ST_BASE_URL,
+        start_path=settings.ST_START_CPI_QUOTE_URL,
+        mic="MCRO",  
+        instrument_type=InstrumentType.MACRO, 
+        layout=TableLayout(min_cols=5, volume_col=None, time_col=4),
+    ),
 }
 
 PROVIDERS = {
-    "market": MarketProvider(STOOQ_MARKETS),
+    "market": MarketProvider(MARKETS),
 }
 
 

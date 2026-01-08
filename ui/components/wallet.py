@@ -1,4 +1,5 @@
 from nicegui import ui
+from typing import Any
 from storage.session_state import upsert_wallet, get_wallets, remove_wallet
 import uuid
 import logging
@@ -208,6 +209,150 @@ def render_delete_wallet_dialog(self):
                     delete_btn.on_click(do_delete)
 
     def open_dialog():
+        dlg.open()
+
+    return open_dialog
+
+
+def render_rename_wallet_dialog(self):
+    """
+    Create (once) and return an `open_dialog(wallet_dict)` function for renaming a wallet.
+
+    The dialog is created a single time and reused. Calling the returned function populates
+    dialog state from the provided wallet dictionary and opens the dialog.
+
+    Args:
+        self: Page/controller object that owns `wallet_client` and optionally `fetch_data` / `_render_tree`.
+
+    Returns:
+        A callable `open_dialog(w) -> None` which opens the rename dialog for the given wallet dict.
+
+    Notes:
+        - The wallet dict is expected to include an `id` and optionally a `name`.
+        - On successful rename, the UI refreshes via `fetch_data + _render_tree` if available,
+          otherwise performs a page reload.
+    """
+    logger.debug("Request: render_rename_wallet_dialog (create dialog instance)")
+
+    dlg = ui.dialog()
+    st: dict[str, Any] = {"wallet_id": None, "old_name": ""}
+
+    with dlg:
+        card = ui.card().style('''
+            max-width: 520px;
+            padding: 44px 34px 28px;
+            border-radius: 24px;
+            background: linear-gradient(180deg, #ffffff 0%, #f6fffb 100%);
+            box-shadow: 0 10px 24px rgba(15,23,42,.06);
+            border: 1px solid rgba(2,6,23,.06);
+        ''')
+        with card:
+            header_col = ui.column().classes('items-center justify-center').style('width:100%')
+            with header_col:
+                ui.icon('drive_file_rename_outline').style('''
+                    font-size: 48px;
+                    color: #16a34a;
+                    background: #dcfce7;
+                    padding: 20px;
+                    border-radius: 50%;
+                    margin-bottom: 20px;
+                ''')
+                ui.label('Rename wallet').classes('text-h5 text-weight-medium q-mb-xs text-center')
+                ui.label('Choose a clear, recognizable name.').classes('text-body2 text-grey-8 q-mb-md text-center')
+
+            body = ui.column().style('width:100%').classes('q-gutter-sm')
+
+            with body:
+                name_in = (
+                    ui.input(label='New wallet name *', value='', placeholder='e.g. “Family budget”')
+                    .props('filled clearable counter maxlength=40 input-class=text-center')
+                    .style('width:100%')
+                    .classes('q-mb-sm')
+                )
+
+                current_lbl = ui.label('').classes('text-caption text-grey-7 q-mb-md text-center')
+
+                with ui.row().classes('justify-center q-gutter-md q-mt-sm'):
+                    cancel_btn = ui.button('Cancel').props('no-caps flat') \
+                        .style('min-width: 110px; height: 44px; padding: 0 20px;')
+
+                    save_btn = ui.button('Save', icon='check') \
+                        .props('no-caps color=positive') \
+                        .style('min-width: 140px; height: 44px; border-radius: 8px; padding: 0 20px;')
+
+    cancel_btn.on_click(dlg.close)
+
+    async def do_rename() -> None:
+        wallet_id = st.get("wallet_id")
+        old_name = st.get("old_name", "")
+
+        if wallet_id is None:
+            logger.warning("rename_wallet_dialog: missing wallet_id in state")
+            ui.notify('Invalid wallet.', color='negative')
+            return
+
+        new_name = (name_in.value or '').strip()
+        if not new_name:
+            logger.debug(f"rename_wallet_dialog: empty new_name wallet_id={wallet_id}")
+            ui.notify('Please provide a wallet name.', color='negative')
+            return
+        if new_name == old_name:
+            ui.notify('Name unchanged.', color='warning')
+            dlg.close()
+            return
+
+        user_id = self.get_user_id() if hasattr(self, "get_user_id") else None
+        if not user_id:
+            logger.debug(f"rename_wallet_dialog: name unchanged wallet_id={wallet_id} name={new_name!r}")
+            ui.notify('Invalid user.', color='negative')
+            return
+
+        try:
+            user_uuid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id))
+        except Exception:
+            ui.notify('Invalid user id.', color='negative')
+            return
+
+        save_btn.props('loading')
+        try:
+            res = await self.wallet_client.rename_wallet(
+                wallet_id=wallet_id,
+                user_id=user_uuid,
+                name=new_name,
+            )
+            if not res:
+                ui.notify('Rename failed (wallet-service error).', color='negative')
+                return
+
+            ui.notify(f'Wallet renamed to “{new_name}”.', color='positive')
+            dlg.close()
+
+            if hasattr(self, "fetch_data") and hasattr(self, "_render_tree"):
+                await self.fetch_data()
+                self._render_tree()
+            else:
+                ui.navigate.reload()
+        finally:
+            save_btn.props(remove='loading')
+
+    save_btn.on_click(do_rename)
+
+    def open_dialog(w: dict) -> None:
+        """
+        Open the dialog for the provided wallet.
+
+        Args:
+            w: Wallet dictionary (must include `id`, may include `name`).
+        """
+        st["wallet_id"] = uuid.UUID(str(w["id"]))
+        st["old_name"] = str(w.get("name", "") or "").strip()
+
+        name_in.value = st["old_name"]
+        try:
+            current_lbl.text = f'Current: “{st["old_name"]}”'
+        except Exception:
+            current_lbl.set_text(f'Current: “{st["old_name"]}”')
+
         dlg.open()
 
     return open_dialog

@@ -7,7 +7,7 @@ from pydantic import ConfigDict, model_validator
 from datetime import datetime, timezone
 import uuid
 from sqlalchemy.dialects import postgresql as pg
-from typing import Optional, ClassVar, Set
+from typing import Optional, ClassVar, Set, Dict, Any
 
 from .enums import (
     PropertyType, AccountType, Currency, InstrumentType,
@@ -345,6 +345,15 @@ class WalletBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True)
     
     name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255),  nullable=False))
+    
+    currency: Optional[Currency] = Field(
+        default=None,
+        sa_column=sa.Column(
+            sa.Enum(Currency, name="currency_enum"),
+            nullable=True,   
+            index=True,
+        ),
+    )
    
     
 class DebtBase(SQLModel):
@@ -398,3 +407,35 @@ class YearGoalBase(SQLModel):
     currency: Currency = Field(
         sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False)
     )
+   
+    
+class FxMonthlySnapshotBase(SQLModel):
+    month_key: str = Field(sa_column=sa.Column(sa.String(7), nullable=False, index=True))  
+    rates_json: Dict[str, Any] = Field(
+        sa_column=sa.Column(pg.JSONB, nullable=False, server_default=sa.text("'{}'::jsonb"))
+    )
+
+
+class DepositAccountMonthlySnapshotBase(SQLModel):
+    month_key: str = Field(sa_column=sa.Column(sa.String(7), nullable=False, index=True))
+    currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
+    available: Decimal = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
+
+
+class BrokerageAccountMonthlySnapshotBase(SQLModel):
+    month_key: str = Field(sa_column=sa.Column(sa.String(7), nullable=False, index=True))
+    currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
+    cash: Decimal = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
+    stocks: Decimal = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
+
+
+class MetalHoldingMonthlySnapshotBase(SQLModel):
+    month_key: str = Field(sa_column=sa.Column(sa.String(7), nullable=False, index=True))
+    currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
+    value: Decimal = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
+
+
+class RealEstateMonthlySnapshotBase(SQLModel):
+    month_key: str = Field(sa_column=sa.Column(sa.String(7), nullable=False, index=True))
+    currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
+    value: Decimal = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))

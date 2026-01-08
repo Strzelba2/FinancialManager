@@ -1,4 +1,5 @@
 from nicegui import ui
+import uuid
 from schemas.wallet import Currency, AccountType
 from storage.session_state import get_wallets, get_banks
 from typing import Dict, Optional
@@ -196,6 +197,173 @@ def render_create_account_dialog(self):
 
     def open_dialog():
         _fill_body() 
+        dlg.open()
+
+    return open_dialog
+
+
+def render_delete_account_dialog(self):
+    """
+    Create (once) and return an `open_dialog(account_dict, kind)` function for deleting an account.
+
+    The dialog is created a single time and reused (similar to a rename dialog). Calling the returned
+    function will populate dialog state and open it.
+
+    Args:
+        self: Page/controller object that owns `wallet_client` and optionally `fetch_data` / `_render_tree`.
+
+    Returns:
+        A callable `open_dialog(a, kind) -> None` that opens the delete-confirmation dialog for the given account.
+
+    Notes:
+        - User must type exactly "DELETE" (case-insensitive check is applied after `.upper()`).
+        - `kind` is expected to be "brokerage" or "deposit" (other values fall back to deposit delete).
+    """
+    logger.debug("Request: render_delete_account_dialog (create dialog instance)")
+
+    dlg = ui.dialog()
+
+    st: dict[str, str] = {"acc_id": "", "acc_name": "", "kind": ""}
+
+    with dlg:
+        with ui.card().style('''
+            max-width: 520px;
+            width: 92vw;
+            padding: 40px 32px 28px;
+            border-radius: 24px;
+            background: linear-gradient(180deg, #ffffff 0%, #fff7f7 100%);
+            box-shadow: 0 10px 24px rgba(15,23,42,.06);
+            border: 1px solid rgba(220, 38, 38, .14);
+        '''):
+            with ui.column().classes("items-center").style("width:100%"):
+                ui.icon("delete_forever").style('''
+                    font-size: 48px;
+                    color: #ef4444;
+                    background: #fee2e2;
+                    padding: 18px;
+                    border-radius: 50%;
+                    margin-bottom: 16px;
+                ''')
+
+                ui.label("Delete account").classes("text-h5 text-weight-medium q-mb-xs text-center")
+                msg_lbl = ui.label("").classes("text-body2 text-grey-8 q-mb-md text-center")
+
+                ui.label("To confirm, type: DELETE").classes("text-caption text-grey-7 q-mb-xs")
+                confirm = (
+                    ui.input(placeholder="DELETE")
+                    .props("filled clearable input-class=text-center")
+                    .style("width:100%")
+                    .classes("q-mb-md")
+                )
+
+                with ui.element("div").style('''
+                    width:100%;
+                    background:#fff1f2;
+                    border:1px solid #ffe4e6;
+                    color:#be123c;
+                    border-radius:12px;
+                    padding:10px 12px;
+                    font-size:13px;
+                    margin-bottom:12px;
+                '''):
+                    ui.html("""
+                    <b>Warning:</b> This may also remove related data
+                    (balance row, brokerage links, transactions if configured).
+                    """)
+
+                with ui.row().classes("justify-center q-gutter-md"):
+                    cancel_btn = (
+                        ui.button("Cancel")
+                        .props("no-caps flat")
+                        .style("min-width:110px; height:44px; padding:0 20px;")
+                    )
+
+                    delete_btn = (
+                        ui.button("Delete", icon="delete_forever")
+                        .props("no-caps color=negative")
+                        .style("min-width:140px; height:44px; border-radius:8px; padding:0 20px;")
+                    )
+
+    cancel_btn.on_click(dlg.close)
+
+    async def do_delete() -> None:
+        if (confirm.value or "").strip().upper() != "DELETE":
+            logger.debug(f"delete_account: confirmation mismatch typed={typed!r} acc_id={st.get('acc_id')!r}")
+            ui.notify("Type exactly: DELETE", color="negative")
+            return
+
+        user_id = self.get_user_id() if hasattr(self, "get_user_id") else None
+        if not user_id:
+            logger.warning("delete_account: missing/invalid user_id")
+            ui.notify("Invalid user.", color="negative")
+            return
+
+        try:
+            user_uuid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id))
+            acc_uuid = uuid.UUID(st["acc_id"])
+            kind = str(st.get("kind") or "deposit").lower()
+        except Exception as ex:
+            logger.warning(
+                f"delete_account: invalid ids user_id acc_id={st.get('acc_id')!r} ex={ex!r}"
+            )
+            ui.notify("Invalid id.", color="negative")
+            return
+
+        delete_btn.props('loading')
+        try:
+            ok = False
+
+            if kind == "brokerage":
+                ok = await self.wallet_client.delete_brokerage_account(
+                    brokerage_account_id=acc_uuid,
+                    user_id=user_uuid,
+                )
+            else:
+                ok = await self.wallet_client.delete_deposit_account(
+                    deposit_account_id=acc_uuid,
+                    user_id=user_uuid,
+                )
+
+            if not ok:
+                ui.notify('Delete failed (wallet-service error).', color='negative')
+                return
+
+            ui.notify("Account deleted.", color="positive")
+            dlg.close()
+
+            if hasattr(self, "fetch_data") and hasattr(self, "_render_tree"):
+                await self.fetch_data()
+                self._render_tree()
+            else:
+                ui.navigate.reload()
+        finally:
+            delete_btn.props(remove="loading")
+
+    delete_btn.on_click(do_delete)
+
+    def open_dialog(a: dict, kind: str = AccountType.BROKERAGE.value) -> None:
+        """
+        Open the delete dialog for the given account.
+
+        Args:
+            a: Account dictionary containing at least `id` and optionally `name`.
+            kind: Account kind string (e.g. "brokerage" or "deposit").
+        """
+        acc_id_str = str(a.get("id") or "").strip()
+        acc_name = str(a.get("name") or acc_id_str).strip() or "this account"
+
+        st["acc_id"] = acc_id_str
+        st["acc_name"] = acc_name
+        st["kind"] = kind
+
+        confirm.value = "" 
+
+        text = f'You are about to delete “{acc_name}”. This cannot be undone.'
+        try:
+            msg_lbl.text = text
+        except Exception:
+            msg_lbl.set_text(text)
+
         dlg.open()
 
     return open_dialog

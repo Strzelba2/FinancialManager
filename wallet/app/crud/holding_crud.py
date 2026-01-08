@@ -86,6 +86,7 @@ async def get_holding_with_relations(
 async def list_holdings(
     session: AsyncSession,
     account_id: Optional[uuid.UUID] = None,
+    account_ids: Optional[list[uuid.UUID]] = None,
     instrument_id: Optional[uuid.UUID] = None,
     wallet_id: Optional[uuid.UUID] = None, 
     instrument_symbol: Optional[str] = None, 
@@ -98,6 +99,8 @@ async def list_holdings(
 
     if account_id:
         stmt = stmt.where(Holding.account_id == account_id)
+    if account_ids:
+        stmt = stmt.where(Holding.account_id.in_(account_ids))
     if instrument_id:
         stmt = stmt.where(Holding.instrument_id == instrument_id)
     if wallet_id:

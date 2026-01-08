@@ -6,10 +6,16 @@ import logging
 from app.api.services.quotes import get_latest_quote_service, get_latest_bulk_service
 from app.db.session import db
 from app.schemas.schemas import MarketOut, InstrumentOptionOut, InstrumentSearchRead
-from app.schemas.quates import LatestQuoteBySymbol, QuotesBySymbolsRequest
+from app.schemas.quates import (
+    LatestQuoteBySymbol, QuotesBySymbolsRequest, CandleDailyOut, SyncDailyResponse,
+    SyncDailyRequest
+)
 from app.crud.market import list_markets
-from app.crud.instrument import list_instruments, search_instruments_by_shortname_or_name
-from app.api.services.quotes import get_latest_quotes_by_symbols
+from app.crud.instrument import (
+    list_instruments, search_instruments_by_shortname_or_name, get_instrument_by_symbol
+)
+from app.api.services.quotes import get_latest_quotes_by_symbols, sync_daily_by_symbol
+from app.crud.candle_daily import list_candles_daily
 
 router = APIRouter()
 
@@ -209,6 +215,83 @@ async def get_latest_by_symbols(
         
     logger.debug(f"Response: get_latest_by_symbols returned {len(quotes)} quotes for symbols={symbols!r}")
     return quotes
+
+
+@router.post("/instruments/{symbol}/candles/daily/sync", response_model=SyncDailyResponse)
+async def sync_daily_candles(
+    symbol: str,
+    payload: SyncDailyRequest,
+    session: AsyncSession = Depends(db.get_session),
+) -> SyncDailyResponse:
+    """
+    Sync daily candles for a single instrument symbol.
+
+    Runs a daily-candle synchronization (upsert) and optionally returns candles
+    from the database (either the sync window / requested range, or all data).
+
+    Args:
+        symbol: Instrument symbol (path param).
+        payload: Request body controlling overlap, date range, and whether to return items.
+        session: SQLAlchemy async database session.
+
+    Returns:
+        A `SyncDailyResponse` containing sync stats and optionally candle items.
+
+    Raises:
+        HTTPException: 404 if the instrument symbol does not exist.
+        HTTPException: 500 if the sync or database operations fail unexpectedly.
+    """
+    logger.info(f"Request: sync_daily_candles symbol={symbol} ")
+    inst = await get_instrument_by_symbol(session, symbol=symbol)
+    if inst is None:
+        logger.warning(f"Instrument not found: sync_daily_candles symbol={symbol}")
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
+
+    await session.rollback()
+    async with session.begin():
+        sync_res = await sync_daily_by_symbol(
+            session,
+            symbol=symbol,
+            overlap_days=payload.overlap_days,
+        )
+
+    if not payload.include_items:
+        logger.info(
+            f"daily sync endpoint: symbol={symbol} fetched={sync_res.fetched_rows} "
+            f"upserted={sync_res.upserted_rows} returned=0 (include_items=False)"
+        )
+        return SyncDailyResponse(
+            sync=sync_res,
+            items_included=False,
+            returned_count=0,
+            items=None,
+        )
+
+    if payload.return_all:
+        q_from, q_to = None, None
+    else:
+        q_from = payload.date_from if payload.date_from is not None else sync_res.sync_start
+        q_to = payload.date_to if payload.date_to is not None else sync_res.sync_end
+
+    items_db = await list_candles_daily(
+        session,
+        instrument_id=inst.id,
+        date_from=q_from,
+        date_to=q_to,
+    )
+    items = [CandleDailyOut.model_validate(x) for x in items_db]
+
+    logger.info(
+        f"daily sync endpoint: symbol={symbol} fetched={sync_res.fetched_rows} "
+        f"upserted={sync_res.upserted_rows} returned={len(items)}"
+    )
+
+    return SyncDailyResponse(
+        sync=sync_res,
+        items_included=True,
+        returned_count=len(items),
+        items=items,
+    )
 
 
     

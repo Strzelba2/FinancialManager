@@ -1,8 +1,8 @@
-"""update market and add instrument_type
+""" add MACRO Martker
 
-Revision ID: e90a6a719b02
-Revises: 8079bd290439
-Create Date: 2025-12-18 17:45:44.880720
+Revision ID: ca109509efd7
+Revises: e90a6a719b02
+Create Date: 2026-01-06 10:28:54.743434
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'e90a6a719b02'
-down_revision: Union[str, Sequence[str], None] = '8079bd290439'
+revision: str = 'ca109509efd7'
+down_revision: Union[str, Sequence[str], None] = 'e90a6a719b02'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -31,8 +31,8 @@ def upgrade() -> None:
     """)
     conn = op.get_bind()
     conn.execute(insert_sql, {
-        "mic": "STCM",
-        "name": "Commodities",
+        "mic": "MCRO",
+        "name": "MACRO",
         "country": "GLOBAL",
         "tz": "UTC",
         "active": True,
@@ -40,7 +40,7 @@ def upgrade() -> None:
     })
 
     with op.get_context().autocommit_block():
-        op.execute("ALTER TYPE instrument_type_enum ADD VALUE IF NOT EXISTS 'COMMODITY';")
+        op.execute("ALTER TYPE instrument_type_enum ADD VALUE IF NOT EXISTS 'MACRO';")
 
 
 def downgrade() -> None:

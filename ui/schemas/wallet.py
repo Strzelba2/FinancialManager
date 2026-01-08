@@ -224,6 +224,16 @@ class DashFlowMonthItem(BaseModel):
     capital_by_currency: Dict[Currency, Decimal] = Field(default_factory=dict)
     
 
+class MonthlySeriesOut(BaseModel):
+    months: List[str]        
+    values: List[Optional[float]]  
+
+
+class CpiMonthlyOut(BaseModel):
+    months: List[str]
+    index_by_month: Dict[str, float]
+    
+
 class WalletListItem(BaseModel):
     id: uuid.UUID
     name: str
@@ -253,6 +263,8 @@ class WalletListItem(BaseModel):
     
     dash_flow_8m: List[DashFlowMonthItem] = Field(default_factory=list)
     
+    assets_8m: Optional[MonthlySeriesOut] = None
+    
     
 class WalletCreationResponse(WalletListItem):
     pass
@@ -263,6 +275,8 @@ class ClientWalletSyncResponse(BaseModel):
     user_id: str
     wallets: Optional[List[WalletListItem]] = Field(default_factory=list)
     banks: Optional[List[Bank]] = Field(default_factory=list)
+    assets_8m_total: Optional[MonthlySeriesOut] = None
+    cpi_8m: Optional[CpiMonthlyOut] = None
 
 
 class AccountCreationResponse(BaseModel):
@@ -475,6 +489,22 @@ class HoldingRowOut(BaseModel):
 
     quantity: Decimal
     avg_cost: Decimal
+    
+
+class ClientCreateMonthlySnapshotResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    ok: bool
+    month_key: str
+    fx_saved: bool
+    dep_upserted: int
+    bro_upserted: int
+    metal_upserted: int
+    re_upserted: int
+    
+
+class WalletRenameResponse(BaseModel):
+    id: uuid.UUID
+    name: str
     
     
 

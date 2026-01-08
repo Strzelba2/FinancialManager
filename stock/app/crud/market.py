@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 logger = logging.getLogger(__name__)
 
 
-async def get_market_by_mic(session: AsyncSession, mic: str) -> Market | None:
+async def get_market_by_mic(session: AsyncSession, mic: str) -> Optional[Market]:
     """
     Fetch a single market by its MIC code.
 
@@ -26,7 +26,7 @@ async def get_market_by_mic(session: AsyncSession, mic: str) -> Market | None:
     return res.scalars().first()
 
 
-async def get_market_id_by_mic(session: AsyncSession, mic: str) -> uuid.UUID | None:
+async def get_market_id_by_mic(session: AsyncSession, mic: str) -> Optional[uuid.UUID]:
     """
     Fetch only the ID of a market by its MIC code.
 

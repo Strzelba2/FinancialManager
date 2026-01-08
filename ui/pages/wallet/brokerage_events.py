@@ -60,7 +60,7 @@ class BrokerageEvents(NavContextBase):
         self.view_currency: Currency = Currency.PLN
 
         self.brokerage_accounts: list[dict[str, Any]] = []
-        self.brokerage_account_options: dict[str, str] = {"Wszystkie": self.ALL_TOKEN}  # label -> value (uuid str)
+        self.brokerage_account_options: dict[str, str] = {"Wszystkie": self.ALL_TOKEN} 
 
         self.state: dict[str, Any] = {
             "brokerage_account_values": [self.ALL_TOKEN],

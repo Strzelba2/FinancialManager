@@ -57,11 +57,7 @@ class Wallet(NavContextBase):
         self.wallets = []          
         self.selected_wallet = [] 
         self.banks = []  
-        
-        self.months = ['2025-01', '2025-02', '2025-03', '2025-04', '2025-05', '2025-06', '2025-07', '2025-08']
-        self.revenue = [120000, 118500, 123400, 125200, 113000, 122500, 145000, 130000]    
-        self.cpi_idx = [100.0, 101.1, 101.9, 102.7, 101.2, 105.7, 102.3, 101.2] 
-        
+
         ui.timer(0.01, self._init_async, once=True)
         
     async def _init_async(self):
@@ -90,6 +86,17 @@ class Wallet(NavContextBase):
         self.wallets: List[WalletListItem] = data.wallets
         self.selected_wallet = self.wallets
         self.banks = data.banks
+        
+        if getattr(data, "assets_8m_total", None):
+            self.months = data.assets_8m_total.months
+            self.revenue = data.assets_8m_total.values
+        else:
+            self.months, self.revenue = [], []
+
+        if getattr(data, "cpi_8m", None):
+            self.cpi_idx = data.cpi_8m.index_by_month
+        else:
+            self.cpi_idx = None
         
         set_wallets_from_payload(self.wallets)
         set_current_user_id(self.user_id)
@@ -320,7 +327,7 @@ class Wallet(NavContextBase):
             
             with ui.grid(columns=2).classes('gap-3 w-full items-stretch'):    
                 line_card(
-                    'Przychody: nominalnie vs realnie',
+                    'Aktywa: nominalnie vs realnie',
                     x=self.months, y=self.revenue,
                     cpi=self.cpi_idx, base='first',                 
                     y_suffix=' PLN'

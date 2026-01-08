@@ -16,6 +16,7 @@ class InstrumentType(str, Enum):
     INDEX = "INDEX"
     REIT = "REIT"
     COMMODITY = "COMMODITY"
+    MACRO = "MACRO"
  
   
 class InstrumentStatus(str, Enum):

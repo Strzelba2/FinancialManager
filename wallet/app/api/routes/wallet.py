@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Dict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
+from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 import logging
 import uuid
@@ -14,16 +15,19 @@ from app.schamas.schemas import (
 from app.schamas.response import (
     WalletUserResponse, WalletResponse, WalletListItem, AccountListItem, BrokerageAccountListItem,
     QuoteBySymbolItem, BrokerageEventListItem, RealEstateItem, MetalHoldingItem, DebtItem,
-    RecurringExpenseItem, YearGoalRead
+    RecurringExpenseItem, YearGoalRead, WalletOut, WalletRenameIn, CpiMonthlyOut, MonthlySeriesOut
     )
 from app.api.services.user import sync_user
-from app.api.services.wallet import create_wallet_service, delete_wallet_service, dash_flow_8m
+from app.api.services.wallet import (
+    create_wallet_service, delete_wallet_service, dash_flow_8m, rename_wallet_service
+)
 from app.api.services.holding import (
     compute_top_n_performance_from_quotes, 
     compute_brokerage_account_value_by_currency_from_quotes
     )
 from app.api.services.real_estate import get_latest_price_with_fallback
 from app.api.services.transactions import compute_wallet_ytd_income_expense_maps
+from app.api.services.snapshots_service import sum_snapshots_into_monthly_totals
 from app.db.session import db
 from app.clients.stock_client import StockClient
 from app.api.deps import get_internal_user_id, get_stock_client
@@ -41,7 +45,12 @@ from app.crud.metal_holding_crud import list_metal_holdings_by_wallet
 from app.crud.debt_crud import list_debts
 from app.crud.recurring_expenses_crud import list_top_recurring_expenses
 from app.crud.year_goal_crud import get_year_goal
+from app.crud.snapshots_crude import (
+    list_brokerage_monthly_snapshots, list_deposit_monthly_snapshots, list_fx_rows_for_months,
+    list_metal_monthly_snapshots, list_real_estate_monthly_snapshots
+)
 from app.utils.utils import TROY_OUNCE_G
+from app.utils.date import last_n_month_keys, monthly_index_from_daily_candles
 from app.core.config import settings
 
 
@@ -200,9 +209,9 @@ async def sync_user_route(
                 elif kind == CapitalGainKind.BROKER_DIVIDEND or kind == CapitalGainKind.BROKER_REALIZED_PNL:
                     broker_map[currency] = broker_map.get(currency, Decimal("0")) + total_dec
                 elif kind == CapitalGainKind.REAL_ESTATE_REALIZED_PNL:
-                    real_estate_map[currency] = broker_map.get(currency, Decimal("0")) + total_dec
+                    real_estate_map[currency] = real_estate_map.get(currency, Decimal("0")) + total_dec
                 elif kind == CapitalGainKind.METAL_REALIZED_PNL:
-                    metal_map[currency] = broker_map.get(currency, Decimal("0")) + total_dec
+                    metal_map[currency] = metal_map.get(currency, Decimal("0")) + total_dec
                 else:
                     continue
 
@@ -355,7 +364,65 @@ async def sync_user_route(
             flows = await dash_flow_8m(session, wallet)
             
             wallet_list_item.dash_flow_8m = flows
-            
+    
+    month_keys = list(reversed(last_n_month_keys(8)))
+
+    wallet_ids = [w.id for w in wallets] 
+
+    fx_rows = await list_fx_rows_for_months(session, month_keys)
+    dep_rows = await list_deposit_monthly_snapshots(session, wallet_ids, month_keys)
+    bro_rows = await list_brokerage_monthly_snapshots(session, wallet_ids, month_keys)
+    metal_rows = await list_metal_monthly_snapshots(session, wallet_ids, month_keys)
+    re_rows = await list_real_estate_monthly_snapshots(session, wallet_ids, month_keys) 
+
+    fx_by_month = {r.month_key: (r.rates_json or {}) for r in fx_rows}
+    
+    target_ccy = "PLN"
+    totals = sum_snapshots_into_monthly_totals(
+        fx_by_month=fx_by_month,
+        target_ccy=target_ccy,
+        dep_rows=dep_rows,
+        bro_rows=bro_rows,
+        metal_rows=metal_rows,
+        re_rows=re_rows,
+    )
+
+    wallet_item_by_id = {w.id: w for w in user_wallets.wallets}
+
+    for wid, month_map in totals.items():
+        values = [float(month_map.get(mk, 0)) for mk in month_keys]
+        if wid in wallet_item_by_id:
+            wallet_item_by_id[wid].assets_8m = MonthlySeriesOut(months=month_keys, values=values)
+
+    total_values = []
+    for mk in month_keys:
+        s = Decimal("0")
+        for wid in wallet_ids:
+            s += totals.get(wid, {}).get(mk, Decimal("0"))
+        total_values.append(float(s))
+
+    user_wallets.assets_8m_total = MonthlySeriesOut(months=month_keys, values=total_values)
+
+    cpi_symbol = settings.CPI_SYMBOL 
+    first_month_date = date.fromisoformat(month_keys[0] + "-01")
+    end_month_date = (date.fromisoformat(month_keys[-1] + "-01") + relativedelta(months=1) - relativedelta(days=1))
+
+    cpi_sync = await stock_client.sync_daily_candles(
+        symbol=cpi_symbol,
+        date_from=first_month_date,
+        date_to=end_month_date,
+        include_items=True,
+        return_all=False,
+        overlap_days=7,
+    )
+
+    cpi_map = monthly_index_from_daily_candles(cpi_sync.items if cpi_sync else None)
+
+    user_wallets.cpi_8m = CpiMonthlyOut(
+        months=month_keys,
+        index_by_month=cpi_map,
+    )
+    
     logger.info(f"user_wallets finnal: {user_wallets}")
             
     return user_wallets
@@ -439,4 +506,32 @@ async def delete_user_wallet(
         raise HTTPException(status_code=404, detail="Wallet not found")
     
     
+@router.patch("/{wallet_id}/name", response_model=WalletOut)
+async def api_rename_wallet(
+    wallet_id: uuid.UUID,
+    payload: WalletRenameIn,
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+) -> WalletOut:
+    """
+    Rename a wallet for the authenticated user.
 
+    Args:
+        wallet_id: Wallet UUID to rename.
+        payload: Request body containing the new wallet name.
+        user_id: Internal user UUID resolved from request (dependency).
+        session: SQLAlchemy async database session (dependency).
+
+    Returns:
+        A `WalletOut` model containing the wallet id and updated name.
+
+    Raises:
+        HTTPException: Propagated from `rename_wallet_service` if the wallet/user is invalid.
+    """
+    w = await rename_wallet_service(
+        session=session,
+        user_id=user_id,
+        wallet_id=wallet_id,
+        name=payload.name,
+    )
+    return WalletOut(id=w.id, name=w.name)

@@ -1,4 +1,5 @@
 from typing import Optional
+from decimal import Decimal, ROUND_HALF_UP
 import re
 import logging
 
@@ -79,5 +80,99 @@ def parse_int_pl(s: Optional[str]) -> Optional[int]:
         logger.warning(
             f"parse_int_pl: failed to parse as int: {e}"
         )
+        return None
+    
+    
+def dec(x) -> Decimal:
+    """
+    Safely convert any value to `Decimal`.
+
+    Args:
+        x: The value to convert.
+
+    Returns:
+        A Decimal representation of the value (defaults to 0 if `x` is None).
+    """
+    if x is None:
+        return Decimal("0")
+
+    if isinstance(x, Decimal):
+        return x
+
+    if isinstance(x, str):
+        s = x.strip().replace("\u00a0", "").replace(" ", "")  
+        if not s:
+            raise ValueError("Empty string is not a valid number")
+
+        if "," in s and "." in s:
+            s = s.replace(",", "")
+        else:
+            s = s.replace(",", ".")
+
+        return Decimal(s)
+
+    if isinstance(x, float):
+        return Decimal(str(x))
+
+    return Decimal(str(x or "0"))
+
+
+def dec2(x, q=2):
+    """
+    Convert a numeric-like value to Decimal and quantize it to a given precision.
+
+    This is a convenience wrapper around:
+        - `dec(x)`       → converts input to `Decimal`
+        - `quantize(..)` → rounds to `q` decimal places
+
+    Args:
+        x: Value to convert to Decimal (e.g. str, int, float, Decimal).
+        q: Number of decimal places to keep (default: 2).
+
+    Returns:
+        Quantized `Decimal` value.
+
+    Raises:
+        Whatever `dec` or `quantize` may raise if input is invalid.
+    """
+    amount = dec(x)
+    return quantize(amount, q)
+
+
+def quantize(dec: Decimal, decimals: int) -> Decimal:
+    """
+    Round a Decimal to the specified number of decimal places using ROUND_HALF_UP.
+
+    Args:
+        dec: The Decimal to round.
+        decimals: Number of decimal places.
+
+    Returns:
+        Rounded Decimal value.
+    """
+    q = Decimal("1").scaleb(-decimals) if decimals else Decimal("1")
+    return dec.quantize(q, rounding=ROUND_HALF_UP)
+
+
+def to_int_opt(s: str) -> Optional[int]:
+    """
+    Convert a numeric-like string to an integer, returning `None` if empty/invalid.
+
+    This is useful for optional fields like volume. The function strips whitespace and:
+    - returns `None` for empty strings
+    - otherwise parses via `Decimal` first, then converts to `int`
+
+    Args:
+        s: Input string representing an integer or decimal number.
+
+    Returns:
+        Parsed integer value, or `None` if the input is empty or cannot be parsed.
+    """
+    s = (s or "").strip()
+    if s == "":
+        return None
+    try:
+        return int(Decimal(s))
+    except Exception:
         return None
     

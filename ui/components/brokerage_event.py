@@ -257,3 +257,97 @@ async def render_brokerage_event_form(
 
         if dep_sel.value:
             on_dep_change()
+            
+            
+def render_add_event_dialog(self):
+    """
+    Create (once) and return an `open_dialog(selected_account)` function for adding a brokerage event.
+
+    The dialog is created a single time and reused. Calling the returned function sets the selected
+    brokerage account in local state, opens the dialog, and renders the event form asynchronously.
+
+    Args:
+        self: Page/controller object (must provide `_after()` and `render_brokerage_event_form(...)` dependencies).
+
+    Returns:
+        A callable `open_dialog(brokerage_account_dict | None) -> None` that opens the dialog.
+        If `None` (or invalid dict) is provided, the dialog will show a warning and not render the form.
+    """
+    logger.debug("Request: render_add_event_dialog (create dialog instance)")
+
+    dlg = ui.dialog()
+    st: dict[str, dict] = {"acc": {}}
+
+    with dlg:
+        with ui.card().style('''
+            max-width: 620px;
+            width: 80vw;
+            padding: 28px 24px;
+            border-radius: 24px;
+            background: linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%);
+            box-shadow: 0 10px 24px rgba(15,23,42,.06);
+            border: 1px solid rgba(2,6,23,.06);
+        '''):
+            ui.icon('show_chart').style(
+                'font-size:44px;color:#2563eb;background:#e0ecff;'
+                'padding:16px;border-radius:50%'
+            )
+            ui.label('Add brokerage event').classes('text-h5 text-weight-medium q-mb-xs text-center')
+            ui.label('Choose account, market and instrument, then post the event.') \
+                .classes('text-body2 text-grey-8 q-mb-md text-center')
+
+            with ui.element('div').style('max-height: 520px; overflow-y: auto; width:100%;'):
+                with ui.row().classes('w-full justify-center'):
+                    body = ui.column().classes('q-gutter-sm').style('width:420px; max-width:100%;')
+
+            with ui.row().classes('justify-end q-gutter-sm q-mt-md').style('width:100%;'):
+                cancel_btn = ui.button('Cancel').props('no-caps flat').style('min-width:110px;height:44px')
+
+    cancel_btn.on_click(dlg.close)
+
+    async def _after_transaction():
+        """
+        Called by the form on successful event creation.
+        """
+        logger.debug("add_event_dialog: on_success -> closing dialog and calling self._after()")
+        dlg.close()
+        await self._after()
+
+    async def _render_form():
+        """
+        Render the brokerage event form into the dialog body for the selected account.
+        """
+        a = st["acc"]
+        
+        body.clear()
+        brokerage_accounts = {str(a["id"]): a.get("name")}
+
+        if not brokerage_accounts:
+            logger.warning("add_event_dialog: missing selected account (no 'id')")
+            ui.notify("No brokerage accounts available.", color="warning")
+            return
+
+        await render_brokerage_event_form(
+            self=self,
+            container=body,
+            brokerage_accounts=brokerage_accounts,
+            on_success=_after_transaction,
+            default_account_id=str(a["id"]),  
+        )
+
+    def open_dialog(b: dict) -> None:
+        """
+        Open the dialog for the provided brokerage account.
+
+        Args:
+            b: Brokerage account dictionary (should include `id` and optionally `name`).
+        """
+        st["acc"] = b
+
+        body.clear()
+        ui.spinner(size='md').classes('q-my-md self-center')
+        dlg.open()
+
+        ui.timer(0.0, _render_form, once=True)
+
+    return open_dialog

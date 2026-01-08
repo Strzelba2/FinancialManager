@@ -15,6 +15,7 @@ import pages.wallet.holdings
 import pages.wallet.user_wallet
 import pages.wallet.transactions
 import pages.wallet.quotes
+import pages.wallet.wallet_manager
 import pages.error
 
 from middleware.middleware import ClientDataMiddleware

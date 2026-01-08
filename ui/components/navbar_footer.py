@@ -45,12 +45,10 @@ def nav(current: str = '', ctx=None):
                         ui.menu_item('Usuń portfel…', on_click=lambda: ctx.open_delete_wallet_dialog()).classes('text-white')
                         ui.separator().classes('bg-white')
                         ui.menu_item('Dodaj konto…', on_click=lambda: ctx.open_create_account_dialog()).classes('text-white')
-                        ui.menu_item('Usuń konto…', on_click=lambda: ctx.open_delete_account_dialog()).classes('text-white')
                         ui.separator().classes('bg-white')
                         ui.menu_item('Zarządzaj portfelami',
-                                     on_click=lambda: ui.navigate.to('/wallet/manage')).classes('text-white')
+                                     on_click=lambda: ui.navigate.to('/wallet-manager')).classes('text-white')
                         ui.separator().classes('bg-white')
-                        ui.menu_item('Cele', on_click=lambda: ui.navigate.to('/wallet/cele')).classes('text-white')
 
                 nav_link('Transakcje', '/transactions')
                 

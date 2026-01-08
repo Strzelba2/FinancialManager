@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
 
@@ -137,3 +137,35 @@ def month_floor(dt: datetime) -> datetime:
         A datetime set to day=1 and time=00:00:00.000000 for the same month/year as `dt`.
     """
     return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def month_key(self, dt: Optional[datetime] = None) -> str:
+    """
+    Build a YYYY-MM month key in UTC.
+
+    Args:
+        dt: Optional datetime; defaults to `now(UTC)`.
+
+    Returns:
+        Month key string formatted as "YYYY-MM".
+    """
+    dt = dt or datetime.now(timezone.utc)
+    return f"{dt.year:04d}-{dt.month:02d}"
+
+
+def prev_month_key(self, key: str) -> str:
+    """
+    Compute previous month key for a given "YYYY-MM" key.
+
+    Args:
+        key: Month key in format "YYYY-MM".
+
+    Returns:
+        Previous month key in format "YYYY-MM".
+    """
+    y, m = key.split("-")
+    yy = int(y)
+    mm = int(m)
+    if mm == 1:
+        return f"{yy-1:04d}-12"
+    return f"{yy:04d}-{mm-1:02d}"

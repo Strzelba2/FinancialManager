@@ -1,4 +1,5 @@
 from datetime import datetime, date, timezone
+from typing import Optional
 from zoneinfo import ZoneInfo
 import logging
 
@@ -75,3 +76,22 @@ def parse_last_trade_at(time_str: str) -> datetime:
         except ValueError:
             continue
     return datetime.now(timezone.utc)
+
+
+def try_parse_date(s: str) -> Optional[date]:
+    """
+    Parse a date string in `YYYY-MM-DD` format.
+
+    Args:
+        s: Input string that should contain a date in `YYYY-MM-DD` format.
+
+    Returns:
+        A `date` object if parsing succeeds, otherwise `None`.
+    """
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return None

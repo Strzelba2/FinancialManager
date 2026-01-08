@@ -9,7 +9,10 @@ from .base import (UserBase, UUIDMixin, TimestampMixin, BankBase,
                    InstrumentBase, HoldingBase, TransactionBase, RealEstateBase, 
                    MetalHoldingBase, WalletBase, BrokerageDepositLinkBase,
                    BrokerageEventBase, CapitalGainBase, RealEstatePriceBase,
-                   DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase)
+                   DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase,
+                   FxMonthlySnapshotBase, DepositAccountMonthlySnapshotBase,
+                   BrokerageAccountMonthlySnapshotBase, RealEstateMonthlySnapshotBase,
+                   MetalHoldingMonthlySnapshotBase)
 
 
 class User(UserBase, UUIDMixin, TimestampMixin, table=True):
@@ -418,4 +421,98 @@ class YearGoal(YearGoalBase, UUIDMixin, TimestampMixin, table=True):
     __table_args__ = (
         sa.UniqueConstraint("wallet_id", "year", name="uq_year_goals_wallet_year"),
         sa.CheckConstraint("year >= 1970 AND year <= 2100", name="ck_year_goals_year_range"),
+    )
+
+
+class FxMonthlySnapshot(FxMonthlySnapshotBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "fx_monthly_snapshots"
+
+    __table_args__ = (
+        sa.UniqueConstraint("month_key", name="uq_fx_month_key"),
+        sa.Index("ix_fx_month_key", "month_key"),
+    )
+      
+    
+class DepositAccountMonthlySnapshot(DepositAccountMonthlySnapshotBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "deposit_account_monthly_snapshots"
+    
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True), sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+                            nullable=False, index=True)
+    )
+
+    account_id: Optional[uuid.UUID] = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True), 
+            sa.ForeignKey("deposit_accounts.id", ondelete="SET NULL"),
+            nullable=True, 
+            index=True)
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("account_id", "month_key", name="uq_depacc_monthly_snapshot"),
+        sa.Index("ix_depacc_monthly_wallet_month", "wallet_id", "month_key"),
+        sa.Index("ix_depacc_monthly_wallet_month_id", "wallet_id", "month_key", "account_id"),
+        
+    )
+
+
+class BrokerageAccountMonthlySnapshot(BrokerageAccountMonthlySnapshotBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "brokerage_account_monthly_snapshots"
+    
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True), sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+                            nullable=False, index=True)
+    )
+    
+    brokerage_account_id: Optional[uuid.UUID] = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True), 
+            sa.ForeignKey("brokerage_accounts.id", ondelete="SET NULL"),
+            nullable=True, 
+            index=True)
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("brokerage_account_id", "month_key", name="uq_broacc_monthly_snapshot"),
+        sa.Index("ix_broacc_monthly_wallet_month", "wallet_id", "month_key"),
+        sa.Index("ix_broacc_monthly_wallet_month_id", "wallet_id", "month_key", "brokerage_account_id"),
+    )
+
+
+class MetalHoldingMonthlySnapshot(MetalHoldingMonthlySnapshotBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "metal_holding_monthly_snapshots"
+
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True), sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+                            nullable=False, index=True)
+    )
+    metal_holding_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True), sa.ForeignKey("metal_holdings.id", ondelete="SET NULL"),
+                            nullable=True, index=True)
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("metal_holding_id", "month_key", name="uq_metal_monthly_snapshot"),
+        sa.Index("ix_metal_wallet_month", "wallet_id", "month_key"),
+        sa.Index("ix_metal_wallet_month_id", "wallet_id", "month_key", "metal_holding_id"),
+    )
+
+
+class RealEstateMonthlySnapshot(RealEstateMonthlySnapshotBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "real_estate_monthly_snapshots"
+    
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True), sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+                            nullable=False, index=True)
+    )
+    real_estate_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True), sa.ForeignKey("real_estates.id", ondelete="SET NULL"),
+                            nullable=True, index=True)
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("real_estate_id", "month_key", name="uq_re_monthly_snapshot"),
+        sa.Index("ix_re_monthly_wallet_month", "wallet_id", "month_key"),
+        sa.Index("ix_re_monthly_wallet_month_id", "wallet_id", "month_key", "real_estate_id"),
     )

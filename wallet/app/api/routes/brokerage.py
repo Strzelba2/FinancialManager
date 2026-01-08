@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 import uuid
 from datetime import date
 from typing import Optional, List
@@ -19,7 +19,9 @@ from app.api.services.brokerage_event import (
 from app.crud.broker_event_crud import (
     list_brokerage_events_page, batch_patch_brokerage_events, delete_brokerage_event_and_rebuild_holding
     )
-from app.crud.brokerage_account_crud import list_brokerage_accounts_for_user
+from app.crud.brokerage_account_crud import (
+    list_brokerage_accounts_for_user, get_brokerage_account_for_user, delete_brokerage_account
+)
 from app.api.deps import get_internal_user_id
 from app.crud.user_crud import get_user
 
@@ -310,4 +312,49 @@ async def api_delete_brokerage_event(
         ok = await delete_brokerage_event_and_rebuild_holding(session=session, user_id=user_id, event_id=event_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Event not found")
+    return {"ok": True}
+
+
+@router.delete("/brokerage/{brokerage_account_id}")
+async def api_delete_brokerage_account(
+    brokerage_account_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+):
+    """
+    Delete a brokerage account for the authenticated user.
+
+    Args:
+        brokerage_account_id: Brokerage account UUID to delete.
+        user_id: Internal user UUID resolved from request (dependency).
+        session: SQLAlchemy async database session (dependency).
+
+    Returns:
+        A dict with `{"ok": True}` when the account was deleted.
+
+    Raises:
+        HTTPException:
+            - 400 if the user_id is unknown.
+            - 404 if the brokerage account does not exist for this user.
+            - 404 if deletion fails because the account does not exist (race/consistency case).
+    """
+    user = await get_user(session, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Unknown user_id')
+    
+    account = await get_brokerage_account_for_user(
+            session,
+            user_id=user_id,
+            brokerage_account_id=brokerage_account_id,
+        )
+    
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Account not found')
+    
+    ok = await delete_brokerage_account(
+        session=session,
+        account_id=brokerage_account_id,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Brokerage account not found")
     return {"ok": True}

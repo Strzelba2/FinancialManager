@@ -394,3 +394,37 @@ async def delete_brokerage_event_and_rebuild_holding(
         instrument_id=instrument_id,
     )
     return True
+
+
+async def count_brokerage_events_since(
+    session: AsyncSession,
+    brokerage_ids: list[uuid.UUID],
+    since: datetime,
+) -> dict[uuid.UUID, int]:
+    """
+    Count brokerage events per brokerage account since a given timestamp.
+
+    Args:
+        session: SQLAlchemy async database session.
+        brokerage_ids: List of brokerage account UUIDs to include.
+        since: Inclusive lower bound for `BrokerageEvent.trade_at`.
+
+    Returns:
+        A mapping: {brokerage_account_id: events_count}.
+
+        - Returns an empty dict if `brokerage_ids` is empty.
+        - Brokerage IDs with zero events will not appear in the output.
+          (Caller can default missing ids to 0.)
+
+    Raises:
+        Exception: Propagates unexpected database errors after logging.
+    """
+    if not brokerage_ids:
+        return {}
+    stmt = (
+        select(BrokerageEvent.brokerage_account_id, func.count(BrokerageEvent.id))
+        .where(BrokerageEvent.brokerage_account_id.in_(brokerage_ids), BrokerageEvent.trade_at >= since)
+        .group_by(BrokerageEvent.brokerage_account_id)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {uuid.UUID(str(bid)): int(cnt) for bid, cnt in rows}

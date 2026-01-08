@@ -4,7 +4,7 @@ from typing import Optional, List
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
-from sqlmodel import select, or_, cast, String
+from sqlmodel import select, and_, or_, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import DepositAccount, BrokerageDepositLink, Wallet
@@ -43,6 +43,33 @@ async def get_deposit_account_with_relations(session: AsyncSession, account_id: 
     )
     result = await session.execute(stmt)
     return result.first()
+
+
+async def get_deposit_account_for_user(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    deposit_account_id: uuid.UUID,
+) -> Optional[DepositAccount]:
+    stmt = (
+        select(DepositAccount)
+        .join(Wallet, Wallet.id == DepositAccount.wallet_id)
+        .where(Wallet.user_id == user_id, DepositAccount.id == deposit_account_id)
+    )
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
+async def get_deposit_account_for_user_for_update(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    account_id: uuid.UUID,
+) -> DepositAccount | None:
+    return await session.scalar(
+        select(DepositAccount)
+        .join(Wallet, Wallet.id == DepositAccount.wallet_id)
+        .where(and_(DepositAccount.id == account_id, Wallet.user_id == user_id))
+        .with_for_update()
+    )
 
 
 async def get_deposit_by_fingerprint(session: AsyncSession, fp: bytes) -> Optional[DepositAccount]:

@@ -42,7 +42,7 @@ def ingest_gpw_quarter() -> int:
         async with app_context() as (session, storage):
             all_processed = 0
 
-            for market_key in ("pl-wse", "pl-newconnect", "stooq-commodities"):
+            for market_key in ("pl-wse", "pl-newconnect", "commodities", "cpi"):
                 logger.info(
                     f"ingest_gpw_quarter: processing market_key={market_key!r}"
                 )

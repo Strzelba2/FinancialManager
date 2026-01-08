@@ -460,3 +460,60 @@ async def sum_income_expense_for_wallet_month_range(
     )
     res = await session.execute(stmt)
     return list(res.all())
+
+
+async def count_transactions_since(
+    session: AsyncSession,
+    dep_account_ids: list[uuid.UUID],
+    since: datetime,
+) -> dict[uuid.UUID, int]:
+    if not dep_account_ids:
+        return {}
+    stmt = (
+        select(Transaction.account_id, func.count(Transaction.id))
+        .where(Transaction.account_id.in_(dep_account_ids), Transaction.date_transaction >= since)
+        .group_by(Transaction.account_id)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {uuid.UUID(str(aid)): int(cnt) for aid, cnt in rows}
+
+
+async def list_chain_from_dt_for_update(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    dt,
+) -> list[Transaction]:
+    return list(
+        (await session.scalars(
+            select(Transaction)
+            .where(Transaction.account_id == account_id, Transaction.date_transaction >= dt)
+            .order_by(Transaction.date_transaction.asc(), Transaction.id.asc())
+            .with_for_update()
+        )).all()
+    )
+    
+
+async def tx_datetime_exists(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    dt,
+) -> bool:
+    return bool(await session.scalar(
+        select(1)
+        .where(Transaction.account_id == account_id, Transaction.date_transaction == dt)
+        .limit(1)
+    ))
+   
+    
+async def get_prev_tx_for_update(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    dt,
+) -> Transaction | None:
+    return await session.scalar(
+        select(Transaction)
+        .where(Transaction.account_id == account_id, Transaction.date_transaction < dt)
+        .order_by(Transaction.date_transaction.desc(), Transaction.id.desc())
+        .limit(1)
+        .with_for_update()
+    )

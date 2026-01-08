@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     wallet, account, transaction, brokerage, real_estate,
     real_estates_price, metal_holding, debt, recurring_expenses,
-    note, goals, holding)
+    note, goals, holding, wallet_manager)
 
 api_router = APIRouter()
 
@@ -16,5 +16,6 @@ api_router.include_router(metal_holding.router, prefix="/wallet", tags=["wallet"
 api_router.include_router(debt.router, prefix="/wallet", tags=["wallet"])
 api_router.include_router(recurring_expenses.router, prefix="/wallet", tags=["wallet"])
 api_router.include_router(goals.router, prefix="/wallet", tags=["wallet"])
+api_router.include_router(wallet_manager.router, prefix="/wallet", tags=["wallet"])
 api_router.include_router(note.router, prefix="/users", tags=["users"])
 api_router.include_router(holding.router, prefix="/users", tags=["users"])

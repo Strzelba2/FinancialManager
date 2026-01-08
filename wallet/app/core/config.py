@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     AUTH_URL: str = ""
     STOCK_API_URL: str = ""
     TOP_N_PERFORMANCE: int = 5
+    CPI_SYMBOL: str = ""
     
     model_config = SettingsConfigDict(
         env_file="app/core/.envs/.env.local", env_ignore_empty=True, extra="ignore"

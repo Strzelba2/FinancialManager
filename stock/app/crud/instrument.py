@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 import logging
 from sqlmodel import select, func, or_
 from sqlalchemy.exc import IntegrityError
@@ -27,7 +28,7 @@ async def count_by_market_id(session: AsyncSession, market_id: uuid.UUID) -> int
     return int(res.scalar_one())
 
 
-async def get_by_symbol_in_market(session: AsyncSession, market_id: uuid.UUID, symbol: str) -> Instrument | None:
+async def get_by_symbol_in_market(session: AsyncSession, market_id: uuid.UUID, symbol: str) -> Optional[Instrument]:
     """
     Fetch a single instrument by symbol within a specific market.
 
@@ -46,6 +47,28 @@ async def get_by_symbol_in_market(session: AsyncSession, market_id: uuid.UUID, s
         select(Instrument).where(Instrument.market_id == market_id, Instrument.symbol == symbol)
     )
     return res.scalars().first()
+
+
+async def get_instrument_by_symbol(
+    session: AsyncSession,
+    symbol: str,
+) -> Optional[Instrument]:
+    """
+    Fetch a single instrument by its unique symbol.
+
+    Args:
+        session: SQLAlchemy async database session.
+        symbol: Instrument symbol to look up (e.g. "AAPL", "PKO").
+
+    Returns:
+        The `Instrument` if found, otherwise `None`.
+
+    Raises:
+        Exception: Propagates unexpected database errors after logging.
+    """
+    stmt = select(Instrument).where(Instrument.symbol == symbol)
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
 
 
 async def create_instrument(session: AsyncSession, data: InstrumentCreate) -> Instrument:

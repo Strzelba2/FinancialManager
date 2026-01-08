@@ -9,7 +9,9 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
                              InstrumentBase, HoldingBase, TransactionBase, RealEstateBase, 
                              MetalHoldingBase, WalletBase, BrokerageDepositLinkBase,
                              BrokerageEventBase, CapitalGainBase, RealEstatePriceBase,
-                             DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase)
+                             DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase,
+                             DepositAccountMonthlySnapshotBase, BrokerageAccountMonthlySnapshotBase,
+                             MetalHoldingMonthlySnapshotBase, RealEstateMonthlySnapshotBase)
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
@@ -444,3 +446,30 @@ class YearGoalUpdate(PartialUpdateMixin):
         "rev_target_year", "exp_budget_year", "currency", 
     }
     
+    
+class DepositAccountMonthlySnapshotRead(DepositAccountMonthlySnapshotBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+
+    account_id: uuid.UUID
+    wallet_id: uuid.UUID
+
+
+class BrokerageAccountMonthlySnapshotRead(BrokerageAccountMonthlySnapshotBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+
+    brokerage_account_id: uuid.UUID
+    wallet_id: uuid.UUID
+
+
+class MetalHoldingMonthlySnapshotRead(MetalHoldingMonthlySnapshotBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+
+    metal_holding_id: uuid.UUID
+    wallet_id: uuid.UUID
+
+
+class RealEstateMonthlySnapshotRead(RealEstateMonthlySnapshotBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+
+    real_estate_id: uuid.UUID
+    wallet_id: uuid.UUID

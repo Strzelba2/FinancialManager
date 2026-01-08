@@ -8,13 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import db
 from app.api.deps import get_internal_user_id
 from app.crud.user_crud import get_user
-from app.core.exceptions import ImportMismatchError
+from app.core.exceptions import (
+    ImportMismatchError, UnknownAccountError, UnknownUserError, DuplicateTransactionError
+)
 from app.schamas.schemas import CreateTransactionsRequest
 from app.schamas.response import (
     TransactionPageOut, BatchUpdateTransactionsRequest,
     BatchUpdateTransactionsResponse, TransactionRowOut
 )
-from app.api.services.transactions import create_transactions_service
+from app.api.services.transactions import create_transactions_service, create_transactions_rebalance_service
 from app.crud.transaction_crud import (
     list_transactions_page, batch_update_transactions, delete_transaction_for_user_rebalance
     )
@@ -77,6 +79,51 @@ async def create_transactions(
             )
 
     return summary
+
+
+@router.post("/transactions/create/rebalance", status_code=201)
+async def create_transactions_rebalance(
+    payload: CreateTransactionsRequest,
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+):
+    """
+    Create a set of rebalance transactions for the given user.
+
+    The service performs validations (user/account existence, duplicates, import mismatch),
+    and can optionally verify the resulting account balance after applying transactions.
+
+    Args:
+        payload: Request body containing the rebalance transaction specification.
+        user_id: Internal user UUID resolved from request (dependency).
+        session: SQLAlchemy async database session (dependency).
+
+    Returns:
+        The service result returned by `create_transactions_rebalance_service`.
+
+    Raises:
+        HTTPException:
+            - 400 for unknown user.
+            - 404 for unknown account.
+            - 409 for duplicate transaction.
+            - 422 for import mismatch / validation mismatch.
+    """
+    async with session.begin():
+        try:
+            return await create_transactions_rebalance_service(
+                session=session,
+                user_id=user_id,
+                payload=payload,
+                verify_amount_after=True,  
+            )
+        except UnknownUserError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except UnknownAccountError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except DuplicateTransactionError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except ImportMismatchError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.get("/transactions", response_model=TransactionPageOut)

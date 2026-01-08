@@ -19,13 +19,17 @@ METAL_TO_SYMBOL = {
 
 async def list_metal_holdings_by_wallet(
     session: AsyncSession,
-    wallet_id: uuid.UUID,
+    wallet_id: Optional[uuid.UUID] = None,
+    wallet_ids: Optional[list[uuid.UUID]] = None,
 ) -> List[MetalHolding]:
     stmt = (
         select(MetalHolding)
-        .where(MetalHolding.wallet_id == wallet_id)
         .order_by(MetalHolding.created_at.desc())
     )
+    if wallet_id:
+        stmt = stmt.where(MetalHolding.wallet_id == wallet_id)
+    if wallet_ids:
+        stmt = stmt.where(MetalHolding.wallet_id.in_(wallet_ids))
     result = await session.execute(stmt)
     return list(result.scalars().all())
 

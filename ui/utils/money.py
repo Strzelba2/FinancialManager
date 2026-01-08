@@ -407,3 +407,71 @@ def series_from_amounts(
     series.sort(key=lambda x: x["value"], reverse=True)
     return series 
 
+
+def share_pct_str(part: Optional[Decimal] = None, total: Optional[Decimal] = None) -> str:
+    """
+    Format `part / total` as a percentage string with one decimal place.
+
+    Args:
+        part: Numerator value.
+        total: Denominator value.
+
+    Returns:
+        Percentage string like "12.3%" or "—" if values are missing/invalid.
+    """
+    if part is None or total is None or total == 0:
+        return "—"
+    v = ((part / total) * Decimal("100")).quantize(Decimal("0.1"))
+    return f"{v}%"
+
+
+def pct_change(self, curr: Optional[Decimal] = None, prev: Optional[Decimal] = None) -> Optional[Decimal]:
+    """
+    Compute percentage change as a fraction: (curr - prev) / prev.
+
+    Args:
+        curr: Current value.
+        prev: Previous value.
+
+    Returns:
+        Fractional change (e.g. 0.05 means +5%) or None if inputs are invalid/unsafe.
+    """
+    if curr is None or prev is None:
+        return None
+    if prev == 0 and curr == 0:
+        return None
+
+    return (curr - prev) / prev
+
+
+def fmt_pct(self, p: Optional[Decimal] = None) -> str:
+    """
+    Format a fractional percentage (e.g. 0.123) as a string (e.g. '+12.3%').
+
+    Args:
+        p: Fractional change.
+
+    Returns:
+        Formatted percent string or "—" if None.
+    """
+    if p is None:
+        return "—"
+    v = (p * Decimal("100")).quantize(Decimal("0.1"))
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{v}%"
+
+
+def pct_color(self, p: Optional[Decimal] = None) -> str:
+    """
+    Map a percent change to a Quasar color name.
+
+    Args:
+        p: Fractional change.
+
+    Returns:
+        Color string (e.g. 'positive', 'negative', 'grey-6').
+    """
+    if p is None:
+        return "grey-6"
+    return "positive" if p >= 0 else "negative"
+

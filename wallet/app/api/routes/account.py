@@ -4,7 +4,7 @@ import logging
 import uuid
 
 from app.crud.wallet_crud import get_wallet
-from app.crud.deposit_account_crud import delete_deposit_account, list_accounts_for_user
+from app.crud.deposit_account_crud import delete_deposit_account, list_accounts_for_user, get_deposit_account_for_user
 from app.api.services.accounts import create_deposit_account_service, create_brokeage_account_service
 from app.schamas.response import AccountCreateResponse, AccountOut
 from app.schamas.schemas import (
@@ -74,3 +74,25 @@ async def get_accounts(
     accounts = await list_accounts_for_user(session=session, user_id=user_id)
     
     return [AccountOut(id=a.id, name=a.name, currency=a.currency) for a in accounts]
+
+
+@router.delete("/account/{deposit_account_id}")
+async def api_delete_deposit_account(
+    deposit_account_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+):
+    user = await get_user(session, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Unknown user_id')
+    
+    account = get_deposit_account_for_user(session=session, user_id=user_id, deposit_account_id=deposit_account_id)
+    
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Account not found')
+    
+    ok = await delete_deposit_account(session=session, account_id=deposit_account_id)
+ 
+    if not ok:
+        raise HTTPException(status_code=404, detail="Deposit account not found")
+    return {"ok": True}

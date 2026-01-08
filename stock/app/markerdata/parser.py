@@ -1,14 +1,17 @@
 from datetime import datetime, date, timezone
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 from typing import Literal, Optional
+import csv
 import logging
 from zoneinfo import ZoneInfo
 import html
 
 from app.core.config import settings
-from app.utils.dates import PL_MONTHS
+from app.utils.dates import PL_MONTHS, try_parse_date
 from app.utils.regex_check import TIME_RE, DATE_RE
 from app.utils.text import strip_accents
+from app.utils.numbers import dec2, to_int_opt
+from app.schemas.quates import DailyRow
 from .config import MarketConfig
 
 logger = logging.getLogger(__name__)
@@ -140,3 +143,48 @@ def historical_url(quote_href: str, cfg: MarketConfig, interval: Literal['d', 'w
         ""   
     ))
     return final
+
+
+def parse_daily_csv(text: str) -> list[DailyRow]:
+    """
+    Parse daily candle CSV text into sorted `DailyRow` objects.
+
+    The function:
+    - Reads CSV lines
+    - Skips malformed rows and rows with an invalid date
+    - Converts numeric columns using `dec2` and `to_int_opt`
+    - Sorts output by `date_quote` ascending
+
+    Args:
+        text: Raw CSV content as a string.
+
+    Returns:
+        A list of `DailyRow` objects sorted by `date_quote` ascending.
+
+    Raises:
+        Exception: Propagates unexpected parsing/conversion errors after logging.
+    """
+    out: list[DailyRow] = []
+    reader = csv.reader(text.splitlines())
+
+    for row in reader:
+        if not row or len(row) < 5:
+            continue
+
+        d = try_parse_date(row[0])
+        if d is None:
+            continue
+
+        out.append(
+            DailyRow(
+                date_quote=d,
+                open=dec2(row[1]),
+                high=dec2(row[2]),
+                low=dec2(row[3]),
+                close=dec2(row[4]),
+                volume=to_int_opt(row[5]) if len(row) >= 6 else None,
+            )
+        )
+
+    out.sort(key=lambda x: x.date_quote)
+    return out

@@ -85,6 +85,7 @@ async def get_real_estate_with_wallet(session: AsyncSession, re_id: uuid.UUID) -
 async def list_real_estates(
     session: AsyncSession,
     wallet_id: Optional[uuid.UUID] = None,
+    wallet_ids: Optional[list[uuid.UUID]] = None,
     country: Optional[str] = None,
     city: Optional[str] = None,
     types: Optional[List[PropertyType]] = None,
@@ -104,6 +105,7 @@ async def list_real_estates(
     Args:
         session: SQLAlchemy async session.
         wallet_id: Optional wallet filter.
+        wallet_ids: Optional wallets filter.
         country: Optional country filter (normalized to upper).
         city: Optional city filter (ILIKE).
         types: Optional property type filter.
@@ -122,6 +124,8 @@ async def list_real_estates(
 
     if wallet_id:
         stmt = stmt.where(RealEstate.wallet_id == wallet_id)
+    if wallet_ids:
+        stmt = stmt.where(RealEstate.wallet_id.in_(wallet_ids))
     if country:
         stmt = stmt.where(RealEstate.country == country.upper())
     if city:
