@@ -4,7 +4,8 @@ import csv
 import io
 import html
 import re
-import datetime
+from datetime import datetime
+from decimal import Decimal
 import uuid
 from typing import Optional, Any
 
@@ -216,7 +217,7 @@ def parse_date(s, format: str = '%Y-%m-%d'):
     """
     if s is None: 
         return None
-    if isinstance(s, datetime.datetime):
+    if isinstance(s, datetime):
         logger.info("formar")
         return s.strftime(format)
         
@@ -234,7 +235,7 @@ def parse_date(s, format: str = '%Y-%m-%d'):
         '%d-%m-%y',
     ):
         try: 
-            return datetime.datetime.strptime(str(s), fmt)
+            return datetime.strptime(str(s), fmt)
         except Exception:
             pass
         
@@ -249,7 +250,7 @@ def parse_date(s, format: str = '%Y-%m-%d'):
             if year < 100:
                 year = century_fix(year)
             try:
-                return datetime.datetime(year, month, day)
+                return datetime(year, month, day)
             except ValueError:
                 return None
     return None
@@ -438,3 +439,60 @@ def is_current_account(a) -> bool:
     val = getattr(t, "value", None)
     name = getattr(t, "name", None)
     return (str(val).upper() == "CURRENT") or (str(name).upper() == "CURRENT")
+
+
+def fmt_num(x: Any) -> Optional[float]:
+    """
+    Convert a value to float safely.
+
+    Works for typical numeric inputs such as:
+    - int / float / Decimal
+    - numeric strings like "123", "45.67"
+
+    Args:
+        x: Any input value that may represent a number.
+
+    Returns:
+        Parsed float value if conversion succeeds, otherwise None.
+    """
+    if x is None:
+        logger.debug("fmt_num: input is None -> returning None")
+        return None
+    try:
+        return float(x)
+    except Exception as ex:
+        logger.debug(
+            f"fmt_num: failed to convert {x!r} ({type(x).__name__}) to float: {ex!r}"
+        )
+        return None
+    
+
+def fmt_int(x: Any) -> Optional[int]:
+    """
+    Convert a value to int safely.
+
+    Conversion strategy:
+    1) Try Decimal(str(x)) -> int(...) to keep precision for strings/decimals.
+    2) Fallback: float(x) -> int(...) if Decimal conversion fails.
+
+    Notes:
+    - int(Decimal("12.99")) becomes 12 (truncation toward zero)
+    - invalid inputs return None
+
+    Args:
+        x: Any input value that may represent an integer-like number.
+
+    Returns:
+        Parsed int value if conversion succeeds, otherwise None.
+    """
+    if x is None:
+        logger.debug("fmt_int: input is None -> returning None")
+        return None
+    try:
+        return int(Decimal(str(x)))
+    except Exception:
+        try:
+            return int(float(x))
+        except Exception:
+            logger.debug(f"fmt_int: float fallback failed for {x!r}: {ex!r}")
+            return None

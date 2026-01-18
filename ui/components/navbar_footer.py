@@ -59,6 +59,8 @@ def nav(current: str = '', ctx=None):
                         ui.separator().classes('bg-white')
                         ui.menu_item('Notowania', on_click=lambda: ui.navigate.to('/stock/quotes/XWAR')).classes('text-white')
                         ui.separator().classes('bg-white')
+                        ui.menu_item('Wykresy', on_click=lambda: ui.navigate.to('/stock/charts/XWAR')).classes('text-white')
+                        ui.separator().classes('bg-white')
                         ui.menu_item('Operacje', on_click=lambda: ui.navigate.to('/brokerage/events')).classes('text-white')
                         ui.separator().classes('bg-white')
                         ui.menu_item('Pozycje', on_click=lambda: ui.navigate.to('/brokerage/holdings')).classes('text-white')

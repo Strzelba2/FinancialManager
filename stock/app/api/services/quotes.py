@@ -178,6 +178,7 @@ async def sync_daily_by_symbol(
         logger.info(f"skip: sync_daily_by_symbol symbol={symbol} has no historical_source")
         return SyncDailyResult(
             symbol=symbol,
+            name=inst.shortname,
             instrument_id=inst.id,
             requested_url="",
             fetched_rows=0,
@@ -195,6 +196,7 @@ async def sync_daily_by_symbol(
         logger.info(f"symbol={symbol} already up-to-date (max_dt={max_dt} >= end={end}); skipping download.")
         return SyncDailyResult(
             symbol=symbol,
+            name=inst.shortname,
             instrument_id=inst.id,
             requested_url="",
             fetched_rows=0,
@@ -235,6 +237,7 @@ async def sync_daily_by_symbol(
 
     return SyncDailyResult(
         symbol=symbol,
+        name=inst.shortname,
         instrument_id=inst.id,
         requested_url=url,
         fetched_rows=fetched_rows,

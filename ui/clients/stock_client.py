@@ -1,9 +1,13 @@
 import httpx
 import logging
 from typing import Optional, Dict, Any, List
+from datetime import date
 from nicegui import app
 
-from schemas.quotes import QuoteRow, QuoteBySymbolItem, QuotesBySymbolsResponse
+from schemas.quotes import (
+    QuoteRow, QuoteBySymbolItem, QuotesBySymbolsResponse, SyncDailyRequest,
+    SyncDailyResponse 
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,7 @@ class StockClient:
     INSTRUMENTS_OPTIONS_PATH = "/stock/instruments/options"
     INSTRUMENT_SEARCH_PATH = "/stock/instruments/search"
     QUOTES_BY_SYMBOLS_PATH = "/stock/quotes/latest/symbols"
+    SYNC_DAILY_CANDLES_PATH = "/stock/instruments/{symbol}/candles/daily/sync"
     
     def __init__(self) -> None:
         """
@@ -356,3 +361,55 @@ class StockClient:
             q.symbol: q for q in parsed.quotes
         }
         return result
+    
+    async def sync_daily_candles(
+        self,
+        symbol: str,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        include_items: bool = False,
+        return_all: bool = False,
+        overlap_days: int = 7,
+    ) -> Optional[SyncDailyResponse]:
+        """
+        Trigger daily candle sync in stock-service.
+
+        - If include_items=False: endpoint should NOT return candle list (items=None).
+        - If include_items=True: returns candles depending on return_all/from/to rules.
+
+        Returns:
+            SyncDailyResponse on success, or None on errors/timeouts.
+        """
+        path = self.SYNC_DAILY_CANDLES_PATH.format(symbol=symbol)
+
+        req = SyncDailyRequest(
+            date_from=date_from,
+            date_to=date_to,
+            include_items=include_items,
+            return_all=return_all,
+            overlap_days=overlap_days,
+    
+        )
+        payload: Dict[str, Any] = req.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+        resp = await self._request(
+            "POST",
+            path,
+            json_body=payload,
+        )
+        if resp is None:
+            logger.error(f"sync_daily_candles: no response from stock service (symbol={symbol})")
+            return None
+
+        if resp.status_code not in (200, 201):
+            logger.error(
+                f"sync_daily_candles: status {resp.status_code}, symbol={symbol}, body={resp.text}"
+            )
+            return None
+
+        try:
+            data = resp.json()
+            return SyncDailyResponse.model_validate(data)
+        except Exception:
+            logger.exception(f"sync_daily_candles: failed to parse response (symbol={symbol})")
+            return None

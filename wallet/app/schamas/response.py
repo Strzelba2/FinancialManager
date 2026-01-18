@@ -454,6 +454,7 @@ class SyncDailyResult(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     symbol: str
+    name: str
     instrument_id: uuid.UUID
     requested_url: str
     fetched_rows: int

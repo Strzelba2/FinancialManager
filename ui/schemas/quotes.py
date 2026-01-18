@@ -1,8 +1,9 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from decimal import Decimal
+import uuid
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 import json
 
 
@@ -124,3 +125,49 @@ class QuoteBySymbolItem(BaseModel):
     
 class QuotesBySymbolsResponse(BaseModel):
     quotes: List[QuoteBySymbolItem] = Field(default_factory=list)
+     
+
+class SyncDailyRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    date_from: Optional[date] = Field(default=None, alias="from")
+    date_to: Optional[date] = Field(default=None, alias="to")
+
+    return_all: bool = False
+    overlap_days: int = Field(default=7, ge=0, le=60)
+
+    include_items: bool = False
+    
+    
+class CandleDailyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    date_quote: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Optional[int] = None
+    trade_at: datetime
+    
+
+class SyncDailyResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    symbol: str
+    name: str
+    instrument_id: uuid.UUID
+    requested_url: str
+    fetched_rows: int
+    upserted_rows: int
+    sync_start: Optional[date] = None
+    sync_end: Optional[date] = None
+
+
+class SyncDailyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    sync: SyncDailyResult
+    items_included: bool
+    returned_count: int
+    items: Optional[List[CandleDailyOut]] = None
