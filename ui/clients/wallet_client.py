@@ -15,7 +15,8 @@ from schemas.wallet import (
     DebtOut, RecurringExpenseOut, UserNoteOut, TransactionPageOut, BatchUpdateTransactionsRequest,
     BatchUpdateTransactionsResponse, AccountOut, SellRealEstateRequest, SellMetalRequest, 
     YearGoalOut, BrokerageEventPageOut, BatchUpdateBrokerageEventsRequest, HoldingRowOut,
-    ClientCreateMonthlySnapshotResponse, WalletRenameResponse
+    ClientCreateMonthlySnapshotResponse, WalletRenameResponse, FavoriteListResponse,
+    FavoriteItemResponse, PriceAlertResponse
     
 )
 
@@ -2011,9 +2012,373 @@ class WalletClient:
         resp = await self._request("DELETE", f"/wallet/brokerage/{brokerage_account_id}", headers=headers)
         return bool(resp and resp.is_success)
     
+    async def list_favorite_lists(self, user_id: uuid.UUID) -> List[FavoriteListResponse]:
+        """
+        List all favorite lists for a given user.
+
+        Args:
+            user_id: Internal user identifier.
+
+        Returns:
+            A list of `FavoriteListResponse` objects.
+            Returns an empty list if the request fails or validation fails.
+        """
+
+        headers = {"X-User-Id": str(user_id)}
+
+        resp = await self._request("GET", "/users/favorites/lists", headers=headers)
+        if resp is None or resp.status_code != 200:
+            logger.warning(
+                f"list_favorite_lists failed: user_id"
+                f"status={None if resp is None else resp.status_code}"
+            )
+            return []
+
+        try:
+            data = resp.json() or []
+            return TypeAdapter(list[FavoriteListResponse]).validate_python(data)
+        except Exception:
+            logger.exception("list_favorite_lists: failed to parse response JSON")
+            return []
+
+    async def create_favorite_list(
+        self,
+        user_id: uuid.UUID,
+        name: str,
+        description: Optional[str] = None,
+    ) -> Optional[FavoriteListResponse]:
+        """
+        Create a new favorite list for the given user.
+
+        Args:
+            user_id: Internal user identifier.
+            name: Favorite list name.
+            description: Optional favorite list description.
+
+        Returns:
+            The created `FavoriteListResponse` if successful, otherwise None.
+        """
+
+        headers = {"X-User-Id": str(user_id)}
+        payload = {"name": name, "description": description}
+
+        resp = await self._request("POST", "/users/favorites/lists", headers=headers, json_body=payload)
+        if resp is None:
+            logger.warning("create_favorite_list: no response user_id")
+            return None
+
+        if resp.status_code not in (200, 201):
+            logger.warning(f"create_favorite_list failed: HTTP {resp.status_code}, body={resp.text[:500]!r}")
+            return None
+
+        try:
+            return FavoriteListResponse.model_validate(resp.json())
+        except Exception:
+            logger.exception("create_favorite_list: failed to validate response")
+            return None
+
+    async def delete_favorite_list(self, user_id: uuid.UUID, list_id: uuid.UUID) -> bool:
+        """
+        Delete an entire favorite list.
+
+        Args:
+            user_id: Internal user identifier.
+            list_id: Favorite list identifier.
+
+        Returns:
+            True if the list was deleted (HTTP 200/204), otherwise False.
+        """
+        headers = {"X-User-Id": str(user_id)}
+
+        resp = await self._request("DELETE", f"/users/favorites/lists/{list_id}", headers=headers)
+        if resp is None:
+            logger.warning(f"delete_favorite_list: no response list_id={list_id}")
+            return False
+
+        if resp.status_code in (200, 204):
+            return True
+
+        logger.warning(f"delete_favorite_list failed: HTTP {resp.status_code}, body={resp.text[:500]!r}")
+        return False
+
+    async def add_favorite_item(
+        self,
+        user_id: uuid.UUID,
+        list_id: uuid.UUID,
+        symbol: str,
+        mic: str
+    ) -> Optional[FavoriteItemResponse]:
+        """
+        Add an instrument (symbol + MIC) to a favorite list.
+
+        Args:
+            user_id: Internal user identifier.
+            list_id: Favorite list identifier.
+            symbol: Instrument symbol/ticker (will be normalized with strip+upper).
+            mic: Market Identifier Code (MIC) (will be normalized with strip+upper).
+
+        Returns:
+            A `FavoriteItemResponse` if created (HTTP 200/201), otherwise None.
+        """
+        headers = {"X-User-Id": str(user_id)}
+        payload = {"symbol": str(symbol),
+                   "mic": str(mic)}
+
+        resp = await self._request(
+            "POST",
+            f"/users/favorites/lists/{list_id}/items",
+            headers=headers,
+            json_body=payload,
+        )
+        if resp is None:
+            logger.warning(f"add_favorite_item: no response list_id={list_id}")
+            return None
+
+        if resp.status_code not in (200, 201):
+            logger.warning(f"add_favorite_item failed: HTTP {resp.status_code}, body={resp.text[:500]!r}")
+            return None
+
+        try:
+            return FavoriteItemResponse.model_validate(resp.json())
+        except Exception:
+            logger.exception("add_favorite_item: failed to validate response")
+            return None
+
+    async def remove_favorite_item(
+        self,
+        user_id: uuid.UUID,
+        list_id: uuid.UUID,
+        symbol: str,
+    ) -> bool:
+        """
+        Remove an instrument from a favorite list by symbol.
+
+        Args:
+            user_id: Internal user identifier.
+            list_id: Favorite list identifier.
+            symbol: Instrument symbol/ticker (will be normalized with strip+upper).
+
+        Returns:
+            True if the item was removed (HTTP 200/204), otherwise False.
+        """
+        headers = {"X-User-Id": str(user_id)}
+
+        resp = await self._request(
+            "DELETE",
+            f"/users/favorites/lists/{list_id}/items/{symbol}",
+            headers=headers,
+        )
+        if resp is None:
+            logger.warning(
+                f"remove_favorite_item: no response list_id={list_id} instrument_id={symbol}"
+            )
+            return False
+
+        if resp.status_code in (200, 204):
+            return True
+
+        logger.warning(f"remove_favorite_item failed: HTTP {resp.status_code}, body={resp.text[:500]!r}")
+        return False
+
+    async def list_favorite_items_with_alerts(
+        self,
+        user_id: uuid.UUID,
+        list_id: uuid.UUID,
+    ) -> List[Dict[str, Any]]:
+        """
+        List favorite items for a given list enriched with alert information.
+
+        Args:
+            user_id: Internal user identifier.
+            list_id: Favorite list identifier.
+
+        Returns:
+            A list of dictionaries returned by the API (items-with-alerts payload).
+            Returns an empty list on request/HTTP/JSON errors.
+        """
         
+        headers = {"X-User-Id": str(user_id)}
+
+        resp = await self._request(
+            "GET",
+            f"/users/favorites/lists/{list_id}/items-with-alerts",
+            headers=headers,
+        )
+        if resp is None or resp.status_code != 200:
+            logger.warning(
+                f"list_favorite_items_with_alerts failed: user_id={user_id} list_id={list_id} "
+                f"status={None if resp is None else resp.status_code}"
+            )
+            return []
+
+        try:
+            return resp.json() or []
+        except Exception:
+            logger.exception("list_favorite_items_with_alerts: failed to parse JSON")
+            return []
+
+    async def get_alert(self, user_id: uuid.UUID, symbol: str) -> Optional[PriceAlertResponse]:
+
+        headers = {"X-User-Id": str(user_id)}
+
+        resp = await self._request("GET", f"/users/alerts/{symbol}", headers=headers)
+        if resp is None:
+            logger.warning(f"get_alert: no response user_id={user_id} instrument_id={symbol}")
+            return []
+
+        if resp.status_code == 404:
+            return []
+
+        if resp.status_code != 200:
+            logger.warning(f"get_alert failed: HTTP {resp.status_code}, body={resp.text[:500]!r}")
+            return []
+
+        try:
+            return PriceAlertResponse.model_validate(resp.json())
+        except Exception:
+            logger.exception("get_alert: failed to validate response")
+            return []
+
+    async def upsert_alert(
+        self,
+        user_id: uuid.UUID,
+        symbol: str,
+        below_price: Optional[Decimal] = None,
+        above_price: Optional[Decimal] = None,
+        enabled: bool = True,
+        one_shot: bool = False,
+        expires_at: Optional[datetime] = None,
+    ) -> Optional[PriceAlertResponse]:
+        """
+        Fetch a price alert for a given symbol.
+
+        Args:
+            user_id: Internal user identifier.
+            symbol: Instrument symbol/ticker (will be normalized with strip+upper).
+
+        Returns:
+            `PriceAlertResponse` if found (HTTP 200), otherwise None.
+            Returns None for HTTP 404 and for request/validation failures.
+        """
+
+        headers = {"X-User-Id": str(user_id)}
+
+        payload = {
+            "symbol": symbol,
+            "below_price": str(below_price) if below_price is not None else None,
+            "above_price": str(above_price) if above_price is not None else None,
+            "enabled": enabled,
+            "one_shot": one_shot,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        }
+
+        resp = await self._request("POST", "/users/alerts", headers=headers, json_body=payload)
+        if resp is None:
+            logger.warning(f"upsert_alert: no response instrument_id={symbol}")
+            return None
+
+        if resp.status_code not in (200, 201):
+            logger.warning(f"upsert_alert failed: HTTP {resp.status_code}, body={resp.text[:500]!r}")
+            return None
+
+        try:
+            return PriceAlertResponse.model_validate(resp.json())
+        except Exception:
+            logger.exception("upsert_alert: failed to validate response")
+            return None
+
+    async def patch_alert(
+        self,
+        user_id: uuid.UUID,
+        symbol: str,
+        patch: dict,
+    ) -> Optional[PriceAlertResponse]:
+        """
+        Partially update an existing price alert using HTTP PATCH.
+
+        Args:
+            user_id: Internal user identifier.
+            symbol: Instrument symbol/ticker (will be normalized with strip+upper).
+            patch: Partial update payload to send to the API (JSON body).
+
+        Returns:
+            Updated `PriceAlertResponse` on HTTP 200.
+            Returns None if not found (HTTP 404) or on request/validation failure.
+        """
+
+        headers = {"X-User-Id": str(user_id)}
+
+        resp = await self._request(
+            "PATCH",
+            f"/users/alerts/{symbol}",
+            headers=headers,
+            json_body=patch,
+        )
+        if resp is None:
+            logger.warning(f"patch_alert: no response user_id={user_id} instrument_id={symbol}")
+            return None
+
+        if resp.status_code == 404:
+            return None
+
+        if resp.status_code != 200:
+            logger.warning(f"patch_alert failed: HTTP {resp.status_code}, body={resp.text[:500]!r}")
+            return None
+
+        try:
+            return PriceAlertResponse.model_validate(resp.json())
+        except Exception:
+            logger.exception("patch_alert: failed to validate response")
+            return None
+
+    async def delete_alert(self, user_id: uuid.UUID, symbol: str) -> bool:
+        """
+        Delete a price alert for the given symbol.
+
+        Args:
+            user_id: Internal user identifier.
+            symbol: Instrument symbol/ticker (will be normalized with strip+upper).
+
+        Returns:
+            True if deleted (HTTP 200/204), otherwise False.
+        """
+        headers = {"X-User-Id": str(user_id)}
+
+        resp = await self._request("DELETE", f"/users/alerts/{symbol}", headers=headers)
+        if resp is None:
+            logger.warning(f"delete_alert: no response user_id={user_id} instrument_id={symbol}")
+            return False
+
+        if resp.status_code in (200, 204):
+            return True
+
+        logger.warning(f"delete_alert failed: HTTP {resp.status_code}, body={resp.text[:500]!r}")
+        return False
     
-    
+    async def list_alerts(self, user_id: uuid.UUID) -> list["PriceAlertResponse"]:
+        """
+        List all price alerts for a user.
 
+        Args:
+            user_id: Internal user identifier.
 
+        Returns:
+            A list of `PriceAlertResponse`.
+            Returns an empty list if the request fails or the response cannot be validated.
+        """
+        headers = {"X-User-Id": str(user_id)}
 
+        resp = await self._request("GET", "/users/alerts", headers=headers)
+        if resp is None or resp.status_code != 200:
+            logger.warning(
+                f"list_alerts failed: user_id={user_id} status={None if resp is None else resp.status_code} "
+                f"body={'' if resp is None else resp.text[:500]!r}"
+            )
+            return []
+
+        try:
+            data = resp.json() or []
+            return TypeAdapter(list[PriceAlertResponse]).validate_python(data)
+        except Exception:
+            logger.exception("list_alerts: failed to parse/validate response JSON")
+            return []

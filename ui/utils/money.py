@@ -475,3 +475,43 @@ def pct_color(self, p: Optional[Decimal] = None) -> str:
         return "grey-6"
     return "positive" if p >= 0 else "negative"
 
+
+def fmt_money(v: Optional[float], view_ccy: Optional[str]) -> str:
+    """
+    Format a numeric value as money in the given display currency.
+
+    Examples:
+        fmt_money(1234.5, "PLN") -> "1 234.50 PLN"
+        fmt_money(None, "PLN")   -> "—"
+        fmt_money(10, None)      -> "10.00"
+
+    Args:
+        v: Monetary value to format. If None, returns an em dash placeholder.
+        view_ccy: Currency code/symbol to append (e.g., "PLN"). If missing, only the number is returned.
+
+    Returns:
+        A human-readable money string with 2 decimal places and spaces as thousand separators.
+    """
+    if v is None:
+        return "—"
+    return f"{v:,.2f} {view_ccy}".replace(",", " ")
+
+
+def fmt_level(v: Optional[float]) -> str:
+    """
+    Format a numeric "level" (threshold/price) with 2 decimal places.
+
+    Examples:
+        fmt_level(1000)     -> "1 000.00"
+        fmt_level(12.3456)  -> "12.35"
+        fmt_level(None)     -> "—"
+
+    Args:
+        v: Value to format. If None, returns an em dash placeholder.
+
+    Returns:
+        A formatted number string with 2 decimal places and spaces as thousand separators.
+    """
+    if v is None:
+        return "—"
+    return f"{v:,.2f}".replace(",", " ")

@@ -496,3 +496,30 @@ def fmt_int(x: Any) -> Optional[int]:
         except Exception:
             logger.debug(f"fmt_int: float fallback failed for {x!r}: {ex!r}")
             return None
+  
+      
+def parse_decimal(v: Any) -> Optional[Decimal]:
+    """
+    Parse a user-entered number into Decimal.
+
+    Accepts values like:
+        - "100.00"
+        - "100,00"
+        - "1 000,50"
+
+    Args:
+        v: Input value from UI.
+
+    Returns:
+        Decimal value or None if empty.
+
+    Raises:
+        ValueError: If the value cannot be parsed as Decimal.
+    """
+    s = str(v or "").strip().replace(" ", "").replace(",", ".")
+    if not s:
+        return None
+    try:
+        return Decimal(s)
+    except Exception as ex:
+        raise ValueError(f"Invalid decimal value: {ex!r}") 

@@ -1,5 +1,5 @@
 from nicegui import ui
-from .alerts import alert_form_dialog, ALERTS, alert_nav_right_section
+from .alerts import alert_nav_right_section
 from services.current_user import get_username
 import logging
 
@@ -65,7 +65,7 @@ def nav(current: str = '', ctx=None):
                         ui.separator().classes('bg-white')
                         ui.menu_item('Pozycje', on_click=lambda: ui.navigate.to('/brokerage/holdings')).classes('text-white')
                         ui.separator().classes('bg-white')
-                        ui.menu_item('alerts', on_click=lambda: ui.navigate.to('/stock/alesrts')).classes('text-white')
+                        ui.menu_item('Ulubione', on_click=lambda: ui.navigate.to('/user/favorites')).classes('text-white')
             
             with ui.element('div').classes('nav-right'): 
                 display_name = get_username()
@@ -75,20 +75,7 @@ def nav(current: str = '', ctx=None):
                     ui.label(display_name).classes('user-name')   
                     ui.icon('expand_more').props('size=18')
                 
-                alert_nav_right_section()
-                
-                with ui.button(icon='add').props('flat color=white'):
-                    with ui.menu().classes('settings-menu') as addm:
-                        addm.props('offset=[0,22]')
-                        ui.menu_item('Alert', on_click=lambda: alert_form_dialog(lambda payload: (ALERTS.append(payload), 
-                                                                                                  ui.emit('alerts:refresh',
-                                                                                                          payload['id']))).open())
-                        ui.separator().classes('bg-white')
-                        ui.menu_item('Transakcja maklerska', on_click=lambda: ui.emit('tx:open-broker'))
-                        ui.separator().classes('bg-white')
-                        ui.menu_item('Transakcja gotówkowa', on_click=lambda: ui.emit('tx:open-cash'))
-                        ui.separator().classes('bg-white')
-                        ui.menu_item('Stały wydatek', on_click=lambda: ui.emit('exp:open'))
+                alert_nav_right_section(ctx)
                         
                 with ui.button('Settings', icon='account_circle').props('flat color=white'):
                     with ui.menu().classes('settings-menu') as menu:

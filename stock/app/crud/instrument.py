@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 from sqlmodel import select, func, or_
 from sqlalchemy.exc import IntegrityError
@@ -69,6 +69,46 @@ async def get_instrument_by_symbol(
     stmt = select(Instrument).where(Instrument.symbol == symbol)
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
+
+
+async def get_instrument_with_market_by_mic_symbol(
+    session: AsyncSession,
+    mic: str,
+    symbol: str,
+) -> Optional[Tuple[Instrument, Market]]:
+    """
+    Fetch an instrument together with its market by MIC and instrument symbol.
+
+    This helper performs a join between `Instrument` and `Market` and returns
+    both ORM objects if a match is found.
+
+    Args:
+        session: SQLAlchemy async database session.
+        mic: Market Identifier Code (MIC). Prefer passing a normalized value
+            (e.g., `mic.strip().upper()`), unless your DB collation is case-insensitive.
+        symbol: Instrument symbol/ticker. Prefer passing a normalized value
+            (e.g., `symbol.strip().upper()`), unless your DB collation is case-insensitive.
+
+    Returns:
+        A `(Instrument, Market)` tuple if found, otherwise `None`.
+
+    """
+    stmt = (
+        select(Instrument, Market)
+        .join(Market, Market.id == Instrument.market_id)
+        .where(
+            Market.mic == mic,
+            Instrument.symbol == symbol,
+        )
+    )
+
+    res = await session.execute(stmt)
+    row = res.first() 
+    if not row:
+        return None
+
+    inst, market = row
+    return inst, market
 
 
 async def create_instrument(session: AsyncSession, data: InstrumentCreate) -> Instrument:

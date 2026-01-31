@@ -111,55 +111,70 @@ def goals_bullet_card(
         }).classes('w-full h-48').style('width:100%;display:block')
      
         
-def render_top5_table_observer(rows, tone: str | None = None, top: int = 5):
+def render_top5_table_observer(
+    rows: list[dict[str, Any]],
+    tone: Optional[str] = None,
+    top: int = 5,
+    view_ccy: str = "PLN",
+) -> None:
+    """
+    Render a compact 'Observed Stocks' table with:
+      - symbol
+      - change % (pl_pct)
+      - current price in view currency (pl_abs)
 
-    data = sorted(rows, key=lambda r: r.get('pl_pct', 0.0), reverse=True)[:top]
+    Expected rows:
+      { "sym": str, "pl_pct": float|Decimal, "pl_abs": float|Decimal }
+    """
 
-    prepared = []
+    data = list(rows or [])[:top] 
+
+    prepared: list[dict[str, Any]] = []
     for i, r in enumerate(data, start=1):
-        pl = float(r.get('pl_pct', 0.0))
-        pl_act = float(r.get('pl_abs', 0.0))
+        sym = str(r.get("sym") or "")
+        pct = float(r.get("pl_pct") or 0.0)
+        price = float(r.get("pl_abs") or 0.0)
+
         prepared.append({
-            'rank': i,
-            'sym': r.get('sym', ''),
-            'pl_pct': pl,
-            'pl_abs': pl_act,
-            'pl_pct_fmt': f"{pl} PLN",
-            'pl_abs_fmt': f"{pl_act} PLN ",
+            "rank": i,
+            "sym": sym,
+            "pl_pct": pct,
+            "pl_abs": price,
+            "pl_pct_fmt": f"{pct:+.2f}%",
+            "pl_abs_fmt": f"{price:,.2f} {view_ccy}".replace(",", " "),
         })
 
-    pl_col_classes = 'num'
-    if tone == 'positive':
-        pl_col_classes += ' bias-pos'
-    elif tone == 'negative':
-        pl_col_classes += ' bias-neg'
+    pct_col_classes = "num"
+    if tone == "positive":
+        pct_col_classes += " bias-pos"
+    elif tone == "negative":
+        pct_col_classes += " bias-neg"
 
     cols = [
-        {'name': 'rank', 'label': '#', 'field': 'rank', 'align': 'left', 'style': 'width:40px', 
-         'headerStyle': 'font-weight:700'},
-        {'name': 'sym', 'label': 'Ticker', 'field': 'sym', 'align': 'left', 'headerStyle': 'font-weight:700'},
-        {'name': 'pl_pct_fmt', 'label': 'P/B (PLN)', 'field': 'pl_pct_fmt', 'align': 'right', 'classes': pl_col_classes, 
-         'style': 'width:110px', 'headerStyle': 'font-weight:700'},
-        {'name': 'pl_abs_fmt', 'label': 'P/A (PLN)', 'field': 'pl_abs_fmt', 'align': 'right', 'classes': 'num',
-         'style': 'width:140px', 'headerStyle': 'font-weight:700'},
+        {"name": "rank", "label": "#", "field": "rank", "align": "left",
+         "style": "width:40px", "headerStyle": "font-weight:700"},
+        {"name": "sym", "label": "Symbol", "field": "sym", "align": "left",
+         "headerStyle": "font-weight:700"},
+        {"name": "pl_pct_fmt", "label": "Change %", "field": "pl_pct_fmt", "align": "right",
+         "classes": pct_col_classes, "style": "width:110px", "headerStyle": "font-weight:700"},
+        {"name": "pl_abs_fmt", "label": f"Price ({view_ccy})", "field": "pl_abs_fmt", "align": "right",
+         "classes": "num", "style": "width:150px", "headerStyle": "font-weight:700"},
     ]
 
-    t = ui.table(
-        columns=cols,
-        rows=prepared,
-        row_key='sym',
-    ).props('flat dense separator=horizontal hide-bottom hide-pagination rows-per-page-options=[5]') \
-     .classes('top4-table q-mt-none') \
-     .style('margin-top:-6px')
+    t = (
+        ui.table(columns=cols, rows=prepared, row_key="sym")
+        .props("flat dense separator=horizontal hide-bottom hide-pagination rows-per-page-options=[5]")
+        .classes("top4-table q-mt-none")
+        .style("margin-top:-6px")
+    )
 
-    t.add_slot('body-cell-pl_pct_fmt', """
+    t.add_slot("body-cell-pl_pct_fmt", """
     <q-td :props="props"
         :class="[
             'num',
-            props.row.pl_pct < props.row.pl_abs ? 'text-positive' : '',
-            props.row.pl_pct > props.row.pl_abs ? 'text-negative' : ''
+            (parseFloat(props.row.pl_pct || 0) >= 0) ? 'text-positive' : 'text-negative'
         ]">
-    {{ props.row.pl_pct_fmt }}
+      {{ props.row.pl_pct_fmt }}
     </q-td>
     """)
     

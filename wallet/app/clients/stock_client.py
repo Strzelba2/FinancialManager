@@ -4,7 +4,8 @@ from datetime import date
 
 import httpx
 from app.schamas.response import (
-    QuotesBySymbolsResponse, QuoteBySymbolItem, SyncDailyResponse, SyncDailyRequest
+    QuotesBySymbolsResponse, QuoteBySymbolItem, SyncDailyResponse, SyncDailyRequest,
+    StockInstrumentRead
 )
 from app.core.config import settings
 
@@ -21,6 +22,7 @@ class StockClient:
 
     QUOTES_BY_SYMBOLS_PATH = "/stock/quotes/latest/symbols" 
     SYNC_DAILY_CANDLES_PATH = "/stock/instruments/{symbol}/candles/daily/sync"
+    INSTRUMENT_RESOLVE_PATH = "/stock/instruments/resolve"
 
     def __init__(self) -> None:
         """Bind this client to a shared AsyncClient stored in `app.state.stock_httpx`."""
@@ -172,3 +174,45 @@ class StockClient:
         except Exception:
             logger.exception(f"sync_daily_candles: failed to parse response (symbol={symbol})")
             return None
+ 
+    async def resolve_instrument(self, mic: str, symbol: str) -> StockInstrumentRead:
+        """
+        Resolve instrument details from stock-service by (mic, symbol).
+
+        Raises:
+            ValueError: if instrument not found (404) or response cannot be parsed.
+            RuntimeError: if stock-service is unavailable / bad status.
+        """
+        mic_u = mic.strip().upper()
+        sym_u = symbol.strip().upper()
+
+        logger.info(f"resolve_instrument: mic={mic_u!r} symbol={sym_u!r}")
+
+        resp = await self._request(
+            "GET",
+            self.INSTRUMENT_RESOLVE_PATH,
+            params={"mic": mic_u, "symbol": sym_u},
+        )
+
+        if resp is None:
+            logger.error(f"resolve_instrument: no response from stock-service (mic={mic_u} symbol={sym_u})")
+            raise RuntimeError("Stock service unavailable")
+
+        if resp.status_code == 404:
+            logger.info(f"resolve_instrument: instrument not found (mic={mic_u} symbol={sym_u})")
+            raise ValueError("Instrument not found in stock-service")
+
+        if resp.status_code != 200:
+            logger.error(
+                f"resolve_instrument: status {resp.status_code}, mic={mic_u}, symbol={sym_u}, body={resp.text}"
+            )
+            raise RuntimeError(f"Stock service error: {resp.status_code}")
+
+        try:
+            data = resp.json()
+            return StockInstrumentRead.model_validate(data)
+        except Exception:
+            logger.exception(
+                f"resolve_instrument: failed to parse response (mic={mic_u} symbol={sym_u}) body={resp.text}"
+            )
+            raise ValueError("Invalid instrument payload from stock-service")

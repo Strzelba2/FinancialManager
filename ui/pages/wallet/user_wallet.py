@@ -10,7 +10,7 @@ import logging
 from components.navbar_footer import footer
 from components.panel.card import panel 
 from static.style import add_style, add_user_style
-from components.alerts import ALERTS, alerts_panel_card
+from components.alerts import alerts_panel_card
 from components.transaction import (
     transactions_table_card, cash_transactions_table_card, 
     render_create_transaction_dialog, render_lack_transactions
@@ -86,6 +86,8 @@ class Wallet(NavContextBase):
         self.wallets: List[WalletListItem] = data.wallets
         self.selected_wallet = self.wallets
         self.banks = data.banks
+        self.last_favorites = data.last_favorite_items
+        self.last_price_alerts = data.last_price_alerts
         
         if getattr(data, "assets_8m_total", None):
             self.months = data.assets_8m_total.months
@@ -268,16 +270,32 @@ class Wallet(NavContextBase):
                     else:
                         render_lack_transactions()
                         
-                with panel('Obserwed Stocks'):
-                    render_top5_table_observer([
-                        {'sym': 'PZU', 'pl_pct': 22, 'pl_abs': 19},
-                        {'sym': 'ABC', 'pl_pct': 50, 'pl_abs': 38},
-                        {'sym': 'UBER', 'pl_pct': 60, 'pl_abs': 22},
-                        {'sym': 'GOOGL', 'pl_pct': 24, 'pl_abs': 55},
-                        {'sym': 'META', 'pl_pct': 30, 'pl_abs': 80},
-                    ], tone='negative') 
+                rows = self.capture_last_favorites()
+                        
+                with panel("Observed Stocks") as p:
+                    p.classes("cursor-pointer hover:shadow-md transition")
+                    p.on("click", lambda: ui.navigate.to("/user/favorites"))
 
-                alerts_panel_card(ALERTS, top=5)
+                    render_top5_table_observer(
+                        rows,
+                        tone="negative",
+                        view_ccy=self.view_currency.value or "PLN",
+                    )
+                    
+                rows_alerts = self.capture_last_alerts()
+                logger.info(f"rows_alerts: {rows_alerts}")
+                
+                with panel("Price Alerts") as p:
+                    p.classes("cursor-pointer hover:shadow-md transition")
+                    p.on("click", lambda: ui.navigate.to("/user/favorites"))
+                    if rows_alerts:
+                        alerts_panel_card(
+                            alerts=rows_alerts,
+                            top=5,
+                            view_ccy=self.view_currency.value or "PLN",
+                        )
+                    else:
+                        render_lack_transactions()
 
             with ui.grid(columns=3).classes('gap-3 w-full items-stretch'):
                 totals = self.compute_assets_by_currency()
@@ -1069,6 +1087,87 @@ class Wallet(NavContextBase):
 
         return months, inc, exp, capi
     
+    def capture_last_favorites(self) -> List[Dict[str, Any]]:
+        """
+        Convert cached favorites (self.last_favorites) into a lightweight list of dicts.
+
+        The output is intended for UI/state snapshotting:
+        - `sym` is the instrument symbol
+        - `pl_pct` is percentage P/L (float)
+        - `pl_abs` is absolute P/L converted to the current view currency
+
+        Returns:
+            A list of rows with keys: `sym`, `pl_pct`, `pl_abs`.
+
+        """
+        rows = []
+        for it in (self.last_favorites or []):
+            rows.append({
+                "sym": it.sym,
+                "pl_pct": float(it.pl_pct or 0),
+                "pl_abs": change_currency_to(it.pl_abs, self.view_currency.value, it.currency, self.currency_rate),
+            })
+            
+        return rows
+    
+    def capture_last_alerts(self) -> List[Dict[str, Any]]:
+        """
+        Convert cached price alerts (self.last_price_alerts) into a list of dicts.
+
+        Converts `current_price`, `below_price`, `above_price` into the current view currency
+        (when present) using `change_currency_to(...)`.
+
+        Returns:
+            A list of rows with keys:
+            - symbol
+            - below_price
+            - above_price
+            - current_price
+            - enabled
+            - created_at (ISO string or None)
+            - last_triggered (ISO string or None)
+        """
+        rows = []
+        for a in (self.last_price_alerts or []):
+            now_view = None
+            below_price = None
+            above_price = None
+            if a.current_price is not None:
+                
+                now_view = change_currency_to(
+                    a.current_price,
+                    self.view_currency.value,
+                    a.currency.value,
+                    self.currency_rate,
+                )
+                
+            if a.below_price is not None:
+                below_price = change_currency_to(
+                    a.below_price,
+                    self.view_currency.value,
+                    a.currency.value,
+                    self.currency_rate,
+                )
+            
+            if a.above_price is not None:
+                above_price = change_currency_to(
+                    a.above_price,
+                    self.view_currency.value,
+                    a.currency.value,
+                    self.currency_rate,
+                )
+
+            rows.append({
+                "symbol": a.sym,
+                "below_price": below_price if below_price is not None else None,
+                "above_price": above_price if above_price is not None else None,
+                "current_price": now_view if now_view is not None else None,
+                "enabled": bool(a.enabled),
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+                "last_triggered": a.last_triggered.isoformat() if a.last_triggered else None,
+            })
+        return rows
+            
     
 @ui.page('/wallet')
 async def wallet(request: Request):

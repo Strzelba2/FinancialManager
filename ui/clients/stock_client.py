@@ -26,6 +26,8 @@ class StockClient:
     INSTRUMENT_SEARCH_PATH = "/stock/instruments/search"
     QUOTES_BY_SYMBOLS_PATH = "/stock/quotes/latest/symbols"
     SYNC_DAILY_CANDLES_PATH = "/stock/instruments/{symbol}/candles/daily/sync"
+    CELERY_STATUS = "/stock/celery/status"
+    UPDATE_DAILY_MANUAL = "/stock/ingest/start_manual"
     
     def __init__(self) -> None:
         """
@@ -70,13 +72,13 @@ class StockClient:
                 params=params
             )
         except (httpx.ConnectTimeout, httpx.ReadTimeout):
-            logger.warning(f"Wallet service timeout {url}")
+            logger.warning(f"Stock service timeout {url}")
             return None
         except httpx.HTTPError:
-            logger.error(f"Wallet service HTTP error {url}")
+            logger.error(f"Stock service HTTP error {url}")
             return None
         except Exception:
-            logger.exception(f"Wallet service unexpected error {url}")
+            logger.exception(f"Stock service unexpected error {url}")
             return None
 
         return resp
@@ -412,4 +414,38 @@ class StockClient:
             return SyncDailyResponse.model_validate(data)
         except Exception:
             logger.exception(f"sync_daily_candles: failed to parse response (symbol={symbol})")
+            return None
+        
+    async def get_celery_status(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch Celery worker status from the service.
+
+        Returns:
+            A dict with Celery status fields (e.g., enabled/online/workers/detail),
+            or None if the request fails or returns a non-success status.
+        """
+        resp = await self._request("GET", self.CELERY_STATUS)
+        if resp is None or not resp.is_success:
+            logger.warning("StockClient.get_celery_status: no response (resp=None)")
+            return None
+        try:
+            return resp.json()
+        except Exception:
+            return None
+        
+    async def run_manual_ingest(self) -> Optional[Dict[str, Any]]:
+        """
+        Trigger manual ingestion on the service.
+
+        Returns:
+            Response payload as a dict (typically includes `ok` and possibly `job_id`),
+            or None if the request fails or returns a non-success status.
+        """
+        resp = await self._request("POST", self.UPDATE_DAILY_MANUAL)
+        if resp is None or not resp.is_success:
+            logger.warning("StockClient.run_manual_ingest: no response (resp=None)")
+            return None
+        try:
+            return resp.json()
+        except Exception:
             return None

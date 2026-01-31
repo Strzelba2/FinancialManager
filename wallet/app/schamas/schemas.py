@@ -11,7 +11,8 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
                              BrokerageEventBase, CapitalGainBase, RealEstatePriceBase,
                              DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase,
                              DepositAccountMonthlySnapshotBase, BrokerageAccountMonthlySnapshotBase,
-                             MetalHoldingMonthlySnapshotBase, RealEstateMonthlySnapshotBase)
+                             MetalHoldingMonthlySnapshotBase, RealEstateMonthlySnapshotBase,
+                             FavoriteListBase, PriceAlertBase)
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
@@ -473,3 +474,52 @@ class RealEstateMonthlySnapshotRead(RealEstateMonthlySnapshotBase, UUIDMixin, Ti
 
     real_estate_id: uuid.UUID
     wallet_id: uuid.UUID
+    
+    
+class FavoriteItemCreate(SQLModel):
+    model_config = ConfigDict(from_attributes=False)
+
+    symbol: str
+    mic: str
+
+
+class FavoriteItemRead(UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+    
+    favorite_list_id: uuid.UUID 
+    instrument_id: uuid.UUID 
+    
+    
+class FavoriteListCreate(FavoriteListBase):
+    model_config = ConfigDict(from_attributes=False)
+
+
+class FavoriteListRead(FavoriteListBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+
+    user_id: uuid.UUID
+     
+    
+class PriceAlertCreate(PriceAlertBase):
+    model_config = ConfigDict(from_attributes=False)
+    symbol: str
+
+
+class PriceAlertUpdate(PartialUpdateMixin):
+
+    below_price: Q2OptNonNeg = None
+    above_price: Q2OptNonNeg = None
+    enabled: Optional[bool] = None
+    one_shot: Optional[bool] = None
+    expires_at: Optional[datetime] = None
+    
+    __update_require_any__ = {"below_price", "above_price", "enabled", "one_shot", "expires_at"}
+    
+
+class PriceAlertRead(PriceAlertBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+
+    user_id: uuid.UUID 
+    instrument_id: uuid.UUID 
+    
+    symbol: Optional[str] = None

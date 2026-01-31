@@ -33,6 +33,7 @@ class LatestQuoteBySymbol(BaseModel):
     symbol: str
     price: Decimal
     currency: Currency
+    change_pct: Decimal
     
 
 class QuotesBySymbolsRequest(BaseModel):

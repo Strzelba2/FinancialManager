@@ -153,6 +153,6 @@ async def delete_brokerage_account(session: AsyncSession, account_id: uuid.UUID)
     obj = await session.get(BrokerageAccount, account_id)
     if not obj:
         return False
-    session.delete(obj)
+    await session.delete(obj)
     await session.commit()
     return True

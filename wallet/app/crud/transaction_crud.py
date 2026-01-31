@@ -239,7 +239,7 @@ async def delete_transaction(session: AsyncSession, tx_id: uuid.UUID) -> bool:
     tx = await session.get(Transaction, tx_id)
     if not tx:
         return False
-    session.delete(tx)
+    await session.delete(tx)
     await session.commit()
     return True
 

@@ -93,6 +93,6 @@ async def delete_bank(session: AsyncSession, bank_id: uuid.UUID) -> bool:
     bank = await session.get(Bank, bank_id)
     if not bank:
         return False
-    session.delete(bank) 
+    await session.delete(bank) 
     await session.commit()
     return True

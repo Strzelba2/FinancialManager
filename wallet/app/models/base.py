@@ -439,3 +439,40 @@ class RealEstateMonthlySnapshotBase(SQLModel):
     month_key: str = Field(sa_column=sa.Column(sa.String(7), nullable=False, index=True))
     currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
     value: Decimal = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
+    
+    
+class FavoriteListBase(SQLModel):
+    model_config = ConfigDict(validate_assignment=True, from_attributes=True)
+
+    name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(80), nullable=False))
+    description: Optional[str] = Field(
+        default=None,
+        sa_column=sa.Column(sa.String(255), nullable=True),
+    )
+
+
+class PriceAlertBase(SQLModel):
+    model_config = ConfigDict(validate_assignment=True, from_attributes=True)
+
+    below_price: Optional[Decimal] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Numeric(18, 6), nullable=True),
+    )
+    above_price: Optional[Decimal] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Numeric(18, 6), nullable=True),
+    )
+    enabled: bool = Field(
+        default=True,
+        sa_column=sa.Column(sa.Boolean, nullable=False, server_default=sa.true()),
+    )
+    
+    one_shot: bool = Field(
+        default=False,
+        sa_column=sa.Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
+    
+    expires_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )

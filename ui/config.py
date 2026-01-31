@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = ""
     WALLET_API_URL: str = ""
     STOCK_API_URL: str = ""
+    CELERY_STOCK_WORKER: bool = False
         
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore"

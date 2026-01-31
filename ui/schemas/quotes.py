@@ -121,6 +121,7 @@ class QuoteBySymbolItem(BaseModel):
     symbol: str
     price: Decimal
     currency: Currency
+    change_pct: Decimal
     
     
 class QuotesBySymbolsResponse(BaseModel):

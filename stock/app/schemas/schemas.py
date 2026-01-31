@@ -3,12 +3,20 @@ from typing import Optional
 import uuid
 
 from app.models.base import InstrumentBase, QuoteLatestBase
-from app.models.enums import InstrumentType
+from app.models.enums import InstrumentType, Currency
 
 
 class InstrumentCreate(InstrumentBase):
     model_config = ConfigDict(from_attributes=False)
     market_id: uuid.UUID
+    
+    
+class InstrumentRead(InstrumentBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    market_id: uuid.UUID
+    mic: str
+    currency: Currency
     
 
 class QuoteLatesInput(QuoteLatestBase):
@@ -44,8 +52,4 @@ class InstrumentSearchRead(BaseModel):
 
     type: InstrumentType   
     mic: str 
-    
-    
-
-
     

@@ -97,6 +97,6 @@ async def delete_deposit_account_balance(
     bal = await session.get(DepositAccountBalance, account_id)
     if not bal:
         return False
-    session.delete(bal)
+    await session.delete(bal)
     await session.commit()
     return True

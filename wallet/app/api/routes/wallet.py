@@ -15,7 +15,8 @@ from app.schamas.schemas import (
 from app.schamas.response import (
     WalletUserResponse, WalletResponse, WalletListItem, AccountListItem, BrokerageAccountListItem,
     QuoteBySymbolItem, BrokerageEventListItem, RealEstateItem, MetalHoldingItem, DebtItem,
-    RecurringExpenseItem, YearGoalRead, WalletOut, WalletRenameIn, CpiMonthlyOut, MonthlySeriesOut
+    RecurringExpenseItem, YearGoalRead, WalletOut, WalletRenameIn, CpiMonthlyOut, MonthlySeriesOut,
+    LastFavoriteObservedItem, LastPriceAlertObservedItem
     )
 from app.api.services.user import sync_user
 from app.api.services.wallet import (
@@ -49,7 +50,9 @@ from app.crud.snapshots_crude import (
     list_brokerage_monthly_snapshots, list_deposit_monthly_snapshots, list_fx_rows_for_months,
     list_metal_monthly_snapshots, list_real_estate_monthly_snapshots
 )
-from app.utils.utils import TROY_OUNCE_G
+from app.crud.favorites import list_last_favorite_items_for_user
+from app.crud.price_alert_crud import list_last_price_alerts_for_user
+from app.utils.utils import TROY_OUNCE_G, q_get
 from app.utils.date import last_n_month_keys, monthly_index_from_daily_candles
 from app.core.config import settings
 
@@ -422,6 +425,94 @@ async def sync_user_route(
         months=month_keys,
         index_by_month=cpi_map,
     )
+    
+    last_items = await list_last_favorite_items_for_user(session, user.id, limit=5)
+
+    symbols = []
+    for it in last_items:
+        if it.instrument and it.instrument.symbol:
+            symbols.append(it.instrument.symbol)
+
+    symbols = list(dict.fromkeys(symbols))  
+
+    quotes_map = {}
+    if symbols:
+        quotes_map = await stock_client.get_latest_quotes_for_symbols(symbols)
+
+    out_last = []
+    for it in last_items:
+        sym = it.instrument.symbol if it.instrument else None
+        if not sym:
+            continue
+
+        q = quotes_map.get(sym)
+
+        change_pct = q_get(q, "change_pct", None)
+        price = q_get(q, "price", None)
+        currency = q_get(q, "currency", None) 
+
+        pl_pct = Decimal(str(change_pct or "0"))
+        pl_abs = Decimal(str(price or "0"))
+
+        out_last.append(
+            LastFavoriteObservedItem(
+                sym=sym,
+                pl_pct=pl_pct,
+                pl_abs=pl_abs,
+                currency=currency,
+            )
+        )
+
+    user_wallets.last_favorite_items = out_last
+    
+    last_alerts = await list_last_price_alerts_for_user(session, user.id, limit=5)
+
+    symbols = []
+
+    for it in last_items:
+        if it.instrument and it.instrument.symbol:
+            symbols.append(it.instrument.symbol)
+
+    for a in last_alerts:
+        if a.instrument and a.instrument.symbol:
+            symbols.append(a.instrument.symbol)
+
+    symbols = list(dict.fromkeys(symbols))  
+
+    quotes_map = {}
+    if symbols:
+        quotes_map = await stock_client.get_latest_quotes_for_symbols(symbols)
+
+    out_alerts: list[LastPriceAlertObservedItem] = []
+
+    for a in last_alerts:
+        sym = a.instrument.symbol if a.instrument else None
+        if not sym:
+            continue
+
+        q = quotes_map.get(sym)
+        price = q_get(q, "price", None)
+        currency = q_get(q, "currency", None)
+
+        current_price = Decimal(str(price or "0")) if price is not None else None
+
+        out_alerts.append(
+            LastPriceAlertObservedItem(
+                id=a.id,
+                sym=sym,
+                enabled=bool(getattr(a, "enabled", True)),
+                one_shot=bool(getattr(a, "one_shot", False)),
+                below_price=getattr(a, "below_price", None),
+                above_price=getattr(a, "above_price", None),
+                current_price=current_price,
+                currency=currency if currency is not None else None,
+                created_at=getattr(a, "created_at", None),
+                last_triggered=getattr(a, "last_triggered", None),
+                expires_at=getattr(a, "expires_at", None),
+            )
+        )
+
+    user_wallets.last_price_alerts = out_alerts
     
     logger.info(f"user_wallets finnal: {user_wallets}")
             

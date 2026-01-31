@@ -1,5 +1,6 @@
 from typing import Optional, Iterable, List
-from datetime import date, datetime, timezone, timedelta, time
+from datetime import datetime, timezone, timedelta, time
+from fastapi import HTTPException
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.crud.quote_latest import (
@@ -7,12 +8,17 @@ from app.crud.quote_latest import (
 )
 from app.crud.instrument import get_instrument_by_symbol
 from app.crud.candle_daily import get_min_max_date, upsert_candles_daily
+from app.crud.instrument_sync import (
+    should_skip_daily_sync, mark_daily_attempt, get_or_create_sync_state,
+    mark_daily_failure, mark_daily_success
+)
 from app.schemas.quates import (
     QuotePayloadOut, BulkQuotesOut, LatestQuoteBySymbol, SyncDailyResult, DailyRow
 )
 
 from app.utils.utils import build_st_url, download_text_csv
 from app.markerdata.parser import parse_daily_csv
+from app.exceptions import UpstreamDownloadError
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +133,7 @@ async def get_latest_quotes_by_symbols(
                 symbol=inst.symbol,
                 price=ql.last_price,
                 currency=market.currency,
+                change_pct=ql.change_pct
             )
         )
 
@@ -185,7 +192,8 @@ async def sync_daily_by_symbol(
             upserted_rows=0,
         )
 
-    today = datetime.now(timezone.utc).date()
+    now = datetime.now(timezone.utc)
+    today = now.date()
 
     _, max_dt = await get_min_max_date(session, instrument_id=inst.id)
      
@@ -207,8 +215,34 @@ async def sync_daily_by_symbol(
     
     url = build_st_url(src, start=start, end=end, interval="d")
     logger.info(f"sync: symbol={symbol} start={start} end={end} url={url}")
+    
+    state = await get_or_create_sync_state(session, inst.id)
+    
+    if should_skip_daily_sync(state, today=today, target_end=end):
+        logger.info(
+            f"skip: symbol={symbol} already handled for target_end={end} "
+            f"(success_end={state.daily_last_success_end}, attempt_end={state.daily_last_attempt_end})"
+        )
+        return SyncDailyResult(
+            symbol=symbol,
+            name=inst.shortname,
+            instrument_id=inst.id,
+            requested_url="",
+            fetched_rows=0,
+            upserted_rows=0,
+            sync_start=None,
+            sync_end=end,
+        )
 
-    text = await download_text_csv(url=url, timeout_s=timeout_s)
+    await mark_daily_attempt(session, state, now=now, target_end=end, requested_url=url)
+    try:
+        text = await download_text_csv(url=url, timeout_s=timeout_s)
+    except UpstreamDownloadError as e:
+        logger.error(f"sync_daily_candles upstream error symbol={symbol} err={e}")
+        state = await get_or_create_sync_state(session, inst.id)
+        await mark_daily_failure(session, state, error=e)
+        raise HTTPException(status_code=503, detail=str(e))
+    
     rows = parse_daily_csv(text)
     fetched_rows = len(rows)
 
@@ -234,6 +268,16 @@ async def sync_daily_by_symbol(
                 }
             )
         upserted_total += await upsert_candles_daily(session, rows=payload)
+        
+    state = await get_or_create_sync_state(session, inst.id)
+    await mark_daily_success(
+        session,
+        state,
+        now=datetime.now(timezone.utc),
+        target_end=end,
+        fetched_rows=fetched_rows,
+        upserted_rows=upserted_total,
+    )
 
     return SyncDailyResult(
         symbol=symbol,

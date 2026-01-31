@@ -134,6 +134,6 @@ async def delete_brokerage_deposit_link(
     link = await get_brokerage_deposit_link(session, brokerage_account_id, deposit_account_id)
     if not link:
         return False
-    session.delete(link)
+    await session.delete(link)
     await session.commit()
     return True

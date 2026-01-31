@@ -9,6 +9,7 @@ from schemas.wallet import Currency, YearGoalOut
 from .cards import goals_bullet_card
 from .investments import render_empty_assets_placeholder
 from utils.money import change_currency_to, dec
+from utils.utils import parse_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -286,10 +287,6 @@ async def show_goals_dialog(wallet) -> None:
                             placeholder="np. 50000.00",
                         ).props("filled dense").style("width: 100%").classes("q-mb-md")
 
-                        def _parse_decimal(v: object) -> Decimal:
-                            s = str(v or "0").strip().replace(" ", "").replace(",", ".")
-                            return Decimal(s)
-
                         async def save() -> None:
                             """Validate inputs, upsert goals, close dialog, refresh parent dialog."""
                             try:
@@ -297,8 +294,8 @@ async def show_goals_dialog(wallet) -> None:
                                     ui.notify("Wybierz portfel.", color="negative", timeout=0, close_button="OK")
                                     return
 
-                                rev = _parse_decimal(rev_in.value)
-                                exp = _parse_decimal(exp_in.value)
+                                rev = parse_decimal(rev_in.value)
+                                exp = parse_decimal(exp_in.value)
 
                                 if rev <= 0 or exp <= 0:
                                     ui.notify("Wartości muszą być większe od 0.", color="negative", timeout=0, close_button="OK")

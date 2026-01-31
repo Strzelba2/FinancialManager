@@ -192,7 +192,7 @@ async def delete_holding(session: AsyncSession, holding_id: uuid.UUID) -> bool:
     obj = await session.get(Holding, holding_id)
     if not obj:
         return False
-    session.delete(obj)
+    await session.delete(obj)
     await session.commit()
     return True
 

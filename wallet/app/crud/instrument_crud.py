@@ -58,7 +58,7 @@ async def get_instrument(session: AsyncSession, instrument_id: uuid.UUID) -> Opt
 
 async def get_instrument_by_symbol(session: AsyncSession, symbol: str) -> Optional[Instrument]:
     result = await session.execute(select(Instrument).where(Instrument.symbol == symbol.upper()))
-    return result.first()
+    return result.scalar_one_or_none()
 
 
 async def list_instruments(
@@ -114,6 +114,6 @@ async def delete_instrument(session: AsyncSession, instrument_id: uuid.UUID) -> 
     obj = await session.get(Instrument, instrument_id)
     if not obj:
         return False
-    session.delete(obj)
+    await session.delete(obj)
     await session.commit()
     return True

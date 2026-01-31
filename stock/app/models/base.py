@@ -208,3 +208,44 @@ class CandleDailyBase(SQLModel):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
         description="Timestamp of last trade (UTC)"
     )
+    
+    
+class InstrumentSyncStateBase(SQLModel):
+
+    daily_last_attempt_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    daily_last_attempt_end: Optional[date] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Date, nullable=True),
+    )
+    daily_last_success_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    daily_last_success_end: Optional[date] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Date, nullable=True),
+    )
+
+    daily_last_requested_url: Optional[str] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text, nullable=True),
+    )
+    
+    daily_last_fetched_rows: Optional[int] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Integer, nullable=True),
+    )
+    daily_last_upserted_rows: Optional[int] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Integer, nullable=True),
+    )
+
+    daily_last_error: Optional[str] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text, nullable=True),
+        description="Last error message from daily sync (if any).",
+    )
+

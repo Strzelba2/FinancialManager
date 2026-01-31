@@ -5,7 +5,7 @@ from typing import Optional, List
 import uuid
 from .base import (
     InstrumentBase, TimestampMixin, UUIDMixin, QuoteLatestBase,
-    CandleDailyBase, MarketBase
+    CandleDailyBase, MarketBase, InstrumentSyncStateBase
 )
 
 
@@ -74,4 +74,16 @@ class CandleDaily(CandleDailyBase, table=True):
     
     __table_args__ = (
         sa.Index("ix_cd_instr_date_quote", "instrument_id", "date_quote"),
+    )
+ 
+    
+class InstrumentSyncState(InstrumentSyncStateBase, table=True):
+    __tablename__ = "instrument_sync_state"
+
+    instrument_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("instrument.id", ondelete="CASCADE"),
+            primary_key=True,
+        )
     )

@@ -8,6 +8,7 @@ from fastapi import Request
 
 from static.style import add_style, add_user_style, add_table_style
 from components.context.nav_context import NavContextBase
+from components.context.manual_refresh_quates import ManualRefreshQuates
 from components.navbar_footer import footer
 
 from clients.wallet_client import WalletClient
@@ -21,7 +22,7 @@ from utils.utils import fmt_money
 logger = logging.getLogger(__name__)
 
 
-class HoldingsPage(NavContextBase):
+class HoldingsPage(NavContextBase, ManualRefreshQuates):
     """
     NiceGUI page/controller for brokerage holdings.
 
@@ -104,6 +105,7 @@ class HoldingsPage(NavContextBase):
         await self._load_brokerage_accounts()
         await self._load_page()
         self._render_all()
+        await self._restore_ingest_status()
         footer()
 
     async def _load_brokerage_accounts(self) -> None:
@@ -358,7 +360,8 @@ class HoldingsPage(NavContextBase):
                     group_sel.on("update:model-value", self._on_group_change)
 
                 with ui.row().style("display:flex; align-items:center; flex-wrap:wrap; gap:10px;"):
-                    ui.button("Refresh quotes", icon="refresh", on_click=self._reload).props("unelevated color=primary")
+                    self.refresh_btn = ui.button("Refresh quotes", icon="refresh", on_click=self._on_refresh_quotes_click).props("unelevated color=primary")
+                    self._ingest_label = ui.label("").classes("text-caption text-grey-7")
 
     def _render_table(self) -> None:
         """Render holdings table with formatted numeric cells and view-currency fallbacks."""
@@ -439,7 +442,7 @@ class HoldingsPage(NavContextBase):
         """Reload data and rerender UI."""
         await self._load_page()
         self._render_all()
-
+        
     async def _on_accounts_change(self, e) -> None:
         """Handle brokerage account filter changes."""
         vals = list(e.sender.value or [])

@@ -12,7 +12,8 @@ from .base import (UserBase, UUIDMixin, TimestampMixin, BankBase,
                    DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase,
                    FxMonthlySnapshotBase, DepositAccountMonthlySnapshotBase,
                    BrokerageAccountMonthlySnapshotBase, RealEstateMonthlySnapshotBase,
-                   MetalHoldingMonthlySnapshotBase)
+                   MetalHoldingMonthlySnapshotBase, FavoriteListBase, PriceAlertBase
+                   )
 
 
 class User(UserBase, UUIDMixin, TimestampMixin, table=True):
@@ -515,4 +516,92 @@ class RealEstateMonthlySnapshot(RealEstateMonthlySnapshotBase, UUIDMixin, Timest
         sa.UniqueConstraint("real_estate_id", "month_key", name="uq_re_monthly_snapshot"),
         sa.Index("ix_re_monthly_wallet_month", "wallet_id", "month_key"),
         sa.Index("ix_re_monthly_wallet_month_id", "wallet_id", "month_key", "real_estate_id"),
+    )
+    
+
+class FavoriteList(FavoriteListBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "favorite_lists"
+
+    user_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    user: "User" = Relationship()
+    items: list["FavoriteItem"] = Relationship(
+        back_populates="favorite_list",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan", "passive_deletes": True},
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "name", name="uq_fav_list_user_name"),
+        sa.Index("ix_fav_list_user_id", "user_id"),
+    )
+    
+    
+class FavoriteItem(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "favorite_items"
+
+    favorite_list_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("favorite_lists.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    instrument_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("instruments.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    favorite_list: FavoriteList = Relationship(back_populates="items")
+    instrument: "Instrument" = Relationship()
+
+    __table_args__ = (
+        sa.UniqueConstraint("favorite_list_id", "instrument_id", name="uq_fav_item_unique"),
+        sa.Index("ix_fav_item_list_instr", "favorite_list_id", "instrument_id"),
+    )
+    
+
+class PriceAlert(PriceAlertBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "price_alerts"
+
+    user_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    instrument_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("instruments.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    user: "User" = Relationship()
+    instrument: "Instrument" = Relationship()
+
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "instrument_id", name="uq_alert_user_instr"),
+        sa.Index("ix_alert_user_instr", "user_id", "instrument_id"),
+        sa.CheckConstraint(
+            "(below_price IS NULL OR below_price >= 0) AND (above_price IS NULL OR above_price >= 0)",
+            name="ck_alert_prices_nonneg",
+        ),
     )

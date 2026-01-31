@@ -1,21 +1,29 @@
-from fastapi import APIRouter, HTTPException, Query, Depends, status
+from fastapi import APIRouter, HTTPException, Query, Depends, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timezone
 from typing import List, Any
+import asyncio
+import uuid
 import logging
 
 from app.api.services.quotes import get_latest_quote_service, get_latest_bulk_service
 from app.db.session import db
-from app.schemas.schemas import MarketOut, InstrumentOptionOut, InstrumentSearchRead
+from app.schemas.schemas import (
+    MarketOut, InstrumentOptionOut, InstrumentSearchRead, InstrumentRead
+)
 from app.schemas.quates import (
     LatestQuoteBySymbol, QuotesBySymbolsRequest, CandleDailyOut, SyncDailyResponse,
     SyncDailyRequest
 )
 from app.crud.market import list_markets
 from app.crud.instrument import (
-    list_instruments, search_instruments_by_shortname_or_name, get_instrument_by_symbol
+    list_instruments, search_instruments_by_shortname_or_name, get_instrument_by_symbol,
+    get_instrument_with_market_by_mic_symbol
 )
 from app.api.services.quotes import get_latest_quotes_by_symbols, sync_daily_by_symbol
 from app.crud.candle_daily import list_candles_daily
+from app.markerdata.registry import get_provider
+from app.api.services.stock import ingest_market
 
 router = APIRouter()
 
@@ -140,6 +148,47 @@ async def get_instrument_options(
     return result
 
 
+@router.get("/instruments/resolve", response_model=InstrumentRead)
+async def api_resolve_instrument(
+    mic: str = Query(...),
+    symbol: str = Query(...),
+    session: AsyncSession = Depends(db.get_session),
+) -> InstrumentRead:
+    """
+    Resolve a single instrument by MIC and symbol, returning instrument details
+    enriched with market metadata (MIC and currency).
+
+    Args:
+        mic: Market Identifier Code (MIC) to search within.
+        symbol: Instrument symbol/ticker within the given MIC.
+        session: SQLAlchemy async database session.
+
+    Returns:
+        An `InstrumentRead` model with instrument fields plus `mic` and `currency`.
+
+    Raises:
+        HTTPException: 404 if no instrument is found for the given MIC+symbol.
+    """
+    result = await get_instrument_with_market_by_mic_symbol(
+        session=session,
+        mic=mic.strip().upper(),
+        symbol=symbol.strip().upper(),
+    )
+    if not result:
+        logger.info(
+            f"api_resolve_instrument: instrument not found mic={mic}, symbol={symbol}"
+        )
+        raise HTTPException(status_code=404, detail="Instrument not found")
+
+    inst, market = result
+
+    return InstrumentRead(
+        **inst.model_dump(),
+        mic=market.mic,
+        currency=market.currency,
+    )
+
+
 @router.get(
     "/instruments/search",
     response_model=List[InstrumentSearchRead],
@@ -243,6 +292,7 @@ async def sync_daily_candles(
     """
     logger.info(f"Request: sync_daily_candles symbol={symbol} ")
     inst = await get_instrument_by_symbol(session, symbol=symbol)
+  
     if inst is None:
         logger.warning(f"Instrument not found: sync_daily_candles symbol={symbol}")
         raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
@@ -292,7 +342,122 @@ async def sync_daily_candles(
         returned_count=len(items),
         items=items,
     )
-
-
     
     
+@router.get("/celery/status")
+async def celery_status() -> dict[str, Any]:
+    """
+    Report whether Celery workers are reachable by sending a control "ping"
+    and collecting replies.
+
+    The endpoint is intended for health checks and operational monitoring.
+
+    Returns:
+        A dict with:
+          - enabled: Whether Celery integration is enabled in this service.
+          - online: True if at least one worker replied to ping.
+          - workers: List of worker node names that replied.
+          - detail: Short textual status ("pong", reason, error message).
+    """
+    logger.info("Request: celery_status")
+  
+    try:
+        from app.core.celery_app import celery_app
+        try:
+            res = celery_app.control.broadcast("ping", reply=True, timeout=1)
+        except Exception as ex:
+            logger.warning(f"celery ping failed: {ex}")
+            return {"enabled": True, "online": False, "workers": [], "detail": str(ex)}
+
+        if not res:
+            logger.info("celery_status: no ping response from celery workers")
+            return {
+                "enabled": True,
+                "online": False,
+                "workers": [],
+                "detail": "No ping response from celery workers",
+            }
+
+        return {
+            "enabled": True,
+            "online": True,
+            "workers": list(res.keys()),
+            "detail": "pong",
+        }
+
+    except Exception as ex:
+        logger.exception("celery_status failed")
+        return {
+            "enabled": True,
+            "online": False,
+            "workers": [],
+            "detail": f"inspect failed: {ex!r}",
+        }
+        
+        
+@router.post("/ingest/start_manual")
+async def start_manual_ingest(
+    request: Request
+) -> dict[str, Any]:
+    """
+    Start a manual ingestion job in the background.
+
+    The endpoint uses a short-lived lock in storage to prevent multiple ingest
+    jobs from running concurrently.
+
+    Args:
+        request: FastAPI request object (used to access application storage).
+
+    Returns:
+        A dict with:
+          - ok: True if the job was started, False if it was blocked.
+          - job_id: ID of the started job (only when ok=True).
+          - detail: Optional error/diagnostic message.
+    """
+    logger.info("Request: start_manual_ingest")
+    
+    storage = request.app.storage
+
+    if await storage.stock.exists("ingest:lock"):
+        return {"ok": False, "detail": "ingest already running"}
+
+    job_id = str(uuid.uuid4())
+    job_key = "ingest:quotes:status"
+    
+    logger.info(f"start_manual_ingest: starting job_id={job_id!r}")
+
+    await storage.stock.set("ingest:lock", {"job_id": job_id}, timeout=60 * 60)  
+    
+    now = datetime.now(timezone.utc).isoformat()
+    
+    await storage.stock.hmset(job_key, {"state": "running", "started_at": now}, ttl=60 * 60)
+
+    async def _run():
+        logger.info(f"start_manual_ingest._run: job started job_id={job_id!r}")
+        try:
+            provider = get_provider("market") 
+            async with db.async_session() as session:
+                all_processed = 0
+                for market_key in ("pl-wse", "pl-newconnect", "commodities", "cpi"):
+                    logger.debug(
+                            f"ingest_quarter: processing market_key={market_key!r}"
+                        )
+
+                    all_processed += await ingest_market(session, provider, market_key, storage)
+
+            await storage.stock.hmset(job_key, {"state": "done"}, ttl=60 * 60)
+
+        except Exception as ex:
+            logger.exception(f"start_manual_ingest._run: job failed job_id={job_id!r}")
+            await storage.stock.hmset(job_key, {"state": "error", "detail": str(ex)}, ttl=60 * 60)
+
+        finally:
+            try:
+                await storage.stock.clear("ingest:lock")
+            except Exception as ex:
+                logger.warning(
+                    f"start_manual_ingest._run: failed to clear lock job_id={job_id!r}: {ex!r}"
+                )
+
+    asyncio.create_task(_run())
+    return {"ok": True}

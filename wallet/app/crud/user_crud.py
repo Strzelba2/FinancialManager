@@ -81,6 +81,6 @@ async def delete_user(session: AsyncSession, user_id: uuid.UUID) -> bool:
     user = await session.get(User, user_id)
     if not user:
         return False
-    session.delete(user) 
+    await session.delete(user) 
     await session.commit()
     return True

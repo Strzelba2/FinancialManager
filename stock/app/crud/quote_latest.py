@@ -105,8 +105,11 @@ async def fetch_latest_for_mic(session: AsyncSession, mic: str) -> List[QuoteLat
     stmt = (
         select(QuoteLatest)
         .join(Instrument, Instrument.id == QuoteLatest.instrument_id)
-        .options(joinedload(QuoteLatest.instrument))
-        .where(Instrument.mic == mic)
+        .join(Market, Market.id == Instrument.market_id)   
+        .options(
+            joinedload(QuoteLatest.instrument).joinedload(Instrument.market)  
+        )
+        .where(Market.mic == mic)
         .order_by(Instrument.symbol)
     )
     res = await session.execute(stmt)

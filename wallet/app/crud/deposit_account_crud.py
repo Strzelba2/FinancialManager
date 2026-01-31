@@ -189,7 +189,7 @@ async def delete_deposit_account(session: AsyncSession, account_id: uuid.UUID) -
     acc = await session.get(DepositAccount, account_id)
     if not acc:
         return False
-    session.delete(acc)  
+    await session.delete(acc)  
     await session.commit()
     return True
 

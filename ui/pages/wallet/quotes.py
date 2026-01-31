@@ -8,10 +8,14 @@ import logging
 
 from static.style import add_style, add_user_style, add_table_style
 from components.context.nav_context import NavContextBase
+from components.context.manual_refresh_quates import ManualRefreshQuates
+from components.favorites import open_favorites_dialog
 from components.navbar_footer import footer
 from schemas.quotes import QuoteRow
 from clients.stock_client import StockClient
+from clients.wallet_client import WalletClient
 from utils.dates import next_quarter_business, TZ
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +23,7 @@ MIC_CHOICES = {'GPW': 'XWAR', 'NEWCONNECT': 'XNCO', 'RAW': 'STCM'}
 MIC_BY_CODE = {v: k for k, v in MIC_CHOICES.items()}
 
 
-class Quotes(NavContextBase):
+class Quotes(NavContextBase, ManualRefreshQuates):
     """
     Quotes page: shows latest stock quotes for a given MIC with filters, summary,
     and a live “flash” effect when prices change.
@@ -33,8 +37,10 @@ class Quotes(NavContextBase):
             mic: Market MIC (e.g. "XWAR", "XNCO").
         """
         logger.info(f"Quotes: initializing page for mic={mic!r}")
+        super().__init__()
         
         self.stock_client = StockClient()
+        self.wallet_client = WalletClient()
         
         self.request = request
         self.mic: str = mic
@@ -60,7 +66,9 @@ class Quotes(NavContextBase):
         """
         logger.info(f"Quotes._init_async: building UI for mic={self.mic!r}")
         self.render_navbar()
-        self.build_ui()
+        await self.build_ui()
+        if settings.CELERY_STOCK_WORKER:
+            await self._restore_ingest_status()
         footer()
         
     def apply_filters(self, rows: List[QuoteRow]) -> List[QuoteRow]:
@@ -222,7 +230,7 @@ class Quotes(NavContextBase):
             self.minus_chip.text = f'−{neg}'
             self.minus_chip.update()
 
-    def build_ui(self):
+    async def build_ui(self):
         """
         Create the main layout cards and trigger initial rendering.
         """
@@ -235,7 +243,7 @@ class Quotes(NavContextBase):
             self.table_card = ui.card().classes('elevated-card q-pa-sm q-mb-md') \
                 .style('width:min(1600px,98vw); margin:0 auto 1px;')
 
-        self.render_all()
+        await self.render_all()
         
     async def refresh_once(self):
         """
@@ -245,7 +253,7 @@ class Quotes(NavContextBase):
         rows = await self.read_rows(self.mic)
         self.patch_rows_with_flash(rows)
         
-    def render_all(self):
+    async def render_all(self):
         """
         Render header, manage area and an empty table, then asynchronously
         fill it with data and update summary.
@@ -255,12 +263,10 @@ class Quotes(NavContextBase):
         self.render_manage()
         self.render_table([])
 
-        async def _fill():
-            logger.info("Quotes.render_all._fill: loading initial rows")
-            rows = await self.read_rows(self.mic)
-            self.patch_rows_with_flash(rows)
-            self.update_summary(rows)
-        ui.timer(0.05, _fill, once=True)
+        logger.info("Quotes.render_all._fill: loading initial rows")
+        rows = await self.read_rows(self.mic)
+        self.patch_rows_with_flash(rows)
+        self.update_summary(rows)
 
     def render_header(self):
         """
@@ -276,34 +282,47 @@ class Quotes(NavContextBase):
                 with ui.row().style('display:flex;align-items:center;flex-wrap:wrap;gap:10px;'):
                     ui.label('Notowania').classes('header-title')
                 with ui.row().classes('items-center gap-2'):
-                    self.last_ref_label = ui.label('Last update: --:--:--').classes('text-grey-6 text-sm')
+
+                    if settings.CELERY_STOCK_WORKER:
+                        self.next_tick_label = ui.label('Następne odświeżenie: --.--.---- --:--').classes('text-grey-6 text-sm')
+                        self.countdown_label = ui.label('—:—').classes('text-primary text-lg font-medium')
+                        
+                        self._next_tick_at = next_quarter_business(datetime.now(TZ))
+
+                        def _update_labels():
+                            """
+                            Periodically update next refresh countdown labels.
+                            """
+                            now = datetime.now(TZ)
+                            target = self._next_tick_at
+
+                            if now >= target:
+                                target = next_quarter_business(now)
+                                self._next_tick_at = target
+
+                            delta = target - now
+                            total_sec = int(delta.total_seconds())
+                            if total_sec < 0:
+                                total_sec = 0
+                            mm, ss = divmod(total_sec, 60)
+
+                            self.next_tick_label.text = (
+                                "Następne odświeżenie: "
+                                f"{target.strftime('%d.%m.%Y %H:%M')}"
+                            )
+                            self.countdown_label.text = f"{mm:02d}:{ss:02d}"
+
+                        ui.timer(1.0, _update_labels)
+                    else: 
+                        self.last_ref_label = ui.label('Last update: --:--:--').classes('text-grey-6 text-sm')
                     
-                    self._next_tick_at = next_quarter_business(datetime.now(TZ))
+                        self.refresh_btn = ui.button(
+                            "Refresh quotes",
+                            icon="refresh",
+                            on_click=self._on_refresh_quotes_click,  
+                        ).props("unelevated color=primary")
 
-                    def _update_labels():
-                        """
-                        Periodically update next refresh countdown labels.
-                        """
-                        now = datetime.now(TZ)
-                        target = self._next_tick_at
-
-                        if now >= target:
-                            target = next_quarter_business(now)
-                            self._next_tick_at = target
-
-                        delta = target - now
-                        total_sec = int(delta.total_seconds())
-                        if total_sec < 0:
-                            total_sec = 0
-                        mm, ss = divmod(total_sec, 60)
-
-                        self.next_tick_label.text = (
-                            "Następne odświeżenie: "
-                            f"{target.strftime('%d.%m.%Y %H:%M')}"
-                        )
-                        self.countdown_label.text = f"{mm:02d}:{ss:02d}"
-
-                    ui.timer(1.0, _update_labels)
+                        self._ingest_label = ui.label("").classes("text-caption text-grey-7")
 
     def render_manage(self):
         """
@@ -442,7 +461,7 @@ class Quotes(NavContextBase):
 
                 self.table.on('on_quote_alert', lambda e: ui.notify(f"Alert for {e.args['symbol']} (TODO)"))
                 self.table.on('on_quote_details', lambda e: ui.notify(f"Details for {e.args['symbol']} (TODO)"))
-                self.table.on('on_quote_favorite', lambda e: ui.notify(f"Ulubione for {e.args['symbol']} (TODO)"))
+                self.table.on('on_quote_favorite', self._on_quote_favorite)
         
     def patch_rows_with_flash(self, new_rows: List[QuoteRow]) -> None:
         """
@@ -482,6 +501,10 @@ class Quotes(NavContextBase):
             """)
 
         self._prev_map = new_map
+        
+    async def _on_quote_favorite(self, e) -> None:
+        row = e.args or {}
+        await open_favorites_dialog(self, row, MIC_CHOICES.get(self.state['mic']))
 
 
 @ui.page('/stock/quotes/{mic}')

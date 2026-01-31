@@ -1,6 +1,8 @@
+import asyncio
 from typing import Optional
 from datetime import date
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from app.exceptions import UpstreamDownloadError
 import httpx
 import logging
 
@@ -59,27 +61,47 @@ def build_st_url(
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_query, u.fragment))
 
 
-async def download_text_csv(url: str, timeout_s: float = 30.0) -> str:
+async def download_text_csv(url: str, timeout_s: float = 30.0, retries: int = 3) -> str:
     """
     Download CSV (or text) content from a URL and return it as a string.
 
     Args:
-        url: The URL to fetch.
-        timeout_s: Request timeout in seconds.
+        url: Absolute URL of the resource to download.
+        timeout_s: Per-request timeout in seconds (applies to the underlying httpx client).
+        retries: Maximum number of attempts for transient failures. Must be >= 1 to make a request.
 
     Returns:
-        Response body as text.
+        The response body decoded as text (`httpx.Response.text`).
 
     Raises:
-        httpx.HTTPError: If the HTTP request fails (network, timeout, non-2xx after raise_for_status()).
-        Exception: Propagates unexpected errors after logging.
+        UpstreamDownloadError:
+            - If the server returns a non-success HTTP status (non-2xx).
+            - If all retry attempts fail due to transient network/timeout/protocol errors.
+        Exception:
+            Any unexpected exception types are not handled here and will propagate to the caller.
     """
     logger.info(f"Request: download_text_csv url={url}")
-    try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            r = await client.get(url, headers={"Accept": "text/csv,text/plain,*/*"})
-            r.raise_for_status()
-            return r.text
-    except httpx.HTTPError as e:
-        logger.error(f"download failed: url={url} err={e}")
-        raise
+    last_exc: Exception | None = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+                r = await client.get(url, headers={"Accept": "text/csv,text/plain,*/*"})
+                r.raise_for_status()
+                return r.text
+
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
+            last_exc = e
+            logger.warning(f"download_text_csv failed (attempt {attempt}/{retries}) url={url} err={e!r}")
+
+            if attempt < retries:
+                await asyncio.sleep(0.5 * (2 ** (attempt - 1)))  # 0.5s, 1s, 2s
+                continue
+
+            break
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"download_text_csv bad status url={url} status={e.response.status_code}")
+            raise UpstreamDownloadError(f"CSV download failed: {e.response.status_code} for {url}") from e
+
+    raise UpstreamDownloadError(f"CSV download failed after {retries} retries: {url}; last={last_exc!r}") from last_exc

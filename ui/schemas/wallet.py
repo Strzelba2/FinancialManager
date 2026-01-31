@@ -269,6 +269,31 @@ class WalletListItem(BaseModel):
 class WalletCreationResponse(WalletListItem):
     pass
 
+
+class LastFavoriteObservedItem(BaseModel):
+    sym: str
+    pl_pct: Decimal = Decimal("0")   
+    pl_abs: Decimal = Decimal("0")
+    currency: Currency
+    
+    
+class LastPriceAlertObservedItem(BaseModel):
+    id: uuid.UUID
+    sym: str
+
+    enabled: bool = True
+    one_shot: bool = False
+
+    below_price: Optional[Decimal] = None
+    above_price: Optional[Decimal] = None
+
+    current_price: Optional[Decimal] = None
+    currency: Optional[Currency] = None
+
+    created_at: Optional[datetime] = None
+    last_triggered: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
  
 class ClientWalletSyncResponse(BaseModel):
     first_name: str
@@ -277,6 +302,9 @@ class ClientWalletSyncResponse(BaseModel):
     banks: Optional[List[Bank]] = Field(default_factory=list)
     assets_8m_total: Optional[MonthlySeriesOut] = None
     cpi_8m: Optional[CpiMonthlyOut] = None
+    
+    last_favorite_items: List[LastFavoriteObservedItem] = Field(default_factory=list)
+    last_price_alerts: list[LastPriceAlertObservedItem] = Field(default_factory=list)
 
 
 class AccountCreationResponse(BaseModel):
@@ -506,5 +534,34 @@ class WalletRenameResponse(BaseModel):
     id: uuid.UUID
     name: str
     
+
+class FavoriteListResponse(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    name: str
+    description: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
     
+
+class FavoriteItemResponse(BaseModel):
+    id: uuid.UUID
+    favorite_list_id: uuid.UUID
+    instrument_id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+    
+ 
+class PriceAlertResponse(BaseModel):
+    id: uuid.UUID
+    symbol: Optional[str] = None
+    user_id: uuid.UUID
+    instrument_id: uuid.UUID
+    below_price: Optional[Decimal] = None
+    above_price: Optional[Decimal] = None
+    enabled: bool
+    one_shot: bool
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime  
 

@@ -55,3 +55,11 @@ def json_safe(obj: Any) -> Any:
     if isinstance(obj, (list, tuple)):
         return [json_safe(x) for x in obj]
     return obj
+
+
+def q_get(obj, key: str, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)

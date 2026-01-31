@@ -140,6 +140,31 @@ class WalletListItem(BaseModel):
     dash_flow_8m: List[DashFlowMonthItem] = Field(default_factory=list)
     
     assets_8m: Optional[MonthlySeriesOut] = None
+    
+
+class LastFavoriteObservedItem(BaseModel):
+    sym: str
+    pl_pct: Decimal = Decimal("0")  
+    pl_abs: Decimal = Decimal("0") 
+    currency: Currency
+    
+    
+class LastPriceAlertObservedItem(BaseModel):
+    id: uuid.UUID
+    sym: str
+
+    enabled: bool = True
+    one_shot: bool = False
+
+    below_price: Optional[Decimal] = None
+    above_price: Optional[Decimal] = None
+
+    current_price: Optional[Decimal] = None
+    currency: Optional[Currency] = None
+
+    created_at: Optional[datetime] = None
+    last_triggered: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
 
 
 class WalletUserResponse(BaseModel):
@@ -149,6 +174,9 @@ class WalletUserResponse(BaseModel):
     banks: Optional[List] = Field(default_factory=list)
     assets_8m_total: Optional[MonthlySeriesOut] = None
     cpi_8m: Optional[CpiMonthlyOut] = None
+    
+    last_favorite_items: List[LastFavoriteObservedItem] = Field(default_factory=list)
+    last_price_alerts: list[LastPriceAlertObservedItem] = Field(default_factory=list)
     
     
 class WalletResponse(WalletListItem):
@@ -175,6 +203,7 @@ class QuoteBySymbolItem(BaseModel):
     symbol: str
     price: Decimal
     currency: Currency
+    change_pct: Decimal
 
 
 class QuotesBySymbolsResponse(BaseModel):
@@ -470,3 +499,17 @@ class SyncDailyResponse(BaseModel):
     items_included: bool
     returned_count: int
     items: Optional[List[CandleDailyOut]] = None
+    
+    
+class StockInstrumentRead(BaseModel):
+    """Instrument payload returned from stock-service resolve endpoint."""
+    model_config = ConfigDict(from_attributes=True)
+
+    mic: str
+    symbol: str
+    shortname: str
+    name: Optional[str] = None
+
+    currency: str
+    type: str
+    status: str
