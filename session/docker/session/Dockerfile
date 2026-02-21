@@ -12,11 +12,13 @@ RUN apt-get update && apt-get install -y \
 ARG APP_HOME=/session_auth
 ARG APP_USER=sessionUser
 ARG APP_GROUP=session
+ARG UID=1000
+ARG GID=1000
 
 WORKDIR ${APP_HOME}
 
-RUN groupadd -r ${APP_GROUP} && \
-  useradd -r -g ${APP_GROUP} -d ${APP_HOME} -m ${APP_USER}
+RUN groupadd -g ${GID} ${APP_GROUP} \
+ && useradd -m -u ${UID} -g ${GID} -d ${APP_HOME} ${APP_USER}
 
 
 COPY --chown=${APP_USER}:${APP_GROUP}  . ${APP_HOME}/

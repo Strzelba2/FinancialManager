@@ -2,10 +2,13 @@
 services:
 
   traefik:
-    image: docker.io/traefik:v3.4.1
+    image: docker.io/traefik:v3.6.5
     restart: unless-stopped
+    environment:
+      DOCKER_API_VERSION: "1.44" 
     command:
-      - --providers.docker
+      - --providers.docker=true
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
     ports:
       - "8081:80"
       - "8080:8080"
@@ -50,6 +53,7 @@ services:
       - "traefik.http.services.session-auth-service.loadbalancer.server.port=8000"
     expose:
       - 8000
+    user: "${UID}:${GID}" 
     volumes:
       - ./session:/session_auth
       - ./logs/auth:/session_auth/logs
@@ -58,7 +62,7 @@ services:
       - mailpit
       - redis
       - rabbitmq
-    command: docker/session/start.sh
+    command: ["bash", "docker/session/start.sh"]
     restart: on-failure
     networks:
       - financial_manager
@@ -79,7 +83,10 @@ services:
   nice-ui:
     build:
       context: ./ui
-      dockerfile: /docker/Dockerfile
+      dockerfile: docker/Dockerfile
+      args:
+        UID: ${UID}
+        GID: ${GID}
     volumes:
       - ./ui:/app
       - ./logs/ui:/app/logs
@@ -130,7 +137,10 @@ services:
   wallet: 
     build:
       context: ./wallet
-      dockerfile: /docker/fastapi/Dockerfile
+      dockerfile: docker/fastapi/Dockerfile
+      args:
+        UID: ${UID}
+        GID: ${GID}
     volumes:
       - ./wallet:/wallet_api
       - ./logs/wallet:/wallet_api/logs
@@ -140,7 +150,7 @@ services:
       - ./wallet/app/core/.envs/.env.local
     depends_on:
       - wallet-db
-    command: docker/fastapi/start.sh
+    command: ["bash", "docker/fastapi/start.sh"]
     
     networks:
       - financial_manager
@@ -148,7 +158,10 @@ services:
   stock: 
     build:
       context: ./stock
-      dockerfile: /docker/fastapi/Dockerfile
+      dockerfile: docker/fastapi/Dockerfile
+      args:
+        UID: ${UID}
+        GID: ${GID}
     volumes:
       - ./stock:/stock_api
       - ./logs/stock:/stock_api/logs
@@ -158,7 +171,7 @@ services:
       - ./stock/app/core/.envs/.env.local
     depends_on:
       - wallet-db
-    command: docker/fastapi/start.sh
+    command: ["bash", "docker/fastapi/start.sh"]
     
     networks:
       - financial_manager
@@ -166,7 +179,7 @@ services:
   celerystockworker:
     build:
       context: ./stock
-      dockerfile: /docker/fastapi/Dockerfile
+      dockerfile: docker/fastapi/Dockerfile
     volumes:
       - ./stock:/stock_api
       - ./logs/stock:/stock_api/logs
@@ -176,14 +189,27 @@ services:
       - wallet-db
       - redis
       - rabbitmq
-    command: docker/celery/worker/start.sh
+    command: ["bash", "docker/celery/worker/start.sh"]
+    networks:
+      - financial_manager
+
+  stock-db:
+    build:
+      context: ./stock
+      dockerfile: docker/postgres/Dockerfile
+    ports:
+      - "5434:5432"
+    volumes:
+      - stock_service_db:/var/lib/postgresql/data
+    env_file:
+      - ./stock/app/core/.envs/.env.local
     networks:
       - financial_manager
 
   celerystockbeat:
     build:
       context: ./stock
-      dockerfile: /docker/fastapi/Dockerfile
+      dockerfile: docker/fastapi/Dockerfile
     volumes:
       - ./stock:/stock_api
       - ./logs/stock:/stock_api/logs
@@ -193,7 +219,7 @@ services:
       - wallet-db
       - redis
       - rabbitmq
-    command: docker/celery/beat/start.sh
+    command: ["bash", "docker/celery/beat/start.sh"]
     networks:
       - financial_manager
 
@@ -221,48 +247,6 @@ services:
     command: ["redis-server", "/etc/redis/redis.conf"]
     networks:
       - financial_manager
-
-  # elasticsearch:
-  #   image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
-  #   environment:
-  #     - discovery.type=single-node
-  #     - ES_JAVA_OPTS=-Xms1g -Xmx1g
-  #     - xpack.security.enabled=false
-  #     - xpack.monitoring.collection.enabled=true
-  #   ulimits:
-  #     memlock:
-  #       soft: -1
-  #       hard: -1
-  #   volumes:
-  #     - esdata:/usr/share/elasticsearch/data
-  #   ports:
-  #     - "9200:9200"
-  #   networks:
-  #     - financial_manager
-
-  # kibana:
-  #   image: docker.elastic.co/kibana/kibana:8.13.4
-  #   environment:
-  #     - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-  #   ports:
-  #     - "5601:5601"
-  #   depends_on:
-  #     - elasticsearch
-  #   networks:
-  #     - financial_manager
-
-  # filebeat:
-  #   image: docker.elastic.co/beats/filebeat:8.13.4
-  #   user: root
-  #   volumes:
-  #     - ./filebeat.yml:/usr/share/filebeat/filebeat.yml
-  #     - ./logs:/logs
-  #   entrypoint: ["/bin/bash", "-c", "chmod go-w /usr/share/filebeat/filebeat.yml && exec filebeat"]
-  #   depends_on:
-  #     - elasticsearch
-  #     - kibana
-  #   networks:
-  #     - financial_manager
 
   mailpit:
     image: docker.io/axllent/mailpit:v1.20.3
@@ -310,14 +294,15 @@ services:
       - mailpit
       - redis
       - rabbitmq
-    command: docker/celery/worker/start.sh
+    user: "${UID}:${GID}"
+    command: ["bash", "docker/celery/worker/start.sh"]
     restart: on-failure
     networks:
       - financial_manager
 
   celerybeat:
     <<: *celery
-    command: docker/celery/beat/start.sh
+    command: ["bash", "docker/celery/beat/start.sh"]
 
   flower:
     build: 
@@ -336,23 +321,35 @@ services:
       - "traefik.http.routers.flower.rule=Host(`flower.localhost`)"
       - "traefik.http.routers.flower.service=flower-service"
       - "traefik.http.services.flower-service.loadbalancer.server.port=5555"
-    command: docker/celery/flower/start.sh
+    user: "${UID}:${GID}"
+    command: ["bash", "docker/celery/flower/start.sh"]
     networks:
       - financial_manager
 
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: pgadmin
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
-    ports:
-      - "5050:80"          
-    depends_on:
-      - wallet-db
-      - session-db
+    env_file:
+      - ./pgadmin/.env.local
+    tty: true
+    user: "0:0"
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      USER_DIR=$$(echo \"$$PGADMIN_DEFAULT_EMAIL\" | sed 's/@/_/g');
+      mkdir -p \"/var/lib/pgadmin/storage/$$USER_DIR\";
+      chmod 700 \"/var/lib/pgadmin/storage/$$USER_DIR\";
+      cp -f /pgadmin4/pgpass \"/var/lib/pgadmin/storage/$$USER_DIR/pgpass\";
+      chmod 600 \"/var/lib/pgadmin/storage/$$USER_DIR/pgpass\";
+      chown 5050:5050 \"/var/lib/pgadmin/storage/$$USER_DIR/pgpass\";
+      exec /entrypoint.sh
+      "
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./pgadmin/pgpass:/pgadmin4/pgpass:ro
+    ports:
+      - "5050:80"
     networks:
       - financial_manager
 
@@ -363,6 +360,7 @@ networks:
 volumes:
   session_service_db:
   wallet_service_db:
+  stock_service_db:
   redis_data:
   # esdata:
   financial_mailpit_data:

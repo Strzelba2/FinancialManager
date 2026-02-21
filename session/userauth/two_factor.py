@@ -2,6 +2,7 @@ import hashlib
 import base64
 import pyotp
 import qrcode
+from qrcode.image.svg import SvgImage 
 from io import BytesIO
 from django.conf import settings
 import logging
@@ -69,7 +70,7 @@ class TwoFactor:
         """
         logger.debug("Generating QR code for provisioning URI: *******")
         stream = BytesIO()
-        img = qrcode.make(provisioning_uri, image_factory=qrcode.image.svg.SvgImage)
+        img = qrcode.make(provisioning_uri, image_factory=SvgImage)
         img.save(stream)
         img_str = base64.b64encode(stream.getvalue()).decode()
         logger.debug("Generated QR code") 

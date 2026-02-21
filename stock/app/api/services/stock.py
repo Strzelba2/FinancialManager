@@ -153,7 +153,7 @@ async def ingest_market(session: AsyncSession,
                         key=f"latest_quote:{config.mic}",      
                         field=inst.symbol,
                         value={
-                            "instrument_id": inst.id,
+                            "instrument_id": str(inst.id),
                             "name": inst.shortname,
                             "last_price": str(latest.last_price),
                             "change_pct": str(latest.change_pct),

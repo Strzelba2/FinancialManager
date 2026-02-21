@@ -139,7 +139,7 @@ def month_floor(dt: datetime) -> datetime:
     return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-def month_key(self, dt: Optional[datetime] = None) -> str:
+def month_key(dt: Optional[datetime] = None) -> str:
     """
     Build a YYYY-MM month key in UTC.
 
@@ -153,7 +153,7 @@ def month_key(self, dt: Optional[datetime] = None) -> str:
     return f"{dt.year:04d}-{dt.month:02d}"
 
 
-def prev_month_key(self, key: str) -> str:
+def prev_month_key(key: str) -> str:
     """
     Compute previous month key for a given "YYYY-MM" key.
 

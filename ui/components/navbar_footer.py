@@ -55,8 +55,6 @@ def nav(current: str = '', ctx=None):
                 with ui.button('Makler', icon='account_balance_wallet').props('flat color=white'):
                     with ui.menu().classes('settings-menu') as menu:
                         menu.props('offset=[0,22]')
-                        ui.menu_item('Konta', on_click=lambda: ui.navigate.to('/stock/accounts')).classes('text-white')
-                        ui.separator().classes('bg-white')
                         ui.menu_item('Notowania', on_click=lambda: ui.navigate.to('/stock/quotes/XWAR')).classes('text-white')
                         ui.separator().classes('bg-white')
                         ui.menu_item('Wykresy', on_click=lambda: ui.navigate.to('/stock/charts/XWAR')).classes('text-white')

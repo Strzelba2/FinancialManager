@@ -13,11 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG APP_HOME=/stock_api
 ARG APP_USER=stockUser
 ARG APP_GROUP=stock
+ARG UID=1000
+ARG GID=1000
 
 WORKDIR ${APP_HOME}
 
-RUN groupadd -r ${APP_GROUP} && \
-  useradd -r -g ${APP_GROUP} -d ${APP_HOME} -m ${APP_USER}
+RUN groupadd -g ${GID} -r ${APP_GROUP} && \
+    useradd -u ${UID} -r -g ${APP_GROUP} -d ${APP_HOME} -m ${APP_USER}
 
 
 COPY --chown=${APP_USER}:${APP_GROUP}  . ${APP_HOME}/
@@ -32,5 +34,9 @@ RUN playwright install --with-deps chromium \
 
 RUN sed -i 's/\r$//g' docker/fastapi/start.sh && \
     chmod +x docker/fastapi/start.sh
+
+RUN mkdir -p ${APP_HOME}/logs && \
+    chown -R ${APP_USER}:${APP_GROUP} ${APP_HOME}/logs && \
+    chmod 775 ${APP_HOME}/logs
 
 USER ${APP_USER}

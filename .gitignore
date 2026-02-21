@@ -4,8 +4,14 @@ logs/*
 session/config/.env
 ui/.env
 stock/app/core/.envs/.env.local
-session/static/*
+stock/celerybeat-schedule
+session/static/admin/*
+session/static/jazzmin/*
+session/static/rest_framework/*
+session/static/vendor/*
 wallet/app/core/.envs/.env.local
+pgadmin/.env.local
+pgadmin/pgpass
 *__pycache__
 
 .flake8
@@ -14,4 +20,3 @@ commends.txt
 *.pki
 html_dumps
 
-stock/celerybeat-schedule
