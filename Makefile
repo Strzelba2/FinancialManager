@@ -11,16 +11,16 @@ up:
 	docker compose -f docker-compose.yml up -d --remove-orphans
 
 recreate:
-	docker compose -f docker-compose.yml up -d --remove-orphans --force-recreate
+	UID=$$(id -u) GID=$$(id -g)  docker compose -f docker-compose.yml up -d --remove-orphans --force-recreate
 
 recreate-session:
-	docker compose -f docker-compose.yml up -d --force-recreate session-auth
+	UID=$$(id -u) GID=$$(id -g)   docker compose -f docker-compose.yml up -d --force-recreate session-auth
 
 recreate-wallet:
-	docker compose -f docker-compose.yml up -d --force-recreate wallet-service
+	UID=$$(id -u) GID=$$(id -g)   docker compose -f docker-compose.yml up -d --force-recreate wallet
 
 recreate-stock:
-	docker compose -f docker-compose.yml up -d --force-recreate stock-service
+	UID=$$(id -u) GID=$$(id -g)  docker compose -f docker-compose.yml up -d --force-recreate stock
 
 recreate-pgadmin:
 	UID=$$(id -u) GID=$$(id -g)  docker compose -f docker-compose.yml up -d --force-recreate pgadmin

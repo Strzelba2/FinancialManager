@@ -1,6 +1,6 @@
 
 from nicegui import ui, app
-from fastapi import Request
+from fastapi import Request, Response
 
 from components.navbar_footer import nav, footer
 from static.style import add_style
@@ -54,3 +54,9 @@ async def home(request: Request):
         </ul>
         ''')
     footer()
+
+
+@app.get("/healthz")
+def healthz():
+    return Response(status_code=200)
+

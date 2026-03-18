@@ -12,6 +12,15 @@ session/static/vendor/*
 wallet/app/core/.envs/.env.local
 pgadmin/.env.local
 pgadmin/pgpass
+deploy/infra/prod/secrets.auto.tfvars
+deploy/infra/bootstrap/.terraform/*
+deploy/infra/bootstrap/.terraform.lock.hcl
+deploy/infra/bootstrap/terraform.tfstate
+deploy/infra/bootstrap/terraform.tfstate.backup
+deploy/infra/prod/.terraform/*
+deploy/infra/prod/.terraform.lock.hcl
+deploy/infra/prod/terraform.tfstate
+deploy/infra/prod/terraform.tfstate.backup
 *__pycache__
 
 .flake8

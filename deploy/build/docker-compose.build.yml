@@ -1,0 +1,39 @@
+
+x-build-common: &build_common
+  target: prod
+
+services:
+  fm-wallet:
+    image: ${ECR_REGISTRY}/fm-wallet:${TAG}
+    build:
+      context: ../../wallet
+      dockerfile: docker/fastapi/Dockerfile   
+      <<: *build_common
+
+  fm-stock:
+    image: ${ECR_REGISTRY}/fm-stock:${TAG}
+    build:
+      context: ../../stock
+      dockerfile: docker/fastapi/Dockerfile   
+      <<: *build_common
+
+  fm-session-auth:
+    image: ${ECR_REGISTRY}/fm-session-auth:${TAG}
+    build:
+      context: ../../session
+      dockerfile: docker/session/Dockerfile  
+      <<: *build_common
+
+  fm-nice-ui:
+    image: ${ECR_REGISTRY}/fm-nice-ui:${TAG}
+    build:
+      context: ../../ui
+      dockerfile: docker/Dockerfile         
+      <<: *build_common
+
+  fm-pgadmin:
+    image: ${ECR_REGISTRY}/fm-pgadmin:${TAG}
+    build:
+      context: ../../pgadmin
+      dockerfile: Dockerfile
+      <<: *build_common

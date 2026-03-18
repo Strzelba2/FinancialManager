@@ -27,9 +27,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+ENV_TYPE = config("ENV_TYPE", default="local")
+DEBUG = ENV_TYPE != "prod"
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [h.strip() for h in config("ALLOWED_HOSTS", default="").split(",") if h.strip()]
 
 # Application definition
 
@@ -71,7 +72,13 @@ REST_FRAMEWORK = {
 }
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
+    "django.middleware.security.SecurityMiddleware",
+]
+
+if not DEBUG:
+    MIDDLEWARE += ["whitenoise.middleware.WhiteNoiseMiddleware"]
+
+MIDDLEWARE += [
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -82,7 +89,6 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
-
 
 ROOT_URLCONF = 'config.urls'
 
@@ -156,7 +162,19 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
-STATIC_ROOT = os.path.join(BASE_DIR, 'static/')
+STATICFILES_DIRS = [
+    BASE_DIR / "static",
+]
+
+if not DEBUG:
+    STATIC_ROOT = BASE_DIR / "staticfiles"
+    STORAGES = {
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        }
+    }
+else:
+    STATIC_ROOT = os.path.join(BASE_DIR, 'static/')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -165,9 +183,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'userauth.User'
 
-WALLET_DOMAIN = config("WALLET_DOMAIN")
-SESSION_DOMAIN = config("SESSION_DOMAIN")
-APP_PROTOCOL = config("APP_PROTOCOL")
+WALLET_DOMAIN = config("WALLET_DOMAIN", default="")
+UI_DOMAIN = config("UI_DOMAIN", default="")
+SESSION_DOMAIN = config("SESSION_DOMAIN", default="")
+APP_PROTOCOL = config("APP_PROTOCOL", default="http")
 
 PASSWORD_RESET_TIMEOUT = 120
 
@@ -188,7 +207,7 @@ ADMIN_FAILURE_LIMIT = int(config("ADMIN_FAILURE_LIMIT"))
 ADMIN_TEMPORARY_BLOCK_TIME = int(config("ADMIN_TEMPORARY_BLOCK_TIME"))
 USER_TEMPORARY_BLOCK_TIME = int(config("USER_TEMPORARY_BLOCK_TIME"))
 
-ADMIN_ALLOWED_IPS = config("ADMIN_ALLOWED_IPS")
+ADMIN_ALLOWED_IPS = config("ADMIN_ALLOWED_IPS", cast=literal_eval)
 ALLOWED_WALLET_IPS = config("ALLOWED_WALLET_IPS", cast=literal_eval)
 
 RECAPTCHA_PUBLIC_KEY = config("RECAPTCHA_PUBLIC_KEY")
@@ -229,74 +248,113 @@ SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SESSION_COOKIE_AGE = 1800
 
+ENV_TYPE = config("ENV_TYPE", default="local")
+LOG_TO_STDOUT = ENV_TYPE == "prod"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO" if ENV_TYPE == "prod" else "DEBUG")
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'formatters': {
         'json': {
             '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
-            'format': '%(levelname)s %(name)-12s %(asctime)s %(module)s %(process)d %(thread)d %(message)s',
+            'format': '%(levelname)s %(name)-12s %(asctime)s %(module)s %(process)d %(thread)d %(channel)s %(message)s',
+        },
+    },
+    "filters": {
+        "ch_session": {
+            "()": "config.logging_filters.ChannelFilter",
+            "channel": "session-auth",
+        },
+        "ch_request": {
+            "()": "config.logging_filters.ChannelFilter",
+            "channel": "request",
+        },
+        "ch_admin": {
+            "()": "config.logging_filters.ChannelFilter",
+            "channel": "admin",
+        },
+        "ch_root": {
+            "()": "config.logging_filters.ChannelFilter",
+            "channel": "root",
         },
     },
     'handlers': {
         'file': {
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/django.json'), 
             'formatter': 'json',
+            "filters": ["ch_session"],
         },
         'request': {
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/request.json'),
             'formatter': 'json',
+            "filters": ["ch_request"],
         },
         'admin': {
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/admin.json'),
             'formatter': 'json',  
+            "filters": ["ch_admin"],
         },
         'root': {
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/root.json'),
             'formatter': 'json',
+            "filters": ["ch_root"],
         },
         'console': {
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'class': 'logging.StreamHandler',
             'formatter': 'json',
+            "filters": ["ch_root"],
         },
     },
     'loggers': {
         'session-auth': {
             'handlers': ['file'],
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'propagate': False,
         },
         'request': {
             'handlers': ['request'],
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'propagate': False,
         },
         'admin': {
             'handlers': ['admin'],
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'propagate': False,
         },
         'root': {
             'handlers': ['console', 'root'],
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
         },
     },
 }
 
+if LOG_TO_STDOUT:
+
+    for h_name in ("file", "request", "admin", "root"):
+        LOGGING["handlers"][h_name]["class"] = "logging.StreamHandler"
+        LOGGING["handlers"][h_name].pop("filename", None)
+
+    LOGGING["root"] = {
+        "handlers": ["console"],
+        "level": LOG_LEVEL,
+    }
+
+REDIS_URL = config("REDIS_URL", default="redis://redis:6379/1")
 
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': 'redis://redis:6379/1',
+        'LOCATION': REDIS_URL,
         'OPTIONS': {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
         },
@@ -304,3 +362,13 @@ CACHES = {
         'KEY_PREFIX': '',
     }
 }
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = False
+    EMAIL_USE_TLS = True
+    EMAIL_USE_SSL = False
+    EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")

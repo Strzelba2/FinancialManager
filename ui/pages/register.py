@@ -7,6 +7,7 @@ from components.navbar_footer import nav, footer
 from static.style import add_style
 from utils.validators import is_valid_email, is_valid_password
 from utils.utils import generate_csrf_token, handle_api_error
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +95,25 @@ class RegisterForm:
                         
     def create_headers(self):
         headers = dict(self.headers)
+        for key in (
+            "host",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-forwarded-port",
+            "x-forwarded-server",
+            "x-forwarded-for",
+            "x-real-ip",
+            "referer",
+            "origin",
+            "accept",
+            "content-length",
+            "connection",
+        ):
+            headers.pop(key, None)
+            headers.pop(key.title(), None)
         headers['X-Forwarded-For'] = self.client.host
-        headers["Referer"] = "http://wallet.localhost:8081/register/"
+        headers["Referer"] = f"{settings.UI_API_URL}register/"
+        headers["Origin"] = f"{settings.UI_API_URL}"
         headers["Accept"] = "application/json"
         return headers
                     
@@ -128,7 +146,7 @@ class RegisterForm:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    "http://session-auth:8000/register/",
+                    f"{settings.AUTH_URL}register/",
                     json={
                         "first_name": self.first_name.value,
                         "last_name": self.last_name.value,
@@ -148,6 +166,7 @@ class RegisterForm:
                               ).props('unelevated color="primary"').classes('full-width q-mt-md')
                 await self.confirm_register()  
             else:
+                logger.error(f"Registration failed: {response.status_code} - {response.text}")
                 error_text = handle_api_error(response)
                 ui.notify(f'Rejestracja nieudana:\n{error_text}', color='negative', close_button=True, multi_line=True)
                 

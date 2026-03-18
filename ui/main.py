@@ -29,25 +29,36 @@ from nicegui import ui, app
 from nicegui.client import Client
 from nicegui.page import page
 
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__)))
-
-log_file = os.path.join(ROOT_DIR, 'logs', 'ui.json')
+env_type = os.getenv("ENV_TYPE", "local")
+log_to_stdout = env_type == "prod"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO" if env_type == "prod" else "DEBUG")
 
 logger = logging.getLogger()
-logHandler = logging.FileHandler(log_file, encoding='utf-8')
-
-log_format = (
-    '%(levelname)s %(name)-12s %(asctime)s %(module)s %(process)d %(thread)d %(message)s'
-)
-
-formatter = jsonlogger.JsonFormatter(log_format)
-logHandler.setFormatter(formatter)
+logger.setLevel(LOG_LEVEL)
 
 if logger.hasHandlers():
     logger.handlers.clear()
 
+
+log_format = (
+    '%(levelname)s %(name)-12s %(asctime)s %(module)s %(process)d %(thread)d %(message)s'
+)
+formatter = jsonlogger.JsonFormatter(log_format)
+
+if log_to_stdout:
+    logHandler = logging.StreamHandler()
+else:
+    ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+    log_file = os.path.join(ROOT_DIR, 'logs', 'ui.json')
+    logHandler = logging.FileHandler(log_file, encoding='utf-8')
+
+logHandler.setFormatter(formatter)
+
 logger.addHandler(logHandler)
-logger.setLevel(logging.DEBUG)
+
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
+if env_type == "prod" and not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY must be set in prod")
 
 app.add_middleware(ClientDataMiddleware)
 
@@ -101,8 +112,8 @@ async def _exception_handler(request: Request, exception: Exception) -> Response
         elif isinstance(exception, UnauthorizedError):
             status = 401
             pages.error.error_page(status, str(exception))
-     
-        pages.error.error_page(status, str(exception))       
+        else:
+            pages.error.error_page(status, str(exception))       
     return client.build_response(request, status)
     
     
@@ -111,16 +122,9 @@ def handle_page_error(exception: Exception) -> None:
     logger.exception(f'Unhandled page exception: {type(exception)}', 
                      exc_info=(type(exception), exception, exception.__traceback__))
 
-    if isinstance(exception, NameError) or isinstance(exception, TypeError):
+    if isinstance(exception, (NameError, TypeError, AttributeError, RuntimeError)):
         raise InternalServerError("Unexpected error occurred on the page.")
-    if isinstance(exception, AttributeError):
-        raise InternalServerError("Unexpected error occurred on the page.")
-    if isinstance(exception, RuntimeError):
-        raise InternalServerError("Unexpected error occurred on the page.")
-  
     
-SECRET_KEY = os.environ.get("SECRET_KEY")
-
 
 if __name__ in {"__main__", "__mp_main__"}:
     

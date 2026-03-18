@@ -23,6 +23,7 @@ services:
     build: 
       context: ./session
       dockerfile: docker/session/Dockerfile
+      target: dev
     env_file: ./session/config/.env
     labels:
       - "traefik.enable=true"
@@ -87,6 +88,7 @@ services:
       args:
         UID: ${UID}
         GID: ${GID}
+      target: dev
     volumes:
       - ./ui:/app
       - ./logs/ui:/app/logs
@@ -141,6 +143,7 @@ services:
       args:
         UID: ${UID}
         GID: ${GID}
+      target: dev
     volumes:
       - ./wallet:/wallet_api
       - ./logs/wallet:/wallet_api/logs
@@ -162,6 +165,7 @@ services:
       args:
         UID: ${UID}
         GID: ${GID}
+      target: dev
     volumes:
       - ./stock:/stock_api
       - ./logs/stock:/stock_api/logs
@@ -180,6 +184,7 @@ services:
     build:
       context: ./stock
       dockerfile: docker/fastapi/Dockerfile
+      target: dev
     volumes:
       - ./stock:/stock_api
       - ./logs/stock:/stock_api/logs
@@ -210,6 +215,7 @@ services:
     build:
       context: ./stock
       dockerfile: docker/fastapi/Dockerfile
+      target: dev
     volumes:
       - ./stock:/stock_api
       - ./logs/stock:/stock_api/logs
@@ -285,6 +291,7 @@ services:
     build: 
       context: ./session
       dockerfile: docker/session/Dockerfile
+      target: dev
     env_file: ./session/config/.env
     volumes:
       - ./session:/session_auth
@@ -362,7 +369,6 @@ volumes:
   wallet_service_db:
   stock_service_db:
   redis_data:
-  # esdata:
   financial_mailpit_data:
   financial_rabbitmq_data:
   pgadmin_data:

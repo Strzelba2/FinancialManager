@@ -6,7 +6,7 @@ from django.contrib.auth import logout
 from django.http import HttpRequest, HttpResponse
 
 
-from utils.utils import get_client_ip
+from utils.utils import get_client_ip, parse_allowed, is_ip_allowed
 from userauth.models import BlockedIP, User
 
 import logging
@@ -40,7 +40,7 @@ class AdminLoginBlockMiddleware:
         self.get_response = get_response
         self.failure_limit: int = settings.ADMIN_FAILURE_LIMIT
         self.block_time: int = settings.ADMIN_TEMPORARY_BLOCK_TIME
-        self.allowed_ips: Iterable[str] = getattr(settings, "ADMIN_ALLOWED_IPS", ())
+        self.allowed_ips: list[str] = parse_allowed(getattr(settings, "ADMIN_ALLOWED_IPS", ()))
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
         """
@@ -52,6 +52,16 @@ class AdminLoginBlockMiddleware:
         Non-admin routes pass through unchanged.
         """
 
+        logger.warning(
+            f"csrf debug | "
+            f"is_secure={request.is_secure()} | "
+            f"host={request.get_host()} | "
+            f"origin={request.META.get('HTTP_ORIGIN')} | "
+            f"referer={request.META.get('HTTP_REFERER')} | "
+            f"x_forwarded_proto={request.META.get('HTTP_X_FORWARDED_PROTO')} | "
+            f"csrf_cookie_present={'csrftoken' in request.COOKIES}"
+        )
+
         resolver_match = resolve(request.path_info) 
         
         # Only act within the admin namespace 
@@ -61,9 +71,16 @@ class AdminLoginBlockMiddleware:
         ip: str = get_client_ip(request)
         
         # 1) IP allow-list check
-        if ip not in self.allowed_ips:
-            logger.warning("Admin access denied: IP not allow-listed")
-            return self.forbidden_response(request, "This IP address cannot access the site")
+        if not is_ip_allowed(ip, self.allowed_ips):
+            logger.warning(
+                f"Admin allowlist debug | "
+                f"resolved_ip={ip} | "
+                f"REMOTE_ADDR={request.META.get('REMOTE_ADDR')} | "
+                f"HTTP_X_FORWARDED_FOR={request.META.get('HTTP_X_FORWARDED_FOR')} | "
+                f"HTTP_X_REAL_IP={request.META.get('HTTP_X_REAL_IP')} | "
+                f"allowed_ips={self.allowed_ips}"
+            )
+            return self.forbidden_response(request, f"This IP address ({ip}) cannot access the site")
 
         # 2) Blocked IP check
         if self.is_ip_blocked(ip, request):

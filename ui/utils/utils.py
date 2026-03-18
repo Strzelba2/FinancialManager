@@ -8,6 +8,8 @@ from datetime import datetime
 from decimal import Decimal
 import uuid
 from typing import Optional, Any
+from ipaddress import ip_address
+from fastapi import Request
 
 logger = logging.getLogger(__name__)
 
@@ -523,3 +525,37 @@ def parse_decimal(v: Any) -> Optional[Decimal]:
         return Decimal(s)
     except Exception as ex:
         raise ValueError(f"Invalid decimal value: {ex!r}") 
+
+
+def get_browser_ip_from_request(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    x_real_ip = request.headers.get("x-real-ip", "")
+    remote_addr = request.client.host if request.client else ""
+
+    candidates: list[str] = []
+
+    if xff:
+        candidates.extend([ip.strip() for ip in xff.split(",") if ip.strip()])
+
+    if x_real_ip:
+        candidates.append(x_real_ip.strip())
+
+    if remote_addr:
+        candidates.append(remote_addr.strip())
+
+    for ip in candidates:
+        try:
+            parsed = ip_address(ip)
+            if parsed.is_global:
+                return ip
+        except ValueError:
+            continue
+
+    for ip in candidates:
+        try:
+            ip_address(ip)
+            return ip
+        except ValueError:
+            continue
+
+    return ""

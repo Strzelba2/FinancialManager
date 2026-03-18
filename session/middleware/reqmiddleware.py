@@ -51,7 +51,7 @@ class RequestMiddleware:
         referer = request.META.get("HTTP_REFERER", "")
         path = request.META.get("PATH_INFO", "").strip('/').split('/')[0]
         
-        if path in ["admin", "static", "activate", "crypto"]:
+        if path in ["admin", "static", "activate", "crypto", "healthz"]:
             return self.get_response(request)
 
         blocked_ip = BlockedIP.objects.filter(ip_address=ip).first()
@@ -60,7 +60,7 @@ class RequestMiddleware:
             if not blocked_ip.is_temporary:
                 return formatted_response(request,
                                           {"error": "Your IP has been blocked, please contact the administrator.",
-                                           "href": f"http://{settings.WALLET_DOMAIN}/home",
+                                           "href": f"{settings.APP_PROTOCOL}://{settings.WALLET_DOMAIN}/home",
                                            "text": "Go Home Page"},
                                           template_name="403.html",
                                           status=403,
@@ -93,8 +93,14 @@ class RequestMiddleware:
                                           status=400)
         
             parsed = urlparse(referer)
-            if parsed.netloc != settings.WALLET_DOMAIN:
-                logger.warning("Invalid referer domain")
+            allowed_domains = {
+                getattr(settings, "WALLET_DOMAIN", ""),
+                getattr(settings, "UI_DOMAIN", ""),
+            }
+
+            allowed_domains = {domain for domain in allowed_domains if domain}
+            if parsed.netloc not in allowed_domains:
+                logger.warning(f"Invalid referer domain: {parsed.netloc}")
                 return formatted_response(request,
                                           {"error": "Incorrect request",
                                            "href": "javascript:history.back()",
@@ -108,12 +114,12 @@ class RequestMiddleware:
             if request.user.is_two_factor:
                 if not request.user.is_verified:
                     logger.info("Redirecting unverified 2FA user to verification page")
-                    return HttpResponseRedirect(f"http://{settings.WALLET_DOMAIN}/two_factor")
+                    return HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{settings.WALLET_DOMAIN}/two_factor")
         else:
             logger.info("Unauthenticated access attempt")
             return formatted_response(request,
                                       {'error': 'User do not have permison to this site, Please login',
-                                       "href": f"http://{settings.WALLET_DOMAIN}/login",
+                                       "href": f"{settings.APP_PROTOCOL}://{settings.WALLET_DOMAIN}/login",
                                        "text": "Go to Login"},
                                       template_name="401.html",
                                       status=401)

@@ -5,6 +5,7 @@ from fastapi import Request
 import httpx
 
 from utils.utils import handle_api_error
+from config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ async def logout(request: Request):
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "http://session-auth:8000/logout/",
+                f"{settings.AUTH_URL}logout/",
                 headers=create_headers(request),
                 cookies=request.cookies,
                 timeout=10

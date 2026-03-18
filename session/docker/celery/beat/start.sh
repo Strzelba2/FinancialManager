@@ -1,8 +1,19 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -o errexit
-set -o nounset
+: "${ENV_TYPE:=local}"
 
-rm -f './celerybeat.pid'
+PIDFILE="${CELERY_BEAT_PIDFILE:-/tmp/celerybeat.pid}"
+rm -f "${PIDFILE}"
 
-exec watchfiles --filter python celery.__main__.main --args '-A config.celery_session beat -l INFO'
+APP="config.celery_session"
+
+if [[ "${ENV_TYPE}" == "prod" ]]; then
+  exec celery -A "${APP}" beat \
+    -l INFO \
+    --pidfile="${PIDFILE}"
+else
+  exec watchfiles --filter python \
+    "celery.__main__.main" \
+    --args "-A ${APP} beat -l INFO --pidfile=${PIDFILE}"
+fi

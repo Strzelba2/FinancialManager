@@ -8,9 +8,12 @@ from components.navbar_footer import nav, footer
 from services.current_user import clear_current_user_cache
 from storage.session_state import clear_state
 from static.style import add_style
-from utils.utils import generate_csrf_token, handle_api_error
+from utils.utils import (
+    generate_csrf_token, handle_api_error, get_browser_ip_from_request
+)
 from utils.validators import is_valid_email, is_valid_password
 from exceptions import UnauthorizedError
+from config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,7 @@ class LoginForm:
         self.cookies = request.cookies
         self.client = request.client
         self.query_params = request.query_params
+        self.request = request
         self.token = generate_csrf_token()
         
         self.dialog = ui.dialog()
@@ -52,9 +56,40 @@ class LoginForm:
         
     def create_headers(self):
         headers = dict(self.headers)
+        browser_ip = get_browser_ip_from_request(self.request)
+
+        logger.info(f"header manipulation | original_headers={self.headers} | browser_ip={browser_ip}")
+
+        for key in (
+            "host",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-forwarded-port",
+            "x-forwarded-server",
+            "x-forwarded-for",
+            "x-real-ip",
+            "referer",
+            "origin",
+            "accept",
+            "content-length",
+            "connection",
+        ):
+            headers.pop(key, None)
+            headers.pop(key.title(), None)
+        
+        headers["X-Original-Client-IP"] = browser_ip
         headers['X-Forwarded-For'] = self.client.host
-        headers["Referer"] = "http://wallet.localhost:8081/login/"
+        headers["Referer"] = f"{settings.UI_API_URL}login/"
+        headers["Origin"] = f"{settings.UI_API_URL}"
         headers["Accept"] = "application/json"
+
+        logger.info(
+            f"login proxy headers | "
+            f"browser_ip={browser_ip} | "
+            f"incoming_xff={self.request.headers.get('x-forwarded-for')} | "
+            f"incoming_x_real_ip={self.request.headers.get('x-real-ip')} | "
+            f"request_client_host={self.request.client.host if self.request.client else ''}"
+        )
         return headers
         
     def build_ui(self):
@@ -149,7 +184,7 @@ class LoginForm:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    "http://session-auth:8000/login/",
+                    f"{settings.AUTH_URL}login/",
                     json={
                         "email": self.email.value,
                         "password": self.password.value,

@@ -254,7 +254,7 @@ class LoginView(APIView):
                 if getattr(user, "is_two_factor", False):
                     if not getattr(user, "is_verified", False):
                         logger.info("Redirecting to 2FA verification.")
-                        return HttpResponseRedirect(f"http://{settings.WALLET_DOMAIN}/two_factor")
+                        return HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{settings.WALLET_DOMAIN}/two_factor")
 
                 response = Response({"message": "Login successful"}, status=status.HTTP_200_OK)
                 
@@ -347,14 +347,14 @@ class VerifySessionView(APIView):
             logger.warning("Missing authorization data for session verification.")
             return formatted_response(request,
                                       {"error": "Missing authorizaton data.",
-                                       "href": f"http://{settings.WALLET_DOMAIN}/login",
+                                       "href": f"{settings.APP_PROTOCOL}://{settings.UI_DOMAIN}/login",
                                        "text": "Go to Login"},
                                       template_name="401.html",
                                       status=401)
             
         if not request.user or not request.user.is_authenticated:
             logger.info("Unauthenticated user during session verification; redirecting.")
-            return HttpResponseRedirect(f"http://{settings.WALLET_DOMAIN}/login")
+            return HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{settings.UI_DOMAIN}/login")
         
         try:
             timestamp, provided_hmac = unquote(hmac_token).strip('"').split(":")
@@ -363,7 +363,7 @@ class VerifySessionView(APIView):
             logger.warning(f"Failed to parse hmac token: {e}")
             return formatted_response(request,
                                       {"error": "Invalid HMAC format.",
-                                       "href": f"http://{settings.WALLET_DOMAIN}/login",
+                                       "href": f"{settings.APP_PROTOCOL}://{settings.UI_DOMAIN}/login",
                                        "text": "Go to Login"},
                                       template_name="400.html",
                                       status=400)
@@ -371,7 +371,7 @@ class VerifySessionView(APIView):
         if not HmacToken.is_valid_hmac(provided_hmac, request, timestamp):
             logger.warning(f"HMAC verification failed for user {request.user.username}")
             logout(request)
-            response = HttpResponseRedirect(f"http://{settings.WALLET_DOMAIN}/login")
+            response = HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{settings.UI_DOMAIN}/login")
             return response
         
         timestamp = int(time.time())
