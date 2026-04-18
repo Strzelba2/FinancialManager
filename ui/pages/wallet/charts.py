@@ -13,7 +13,7 @@ from components.navbar_footer import footer
 from .quotes import MIC_CHOICES, MIC_BY_CODE
 from static.style import add_style, add_user_style, add_table_style
 from components.context.chart.chart_draw import ChartsDrawMixin
-from utils.utils import parse_date
+from utils.utils import parse_date, read_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +331,11 @@ class ChartsPage(NavContextBase, ChartsDrawMixin):
                     async def _on_render():
                         await self.sync_and_render()
 
+                    ui.button(
+                        "Import CSV",
+                        icon="upload_file",
+                        on_click=self._open_import_csv_dialog,
+                    ).props("flat color=primary")
                     ui.button("Sync & Render", on_click=_on_render).props("unelevated color=primary")
 
         self.chart_type.on("update:model-value", lambda e: self._set_state("chart_type", e.sender.value))
@@ -396,6 +401,138 @@ class ChartsPage(NavContextBase, ChartsDrawMixin):
         self.status_label.text = f"Ready ({len(options)} instruments)"
         self.status_label.update()
 
+    def _resolve_requested_range(self) -> tuple[Optional[date], Optional[date], bool]:
+        return_all = True
+
+        d_from = parse_date(self.state.get("date_from"))
+        d_to = parse_date(self.state.get("date_to"))
+
+        if d_from:
+            return_all = False
+            if not d_to:
+                d_to = date.today()
+                self.state["date_to"] = d_to.strftime("%Y-%m-%d")
+                logger.info(f"Auto-filled date_to with today: {self.state['date_to']}")
+
+        return d_from, d_to, return_all
+
+    def _store_sync_response(self, symbol: str, res) -> None:
+        items = (res.items or []) if getattr(res, "items", None) is not None else []
+        self._data_cache[symbol] = [
+            it.model_dump() if hasattr(it, "model_dump") else dict(it)
+            for it in items
+        ]
+        self._instrument_names[symbol] = (res.sync.name or "").strip()
+
+        logger.info(
+            f"sync/import ok: {symbol} fetched={res.sync.fetched_rows} "
+            f"upserted={res.sync.upserted_rows} returned={res.returned_count}"
+        )
+
+    def _open_import_csv_dialog(self) -> None:
+        symbols = list(self.state["selected_symbols"] or [])
+        if len(symbols) != 1:
+            ui.notify("Select exactly one instrument before importing CSV", color="warning")
+            return
+
+        symbol = symbols[0]
+        dlg = ui.dialog()
+
+        with dlg, ui.card().classes("w-[min(560px,95vw)]"):
+            ui.label("Import dziennych świec z pliku CSV").classes("text-base font-semibold")
+            ui.label(
+                f"Instrument: {symbol}. Oczekiwany format: Date,Open,High,Low,Close,Volume."
+            ).classes("text-sm text-grey-7")
+            ui.label(
+                "Obsługiwane są separatory przecinek i średnik."
+            ).classes("text-sm text-grey-7")
+            import_status = ui.label("").classes("text-sm text-grey-7")
+
+            async def on_upload(e) -> None:
+                filename = (
+                    str(getattr(e, "name", "") or "").strip()
+                    or str(getattr(getattr(e, "content", None), "name", "") or "").strip()
+                    or f"{symbol}.csv"
+                )
+
+                try:
+                    file_bytes = read_bytes(e.content)
+                except Exception:
+                    logger.exception("ChartsPage import CSV: failed to read uploaded content")
+                    import_status.text = "Nie udało się odczytać pliku."
+                    import_status.update()
+                    ui.notify("Could not read uploaded file", color="negative")
+                    upload.run_method("reset")
+                    return
+
+                d_from, d_to, return_all = self._resolve_requested_range()
+
+                import_status.text = f"Importing {filename}…"
+                import_status.update()
+                self.status_label.text = "Importing CSV…"
+                self.status_label.update()
+
+                res = await self.stock_client.import_daily_candles_csv(
+                    symbol=symbol,
+                    filename=filename,
+                    content=file_bytes,
+                    date_from=d_from,
+                    date_to=d_to,
+                    include_items=True,
+                    return_all=return_all,
+                )
+
+                if res is None:
+                    detail = getattr(self.stock_client, "last_error", None)
+                    msg = detail or f"Import failed: {symbol}"
+                    import_status.text = msg
+                    import_status.update()
+                    self.status_label.text = "Ready"
+                    self.status_label.update()
+                    ui.notify(msg, color="negative", close_button="Close", timeout=0)
+                    logger.warning(f"ChartsPage CSV import failed: {msg}")
+                    upload.run_method("reset")
+                    return
+
+                self._data_cache.clear()
+                self._instrument_names.clear()
+                self._store_sync_response(symbol, res)
+
+                self.status_label.text = "Rendering…"
+                self.status_label.update()
+                self.render_charts_from_cache()
+                self.status_label.text = "Done"
+                self.status_label.update()
+
+                import_status.text = (
+                    f"Imported {res.sync.upserted_rows} rows from {filename}."
+                )
+                import_status.update()
+                ui.notify(
+                    f"{symbol}: imported {res.sync.upserted_rows} candle rows",
+                    color="positive",
+                )
+                upload.run_method("reset")
+                dlg.close()
+
+            upload = (
+                ui.upload(
+                    label="Drop CSV here or click",
+                    on_upload=on_upload,
+                    on_rejected=lambda: ui.notify(
+                        "This file type is not allowed here",
+                        color="negative",
+                    ),
+                )
+                .props("accept=.csv,.txt max-files=1")
+                .style("width:100%")
+            )
+
+            with ui.row().classes("justify-end gap-2 q-mt-sm"):
+                ui.button("Close", on_click=dlg.close).props("flat")
+
+        dlg.open()
+
     async def sync_and_render(self) -> None:
         """
         Sync candles for selected symbols and render charts.
@@ -412,18 +549,8 @@ class ChartsPage(NavContextBase, ChartsDrawMixin):
         if not symbols:
             ui.notify("Select at least one instrument", type="warning")
             return
-        
-        return_all = True
 
-        d_from = parse_date(self.state.get("date_from"))
-        d_to = parse_date(self.state.get("date_to"))
-        
-        if d_from:
-            return_all = False
-            if not d_to:
-                d_to = date.today()
-                self.state["date_to"] = d_to.strftime("%Y-%m-%d")
-                logger.info(f"Auto-filled date_to with today: {self.state['date_to']}")
+        d_from, d_to, return_all = self._resolve_requested_range()
 
         self.status_label.text = "Syncing…"
         self.status_label.update()
@@ -442,17 +569,13 @@ class ChartsPage(NavContextBase, ChartsDrawMixin):
             )
             
             if res is None:
-                ui.notify(f"Sync failed: {sym}", type="negative")
+                detail = getattr(self.stock_client, "last_error", None)
+                msg = f"{sym}: {detail}" if detail else f"Sync failed: {sym}"
+                ui.notify(msg, type="negative")
+                logger.warning(f"ChartsPage.sync_and_render failed: {msg}")
                 continue
 
-            items = (res.items or []) if getattr(res, "items", None) is not None else []
-            self._data_cache[sym] = [it.model_dump() if hasattr(it, "model_dump") else dict(it) for it in items]
-            self._instrument_names[sym] = (res.sync.name or "").strip()
-            
-            logger.info(
-                f"sync ok: {sym} fetched={res.sync.fetched_rows} upserted={res.sync.upserted_rows} "
-                f"returned={res.returned_count}"
-            )
+            self._store_sync_response(sym, res)
 
         self.status_label.text = "Rendering…"
         self.status_label.update()

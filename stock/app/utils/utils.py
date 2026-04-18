@@ -1,4 +1,5 @@
 import asyncio
+import csv
 from typing import Optional
 from datetime import date
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
@@ -7,6 +8,45 @@ import httpx
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_like_daily_csv(text: str) -> bool:
+    """
+    Heuristically validate that the upstream body looks like a daily OHLC CSV.
+
+    Source sometimes returns `blad.txt` with HTTP 200. In that case the body is
+    plain text rather than a CSV table. We keep the check lightweight here and
+    accept either a header row (`Date,...`) or a first data row
+    (`YYYY-MM-DD,...`) with at least OHLC columns.
+    """
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("\ufeff")
+        if not line:
+            continue
+
+        cols = next(csv.reader([line]), [])
+        if len(cols) < 5:
+            return False
+
+        first = (cols[0] or "").strip().lower()
+        if first in {"date", "data"}:
+            return True
+
+        if len(first) == 10 and first[4:5] == "-" and first[7:8] == "-":
+            yyyy, mm, dd = first[:4], first[5:7], first[8:10]
+            return yyyy.isdigit() and mm.isdigit() and dd.isdigit()
+
+        return False
+
+    return False
+
+
+def _compact_body_snippet(text: str, limit: int = 160) -> str:
+    """
+    Compress response text into a short single-line snippet for logs/errors.
+    """
+    snippet = " ".join(part.strip() for part in text.splitlines() if part.strip())
+    return snippet[:limit]
 
 
 def build_st_url(
@@ -52,7 +92,7 @@ def build_st_url(
     else:
         q.pop("d1", None)
 
-    if end is not None:
+    if start is not None and end is not None:
         q["d2"] = [end.strftime("%Y%m%d")]
     else:
         q.pop("d2", None)
@@ -88,7 +128,31 @@ async def download_text_csv(url: str, timeout_s: float = 30.0, retries: int = 3)
             async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
                 r = await client.get(url, headers={"Accept": "text/csv,text/plain,*/*"})
                 r.raise_for_status()
-                return r.text
+                text = r.text
+                content_disposition = (r.headers.get("content-disposition") or "").lower()
+
+                if "blad.txt" in content_disposition:
+                    snippet = _compact_body_snippet(text)
+                    logger.error(
+                        f"download_text_csv upstream returned error payload "
+                        f"url={url} content_disposition={content_disposition!r} snippet={snippet!r}"
+                    )
+                    raise UpstreamDownloadError(
+                        f"Upstream returned error payload for {url}: {snippet or 'blad.txt'}"
+                    )
+
+                if not _looks_like_daily_csv(text):
+                    snippet = _compact_body_snippet(text)
+                    logger.error(
+                        f"download_text_csv upstream returned non-CSV payload "
+                        f"url={url} content_type={r.headers.get('content-type')!r} "
+                        f"content_disposition={content_disposition!r} snippet={snippet!r}"
+                    )
+                    raise UpstreamDownloadError(
+                        f"Upstream returned non-CSV payload for {url}: {snippet or 'empty body'}"
+                    )
+
+                return text
 
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
             last_exc = e

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Depends, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import List, Any
 import asyncio
 import uuid
@@ -13,14 +13,16 @@ from app.schemas.schemas import (
 )
 from app.schemas.quates import (
     LatestQuoteBySymbol, QuotesBySymbolsRequest, CandleDailyOut, SyncDailyResponse,
-    SyncDailyRequest
+    SyncDailyRequest, ImportDailyCsvRequest, SyncDailyResult
 )
 from app.crud.market import list_markets
 from app.crud.instrument import (
     list_instruments, search_instruments_by_shortname_or_name, get_instrument_by_symbol,
     get_instrument_with_market_by_mic_symbol
 )
-from app.api.services.quotes import get_latest_quotes_by_symbols, sync_daily_by_symbol
+from app.api.services.quotes import (
+    get_latest_quotes_by_symbols, sync_daily_by_symbol, import_daily_csv_by_symbol,
+)
 from app.crud.candle_daily import list_candles_daily
 from app.markerdata.registry import get_provider
 from app.api.services.stock import ingest_market
@@ -28,6 +30,45 @@ from app.api.services.stock import ingest_market
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+async def _build_sync_daily_response(
+    session: AsyncSession,
+    instrument_id: uuid.UUID,
+    sync_res: SyncDailyResult,
+    include_items: bool,
+    return_all: bool,
+    date_from: date | None,
+    date_to: date | None,
+) -> SyncDailyResponse:
+    if not include_items:
+        return SyncDailyResponse(
+            sync=sync_res,
+            items_included=False,
+            returned_count=0,
+            items=None,
+        )
+
+    if return_all:
+        q_from, q_to = None, None
+    else:
+        q_from = date_from if date_from is not None else sync_res.sync_start
+        q_to = date_to if date_to is not None else sync_res.sync_end
+
+    items_db = await list_candles_daily(
+        session,
+        instrument_id=instrument_id,
+        date_from=q_from,
+        date_to=q_to,
+    )
+    items = [CandleDailyOut.model_validate(x) for x in items_db]
+
+    return SyncDailyResponse(
+        sync=sync_res,
+        items_included=True,
+        returned_count=len(items),
+        items=items,
+    )
 
 
 @router.get("quotes/latest")
@@ -81,12 +122,13 @@ async def get_latest_bulk(
         HTTPException(404): If there are no quotes for the given MIC.
     """
     logger.info(f"Request: get_latest_bulk mic={mic!r}")
-    
-    root = (await get_latest_bulk_service(session, mic)).model_dump(mode="json")
-    if not root:
+
+    data = await get_latest_bulk_service(session, mic)
+    if data is None or not data.root:
         logger.warning(f"No bulk quotes found for mic={mic!r}")
         raise HTTPException(status_code=404, detail="No quotes for MIC")
-    
+
+    root = data.model_dump(mode="json")
     logger.debug(f"Bulk latest quotes response for mic={mic!r}: {root}")
     return root
 
@@ -298,71 +340,110 @@ async def sync_daily_candles(
         raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
 
     await session.rollback()
-    async with session.begin():
+    try:
         sync_res = await sync_daily_by_symbol(
             session,
             symbol=symbol,
             overlap_days=payload.overlap_days,
         )
-
-    if not payload.include_items:
-        logger.info(
-            f"daily sync endpoint: symbol={symbol} fetched={sync_res.fetched_rows} "
-            f"upserted={sync_res.upserted_rows} returned=0 (include_items=False)"
-        )
-        return SyncDailyResponse(
-            sync=sync_res,
-            items_included=False,
-            returned_count=0,
-            items=None,
-        )
-
-    if payload.return_all:
-        q_from, q_to = None, None
+    except HTTPException:
+        # Persist sync-state failure details written inside the service so the
+        # next request and diagnostics can see the real upstream error.
+        await session.commit()
+        raise
+    except Exception:
+        await session.rollback()
+        raise
     else:
-        q_from = payload.date_from if payload.date_from is not None else sync_res.sync_start
-        q_to = payload.date_to if payload.date_to is not None else sync_res.sync_end
+        await session.commit()
 
-    items_db = await list_candles_daily(
-        session,
+    response = await _build_sync_daily_response(
+        session=session,
         instrument_id=inst.id,
-        date_from=q_from,
-        date_to=q_to,
+        sync_res=sync_res,
+        include_items=payload.include_items,
+        return_all=payload.return_all,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
     )
-    items = [CandleDailyOut.model_validate(x) for x in items_db]
 
     logger.info(
         f"daily sync endpoint: symbol={symbol} fetched={sync_res.fetched_rows} "
-        f"upserted={sync_res.upserted_rows} returned={len(items)}"
+        f"upserted={sync_res.upserted_rows} returned={response.returned_count}"
+    )
+    return response
+
+
+@router.post("/instruments/{symbol}/candles/daily/import_csv", response_model=SyncDailyResponse)
+async def import_daily_candles_csv(
+    symbol: str,
+    payload: ImportDailyCsvRequest,
+    session: AsyncSession = Depends(db.get_session),
+) -> SyncDailyResponse:
+    logger.info(
+        f"Request: import_daily_candles_csv symbol={symbol} filename={payload.filename!r}"
+    )
+    inst = await get_instrument_by_symbol(session, symbol=symbol)
+
+    if inst is None:
+        logger.warning(f"Instrument not found: import_daily_candles_csv symbol={symbol}")
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
+
+    await session.rollback()
+    try:
+        sync_res = await import_daily_csv_by_symbol(
+            session,
+            symbol=symbol,
+            content_b64=payload.content_b64,
+            filename=payload.filename,
+        )
+    except HTTPException:
+        await session.commit()
+        raise
+    except Exception:
+        await session.rollback()
+        raise
+    else:
+        await session.commit()
+
+    response = await _build_sync_daily_response(
+        session=session,
+        instrument_id=inst.id,
+        sync_res=sync_res,
+        include_items=payload.include_items,
+        return_all=payload.return_all,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
     )
 
-    return SyncDailyResponse(
-        sync=sync_res,
-        items_included=True,
-        returned_count=len(items),
-        items=items,
+    logger.info(
+        f"daily import endpoint: symbol={symbol} fetched={sync_res.fetched_rows} "
+        f"upserted={sync_res.upserted_rows} returned={response.returned_count}"
     )
+    return response
     
     
 @router.get("/celery/status")
 async def celery_status() -> dict[str, Any]:
     """
-    Report whether Celery workers are reachable by sending a control "ping"
-    and collecting replies.
+    Report whether STOCK Celery workers are reachable on the stock queue.
 
     The endpoint is intended for health checks and operational monitoring.
 
     Returns:
         A dict with:
           - enabled: Whether Celery integration is enabled in this service.
-          - online: True if at least one worker replied to ping.
-          - workers: List of worker node names that replied.
+          - online: True if at least one worker replied to ping and listens on
+            the STOCK queue.
+          - workers: List of STOCK worker node names.
           - detail: Short textual status ("pong", reason, error message).
     """
     logger.info("Request: celery_status")
   
     try:
         from app.core.celery_app import celery_app
+        stock_queue = str(celery_app.conf.task_default_queue or "stock_tasks")
+
         try:
             res = celery_app.control.broadcast("ping", reply=True, timeout=1)
         except Exception as ex:
@@ -378,10 +459,51 @@ async def celery_status() -> dict[str, Any]:
                 "detail": "No ping response from celery workers",
             }
 
+        workers: list[str] = []
+        if isinstance(res, dict):
+            workers = list(res.keys())
+        elif isinstance(res, list):
+            for item in res:
+                if isinstance(item, dict):
+                    workers.extend(str(name) for name in item.keys())
+
+        if not workers:
+            logger.warning(f"celery_status: unexpected ping payload shape: {type(res)!r}")
+
+        inspect = celery_app.control.inspect(timeout=1)
+        try:
+            active_queues = inspect.active_queues() or {}
+        except Exception as ex:
+            logger.warning(f"celery active_queues inspect failed: {ex}")
+            active_queues = {}
+
+        stock_workers: list[str] = []
+        for worker_name in workers:
+            queues = active_queues.get(worker_name) or []
+            queue_names = {
+                str(q.get("name"))
+                for q in queues
+                if isinstance(q, dict) and q.get("name")
+            }
+            if stock_queue in queue_names:
+                stock_workers.append(worker_name)
+
+        if not stock_workers:
+            logger.info(
+                f"celery_status: ping replies received from non-stock workers only: "
+                f"workers={workers}, stock_queue={stock_queue!r}"
+            )
+            return {
+                "enabled": True,
+                "online": False,
+                "workers": [],
+                "detail": f"No worker subscribed to queue {stock_queue}",
+            }
+
         return {
             "enabled": True,
             "online": True,
-            "workers": list(res.keys()),
+            "workers": stock_workers,
             "detail": "pong",
         }
 
@@ -461,3 +583,23 @@ async def start_manual_ingest(
 
     asyncio.create_task(_run())
     return {"ok": True}
+
+
+@router.get("/ingest/status")
+async def get_manual_ingest_status(request: Request) -> dict[str, Any]:
+    """
+    Return the current manual quotes ingestion status stored in app storage.
+
+    Returns:
+        A dict describing the current ingest status. If there is no recorded
+        job state yet, returns `{"state": "idle"}`.
+    """
+    logger.info("Request: get_manual_ingest_status")
+
+    storage = request.app.storage
+    data = await storage.stock.hgetall("ingest:quotes:status")
+
+    if not data:
+        return {"state": "idle"}
+
+    return dict(data)

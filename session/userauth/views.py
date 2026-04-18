@@ -9,6 +9,7 @@ from django.http import HttpResponseRedirect, HttpResponse
 from django.conf import settings
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
+from django.utils import timezone
 from django.core.cache import cache
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
@@ -31,6 +32,7 @@ import time
 from urllib.parse import unquote
 import json
 import base64
+from datetime import timedelta
 
 logger = logging.getLogger("session-auth")
 
@@ -184,6 +186,91 @@ class LoginView(APIView):
     throttle_classes = [LoginIPThrottle]
     serializer_class = LoginSerializer
     renderer_classes = [JSONRenderer]
+
+    def _cache_ttl_seconds(self, key, fallback=None):
+        """
+        Return the remaining TTL for a cache key in seconds.
+
+        Uses django-redis' `ttl()` when available and falls back to the provided
+        value if the TTL cannot be determined.
+        """
+        try:
+            ttl = cache.ttl(key)
+        except Exception as e:
+            logger.warning(f"Could not read cache TTL for {key}: {e}")
+            return fallback
+
+        if ttl is None or ttl < 0:
+            return fallback
+
+        return int(ttl)
+
+    def _format_retry_after(self, seconds):
+        """
+        Convert a number of seconds into a short human-readable duration.
+        """
+        total_seconds = max(int(seconds or 0), 0)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+
+        parts = []
+        if hours:
+            parts.append(f"{hours}h")
+        if minutes:
+            parts.append(f"{minutes}m")
+        if secs or not parts:
+            parts.append(f"{secs}s")
+        return " ".join(parts)
+
+    def _temporary_block_response(self, email, login_attempts_key):
+        """
+        Build a 429 response with the remaining temporary block duration.
+        """
+        retry_after_seconds = self._cache_ttl_seconds(
+            login_attempts_key,
+            fallback=settings.USER_TEMPORARY_BLOCK_TIME,
+        )
+        retry_after_human = self._format_retry_after(retry_after_seconds)
+        blocked_until = timezone.localtime(
+            timezone.now() + timedelta(seconds=retry_after_seconds)
+        ).isoformat()
+
+        logger.warning(
+            "Too many login attempts for %s. Retry after %ss (until %s).",
+            email,
+            retry_after_seconds,
+            blocked_until,
+        )
+
+        return Response(
+            {
+                "error": f"Too many login attempts. Try again in {retry_after_human}.",
+                "retry_after_seconds": retry_after_seconds,
+                "retry_after_human": retry_after_human,
+                "blocked_until": blocked_until,
+                "blocked_permanently": False,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    def _permanent_block_response(self, email):
+        """
+        Build a 429 response for a permanently blocked user.
+        """
+        logger.error(
+            "User %s has been permanently blocked after repeated login failures.",
+            email,
+        )
+        return Response(
+            {
+                "error": "Too many login attempts. User has been blocked permanently. Contact the administrator.",
+                "retry_after_seconds": None,
+                "retry_after_human": None,
+                "blocked_until": None,
+                "blocked_permanently": True,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
     
     def post(self, request, *args, **kwargs):
         """
@@ -207,10 +294,10 @@ class LoginView(APIView):
             
             to_many_login_attempts_key = f"to_many_login_attempts_{email}"
             to_many_login_attempts = cache.get(to_many_login_attempts_key, 0)
+            logger.debug(f"Login attempts for {email}: {login_attempts}, Too many attempts count: {to_many_login_attempts}")
           
             if login_attempts >= 3:
                 cache.set(to_many_login_attempts_key, to_many_login_attempts + 1, timeout=settings.USER_TEMPORARY_BLOCK_TIME*2)
-                logger.warning("Too many login attempts for user:")
 
                 if to_many_login_attempts >= 2:   
                     user = User.objects.filter(email=email).first()
@@ -218,17 +305,10 @@ class LoginView(APIView):
                         if not user.is_blocked:
                             user.is_blocked = True
                             user.save(update_fields=["is_blocked"])
-                            logger.error("User permanently blocked due to repeated login failures.")
                     
-                    return Response(
-                        {"error": "Too many login attempts.User has been blocked."},
-                        status=status.HTTP_429_TOO_MANY_REQUESTS
-                    )
+                    return self._permanent_block_response(email)
                     
-                return Response(
-                    {"error": "Too many login attempts. Try again later."},
-                    status=status.HTTP_429_TOO_MANY_REQUESTS
-                )
+                return self._temporary_block_response(email, login_attempts_key)
 
             if serializer.is_valid():
                 logger.info("Login serializer validated.")
@@ -236,8 +316,16 @@ class LoginView(APIView):
                 
                 if user.is_blocked:
                     logger.warning("Blocked user attempted login.")
-                    return Response({'error': 'Your account has been blocked.'},
-                                    status=status.HTTP_401_UNAUTHORIZED)
+                    return Response(
+                        {
+                            'error': 'Your account has been blocked permanently. Contact the administrator.',
+                            'retry_after_seconds': None,
+                            'retry_after_human': None,
+                            'blocked_until': None,
+                            'blocked_permanently': True,
+                        },
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
                 try:  
                     login(request, user)  
                 except Exception as e:
@@ -328,6 +416,28 @@ class VerifySessionView(APIView):
     """
     permission_classes = [AllowAny] 
     throttle_classes = [VerifySessionThrottle]
+
+    def _login_url(self, request) -> str:
+        """
+        Return the correct login URL based on which frontend made the request.
+
+        Traefik ForwardAuth copies the original request headers, so
+        X-Forwarded-Host contains the browser-facing hostname (e.g.
+        'next.localhost:8081' or 'wallet.localhost:8081').  We strip the port
+        and compare the bare hostname against NEXT_UI_DOMAIN to decide whether
+        to redirect to the Next.js frontend or the legacy NiceGUI frontend.
+        """
+        forwarded_host = request.META.get("HTTP_X_FORWARDED_HOST", "").split(":")[0]
+        next_host = (settings.NEXT_UI_DOMAIN or "").split(":")[0]
+
+        logger.debug(f"Forwarded host: {forwarded_host}, Next.js host: {next_host}")
+
+        if next_host and forwarded_host == next_host:
+            domain = settings.NEXT_UI_DOMAIN
+        else:
+            domain = settings.UI_DOMAIN
+
+        return f"{settings.APP_PROTOCOL}://{domain}/login"
     
     def get(self, request, *args, **kwargs):
         """
@@ -341,20 +451,22 @@ class VerifySessionView(APIView):
         session_id = request.COOKIES.get("sessionid")
         hmac_token = request.COOKIES.get("hmac")
         
-        logger.info(f"hmac_token:{hmac_token}")
+        logger.debug(f"hmac_token:{hmac_token}")
         
+        login_url = self._login_url(request)
+
         if not session_id or not hmac_token:
             logger.warning("Missing authorization data for session verification.")
             return formatted_response(request,
                                       {"error": "Missing authorizaton data.",
-                                       "href": f"{settings.APP_PROTOCOL}://{settings.UI_DOMAIN}/login",
+                                       "href": login_url,
                                        "text": "Go to Login"},
                                       template_name="401.html",
                                       status=401)
             
         if not request.user or not request.user.is_authenticated:
             logger.info("Unauthenticated user during session verification; redirecting.")
-            return HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{settings.UI_DOMAIN}/login")
+            return HttpResponseRedirect(login_url)
         
         try:
             timestamp, provided_hmac = unquote(hmac_token).strip('"').split(":")
@@ -363,7 +475,7 @@ class VerifySessionView(APIView):
             logger.warning(f"Failed to parse hmac token: {e}")
             return formatted_response(request,
                                       {"error": "Invalid HMAC format.",
-                                       "href": f"{settings.APP_PROTOCOL}://{settings.UI_DOMAIN}/login",
+                                       "href": login_url,
                                        "text": "Go to Login"},
                                       template_name="400.html",
                                       status=400)
@@ -371,7 +483,7 @@ class VerifySessionView(APIView):
         if not HmacToken.is_valid_hmac(provided_hmac, request, timestamp):
             logger.warning(f"HMAC verification failed for user {request.user.username}")
             logout(request)
-            response = HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{settings.UI_DOMAIN}/login")
+            response = HttpResponseRedirect(login_url)
             return response
         
         timestamp = int(time.time())
@@ -392,9 +504,38 @@ class VerifySessionView(APIView):
             samesite='Lax',
         )
         response.headers["X-User"] = request.user.username
+        response.headers["X-First-Name"] = request.user.first_name or ""
+        response.headers["X-Email"] = request.user.email or ""
+        response.headers["X-User-Id"] = request.session.get('wallet_user_id', '')
 
-        logger.info(f"header User: {response.headers["X-User"]}")
+        logger.debug(f"header User: {response.headers['X-User']}")
+        logger.debug(f"header User-Id: {response.headers['X-User-Id']}")
         return response
+
+
+class SetWalletUserIdView(APIView):
+    """
+    Store the wallet service user_id in the current session.
+
+    Called by Next.js after syncUser() resolves — allows VerifySessionView
+    to forward X-User-Id to all downstream services without each page
+    having to call syncUser independently.
+    """
+    authentication_classes = [SessionAuthenticationWithoutCSRF]
+    permission_classes = [IsAuthenticated]
+    renderer_classes = [JSONRenderer]
+
+    def post(self, request, *args, **kwargs) -> Response:
+        logger.info("SetWalletUserIdView called.")
+        wallet_user_id = request.data.get('wallet_user_id', '')
+        if not wallet_user_id:
+            return Response(
+                {"error": "wallet_user_id required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        request.session['wallet_user_id'] = wallet_user_id
+        logger.info("wallet_user_id saved to session.")
+        return Response({"ok": True}, status=status.HTTP_200_OK)
 
 
 class QRCodeView(APIView):

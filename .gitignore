@@ -9,6 +9,7 @@ session/static/admin/*
 session/static/jazzmin/*
 session/static/rest_framework/*
 session/static/vendor/*
+session/staticfiles/*
 wallet/app/core/.envs/.env.local
 pgadmin/.env.local
 pgadmin/pgpass

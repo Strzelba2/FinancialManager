@@ -9,7 +9,6 @@ import pages.home
 import pages.login
 import pages.logout
 import pages.register
-import pages.home
 import pages.wallet.brokerage_events
 import pages.wallet.holdings
 import pages.wallet.user_wallet
@@ -19,6 +18,7 @@ import pages.wallet.charts
 import pages.wallet.wallet_manager
 import pages.wallet.favorites_alerts
 import pages.error
+import api.imports
 
 from middleware.middleware import ClientDataMiddleware
 from exceptions import UnauthorizedError, BadRequestError, InternalServerError

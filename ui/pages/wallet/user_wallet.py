@@ -28,7 +28,7 @@ from utils.utils import export_csv, ccy_to_str
 from utils.money import (
     cash_total_in_pln, cash_total_in_eur, cash_total_in_usd, cash_kpi_label, 
     change_currency_to, format_pl_amount, allocation_series_from_totals, dec,
-    series_from_amounts
+    series_from_amounts, fmt_money
     )
 from utils.dates import month_floor
 from demo.factories import create_demo_wallet_payload
@@ -233,6 +233,7 @@ class Wallet(NavContextBase):
                 cash_total, self.cash = self.capture_cash_label()
                 investment_total, self.invest_label = self.capture_investments_label()
                 debt_total, self.debt_label = self.capture_debts_label()
+                self.months, self.inc, self.exp, self.capi = self.compute_dash_flow_series_last_8m()
                 
                 kpi_card('Wartość netto', 
                          self.capture_netto_label(cash_total, investment_total, debt_total), 
@@ -249,7 +250,7 @@ class Wallet(NavContextBase):
                          self.capture_debts_sub(), 
                          on_click=lambda: show_debts_dialog(self)
                          )
-                kpi_card('Wydatki (mies.)', '7 890 PLN', 'Budżet 85%')
+                kpi_card('Wydatki (mies.)', self.compute_expenses_month_label(), 'Budżet 85%')
                 self.capital_label = self.compute_capital_gains_ytd_label()
                 kpi_card('Zyski Kapitałowe (mies.)', self.capital_label, '+2.1% YTD')
     
@@ -350,7 +351,6 @@ class Wallet(NavContextBase):
                     cpi=self.cpi_idx, base='first',                 
                     y_suffix=' PLN'
                 )    
-                self.months, self.inc, self.exp, self.capi = self.compute_dash_flow_series_last_8m()
                 
                 bar_card('Dash Flow', x=self.months, inc=self.inc, exp=self.exp, cap=self.capi,
                          show_profit=True, show_capital=True, profit_includes_capital=True)
@@ -641,6 +641,21 @@ class Wallet(NavContextBase):
         cur = self.view_currency.value or "PLN"
         total = cash_total + investment_total - debt_total
         return cash_kpi_label(total, cur, decimals=0)
+    
+    def compute_expenses_month_label(self) -> str:
+        """Return the latest month expense formatted with currency."""
+        logger.info("Computing expenses month label...")
+
+        view_ccy = self.view_currency.value or "PLN"
+
+        if not getattr(self, "exp", None):
+            return cash_kpi_label(0, view_ccy, decimals=0)
+
+        if isinstance(self.exp, (list, tuple)):
+            last_expense = abs(dec(self.exp[-1]))
+            return cash_kpi_label(last_expense, view_ccy, decimals=0)
+
+        return cash_kpi_label(0, view_ccy, decimals=0)
     
     def compute_capital_gains_ytd_label(self) -> str:
         """

@@ -210,6 +210,7 @@ class UserAdmin(BaseUserAdmin):
     # Fields to allow search and filter options
     search_fields = ["email", "first_name", "last_name"]
     list_filter = ('is_staff', 'is_active', 'is_blocked')
+    actions = ["unlock_users_and_clear_login_state"]
  
     # Order users by email in the list view
     ordering = ["email"]
@@ -250,6 +251,75 @@ class UserAdmin(BaseUserAdmin):
             },
         ),
     )
+
+    def _clear_user_login_state(self, user: User) -> int:
+        """
+        Clear Redis keys related to login blocking for a specific user.
+
+        Returns:
+            Number of keys that were removed.
+        """
+        keys = [
+            f"login_attempts_{user.email}",
+            f"to_many_login_attempts_{user.email}",
+        ]
+        removed = 0
+        for key in keys:
+            removed += int(bool(cache.delete(key)))
+
+        logger.info(
+            "Cleared login cache state for user %s. Removed keys: %s",
+            user.email,
+            removed,
+        )
+        return removed
+
+    @admin.action(description="Odblokuj użytkownika i wyczyść login_attempts z cache")
+    def unlock_users_and_clear_login_state(self, request: HttpRequest, queryset):
+        """
+        Admin bulk action: unblock selected users and clear their login cache state.
+        """
+        unblocked_count = 0
+        cache_keys_removed = 0
+
+        for user in queryset:
+            cache_keys_removed += self._clear_user_login_state(user)
+            if user.is_blocked:
+                user.is_blocked = False
+                user.save(update_fields=["is_blocked"])
+                unblocked_count += 1
+
+        self.message_user(
+            request,
+            (
+                f"Odblokowano {unblocked_count} użytkowników. "
+                f"Wyczyszczono {cache_keys_removed} kluczy loginowych z cache."
+            ),
+            level=messages.SUCCESS,
+        )
+
+    def save_model(self, request: HttpRequest, obj: User, form, change: bool) -> None:
+        """
+        When an admin manually unblocks a user in the form, also clear their
+        login-related cache keys so the account is not re-blocked immediately.
+        """
+        previous_is_blocked = None
+        if change and obj.pk:
+            previous = User.objects.filter(pk=obj.pk).only("is_blocked", "email").first()
+            previous_is_blocked = previous.is_blocked if previous else None
+
+        super().save_model(request, obj, form, change)
+
+        if previous_is_blocked and not obj.is_blocked:
+            removed = self._clear_user_login_state(obj)
+            self.message_user(
+                request,
+                (
+                    f"Użytkownik {obj.email} został odblokowany. "
+                    f"Wyczyszczono {removed} kluczy loginowych z cache."
+                ),
+                level=messages.SUCCESS,
+            )
 
 
 custom_admin_site = CustomAdminSite()

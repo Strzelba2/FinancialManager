@@ -17,6 +17,48 @@ from .config import MarketConfig
 logger = logging.getLogger(__name__)
 
 
+def _detect_daily_csv_delimiter(lines: list[str]) -> str:
+    sample = "\n".join(lines[:5])
+    if not sample:
+        return ","
+
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;")
+        if dialect.delimiter in {",", ";"}:
+            return dialect.delimiter
+    except csv.Error:
+        pass
+
+    return ";" if sample.count(";") > sample.count(",") else ","
+
+
+def _parse_daily_csv_with_delimiter(lines: list[str], delimiter: str) -> list[DailyRow]:
+    out: list[DailyRow] = []
+    reader = csv.reader(lines, delimiter=delimiter)
+
+    for row in reader:
+        row = [(cell or "").strip().lstrip("\ufeff") for cell in row]
+        if not row or len(row) < 5:
+            continue
+
+        d = try_parse_date(row[0])
+        if d is None:
+            continue
+
+        out.append(
+            DailyRow(
+                date_quote=d,
+                open=dec2(row[1]),
+                high=dec2(row[2]),
+                low=dec2(row[3]),
+                close=dec2(row[4]),
+                volume=to_int_opt(row[5]) if len(row) >= 6 else None,
+            )
+        )
+
+    return out
+
+
 def parse_time_to_utc(
     time_str: Optional[str], 
     page_dt: Optional[date] = None, 
@@ -164,27 +206,16 @@ def parse_daily_csv(text: str) -> list[DailyRow]:
     Raises:
         Exception: Propagates unexpected parsing/conversion errors after logging.
     """
-    out: list[DailyRow] = []
-    reader = csv.reader(text.splitlines())
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
 
-    for row in reader:
-        if not row or len(row) < 5:
-            continue
+    delimiter = _detect_daily_csv_delimiter(lines)
+    out = _parse_daily_csv_with_delimiter(lines, delimiter)
 
-        d = try_parse_date(row[0])
-        if d is None:
-            continue
-
-        out.append(
-            DailyRow(
-                date_quote=d,
-                open=dec2(row[1]),
-                high=dec2(row[2]),
-                low=dec2(row[3]),
-                close=dec2(row[4]),
-                volume=to_int_opt(row[5]) if len(row) >= 6 else None,
-            )
-        )
+    if not out:
+        alt_delimiter = ";" if delimiter == "," else ","
+        out = _parse_daily_csv_with_delimiter(lines, alt_delimiter)
 
     out.sort(key=lambda x: x.date_quote)
     return out

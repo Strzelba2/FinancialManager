@@ -163,6 +163,7 @@ class VeloParser():
 
         return pd.DataFrame(out, columns=["DATA", "DATA_2", "OPIS TRANSAKCJI", "KWOTA", "SALDO PO"])
     
+    @staticmethod
     def make_unique(index: pd.Index) -> pd.Index:
         """
         Ensure column names are unique by appending a suffix if needed.

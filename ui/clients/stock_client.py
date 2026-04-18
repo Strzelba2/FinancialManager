@@ -1,3 +1,4 @@
+import base64
 import httpx
 import logging
 from typing import Optional, Dict, Any, List
@@ -6,7 +7,7 @@ from nicegui import app
 
 from schemas.quotes import (
     QuoteRow, QuoteBySymbolItem, QuotesBySymbolsResponse, SyncDailyRequest,
-    SyncDailyResponse 
+    SyncDailyResponse, ImportDailyCsvRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class StockClient:
     INSTRUMENT_SEARCH_PATH = "/stock/instruments/search"
     QUOTES_BY_SYMBOLS_PATH = "/stock/quotes/latest/symbols"
     SYNC_DAILY_CANDLES_PATH = "/stock/instruments/{symbol}/candles/daily/sync"
+    IMPORT_DAILY_CSV_PATH = "/stock/instruments/{symbol}/candles/daily/import_csv"
     CELERY_STATUS = "/stock/celery/status"
     UPDATE_DAILY_MANUAL = "/stock/ingest/start_manual"
     
@@ -34,6 +36,7 @@ class StockClient:
         Bind this client to a shared AsyncClient stored in `app.state.stock_httpx`.
         """
         self.client: httpx.AsyncClient = app.state.stock_httpx
+        self.last_error: Optional[str] = None
         logger.info("StockClient initialized with shared httpx.AsyncClient")
         
     async def _request(
@@ -382,6 +385,7 @@ class StockClient:
         Returns:
             SyncDailyResponse on success, or None on errors/timeouts.
         """
+        self.last_error = None
         path = self.SYNC_DAILY_CANDLES_PATH.format(symbol=symbol)
 
         req = SyncDailyRequest(
@@ -400,10 +404,20 @@ class StockClient:
             json_body=payload,
         )
         if resp is None:
+            self.last_error = f"No response from stock service for {symbol}"
             logger.error(f"sync_daily_candles: no response from stock service (symbol={symbol})")
             return None
 
         if resp.status_code not in (200, 201):
+            detail = None
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    detail = data.get("detail")
+            except Exception:
+                detail = None
+
+            self.last_error = str(detail or f"HTTP {resp.status_code}")
             logger.error(
                 f"sync_daily_candles: status {resp.status_code}, symbol={symbol}, body={resp.text}"
             )
@@ -413,7 +427,70 @@ class StockClient:
             data = resp.json()
             return SyncDailyResponse.model_validate(data)
         except Exception:
+            self.last_error = f"Invalid sync response payload for {symbol}"
             logger.exception(f"sync_daily_candles: failed to parse response (symbol={symbol})")
+            return None
+
+    async def import_daily_candles_csv(
+        self,
+        symbol: str,
+        filename: str,
+        content: bytes,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        include_items: bool = False,
+        return_all: bool = False,
+    ) -> Optional[SyncDailyResponse]:
+        """
+        Import daily candles from a user-provided CSV file.
+
+        The file bytes are sent as base64 JSON to avoid multipart handling in the
+        stock service.
+        """
+        self.last_error = None
+        path = self.IMPORT_DAILY_CSV_PATH.format(symbol=symbol)
+
+        req = ImportDailyCsvRequest(
+            filename=filename,
+            content_b64=base64.b64encode(content).decode("ascii"),
+            date_from=date_from,
+            date_to=date_to,
+            include_items=include_items,
+            return_all=return_all,
+        )
+        payload: Dict[str, Any] = req.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+        resp = await self._request(
+            "POST",
+            path,
+            json_body=payload,
+        )
+        if resp is None:
+            self.last_error = f"No response from stock service for {symbol}"
+            logger.error(f"import_daily_candles_csv: no response from stock service (symbol={symbol})")
+            return None
+
+        if resp.status_code not in (200, 201):
+            detail = None
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    detail = data.get("detail")
+            except Exception:
+                detail = None
+
+            self.last_error = str(detail or f"HTTP {resp.status_code}")
+            logger.error(
+                f"import_daily_candles_csv: status {resp.status_code}, symbol={symbol}, body={resp.text}"
+            )
+            return None
+
+        try:
+            data = resp.json()
+            return SyncDailyResponse.model_validate(data)
+        except Exception:
+            self.last_error = f"Invalid import response payload for {symbol}"
+            logger.exception(f"import_daily_candles_csv: failed to parse response (symbol={symbol})")
             return None
         
     async def get_celery_status(self) -> Optional[Dict[str, Any]]:

@@ -1,3 +1,5 @@
+from datetime import date
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
@@ -87,6 +89,28 @@ async def fetch_latest_quote(session: AsyncSession, mic: str, symbol: str) -> Op
     )
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
+
+
+async def get_latest_trade_date_by_symbol(
+    session: AsyncSession,
+    symbol: str,
+) -> Optional[date]:
+    """
+    Return the latest quote trade date stored for a given symbol.
+
+    This is used to cap historical candle sync windows so we do not ask the
+    upstream source for dates newer than the latest quote already available in
+    our DB.
+    """
+    stmt = (
+        select(QuoteLatest.last_trade_at)
+        .join(Instrument, Instrument.id == QuoteLatest.instrument_id)
+        .where(Instrument.symbol == symbol)
+        .limit(1)
+    )
+    res = await session.execute(stmt)
+    last_trade_at = res.scalar_one_or_none()
+    return last_trade_at.date() if last_trade_at is not None else None
 
 
 async def fetch_latest_for_mic(session: AsyncSession, mic: str) -> List[QuoteLatest]:

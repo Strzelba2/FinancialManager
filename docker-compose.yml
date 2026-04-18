@@ -136,7 +136,59 @@ services:
     networks:
       - financial_manager
 
-  wallet: 
+  next-ui:
+    build:
+      context: ./next-ui
+      dockerfile: docker/Dockerfile
+      target: dev
+    volumes:
+      - ./next-ui:/app
+      - next_ui_node_modules:/app/node_modules
+    environment:
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.next-ui.rule=Host(`next.localhost`)"
+      - "traefik.http.routers.next-ui.entrypoints=web"
+      - "traefik.http.routers.next-ui.service=next-ui-service"
+      - "traefik.http.routers.next-ui.middlewares=next-forwardauth@docker,next-auth-errors@docker,nocache@docker"
+      - "traefik.http.middlewares.next-forwardauth.forwardauth.address=http://session-auth:8000/verifySession/"
+      - "traefik.http.middlewares.next-forwardauth.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.next-forwardauth.forwardauth.authResponseHeaders=X-User,X-First-Name,X-Email,X-User-Id"
+      - "traefik.http.middlewares.next-forwardauth.forwardauth.addAuthCookiesToResponse=hmac,sessionid"
+      - "traefik.http.middlewares.next-auth-errors.errors.status=401-403"
+      - "traefik.http.middlewares.next-auth-errors.errors.service=next-ui-service"
+      - "traefik.http.middlewares.next-auth-errors.errors.query=/login"
+      - "traefik.http.routers.next-ui-static.rule=Host(`next.localhost`) && PathPrefix(`/_next/`)"
+      - "traefik.http.routers.next-ui-static.entrypoints=web"
+      - "traefik.http.routers.next-ui-static.service=next-ui-service"
+      - "traefik.http.routers.next-ui-favicon.rule=Host(`next.localhost`) && Path(`/favicon.ico`)"
+      - "traefik.http.routers.next-ui-favicon.entrypoints=web"
+      - "traefik.http.routers.next-ui-favicon.service=next-ui-service"
+      - "traefik.http.routers.next-ui-devtools-wellknown.rule=Host(`next.localhost`) && PathPrefix(`/.well-known/appspecific/`)"
+      - "traefik.http.routers.next-ui-devtools-wellknown.entrypoints=web"
+      - "traefik.http.routers.next-ui-devtools-wellknown.service=next-ui-service"
+      - "traefik.http.routers.next-ui-devtools-sourcemap.rule=Host(`next.localhost`) && PathPrefix(`/__nextjs_source-map`)"
+      - "traefik.http.routers.next-ui-devtools-sourcemap.entrypoints=web"
+      - "traefik.http.routers.next-ui-devtools-sourcemap.service=next-ui-service"
+      - "traefik.http.routers.next-ui-login.rule=Host(`next.localhost`) && (PathPrefix(`/login`) || PathPrefix(`/register`) || PathPrefix(`/logout`))"
+      - "traefik.http.routers.next-ui-login.entrypoints=web"
+      - "traefik.http.routers.next-ui-login.service=next-ui-service"
+      - "traefik.http.services.next-ui-service.loadbalancer.server.port=3000"
+      - "traefik.http.routers.next-ui-home.rule=Host(`next.localhost`) && (PathPrefix(`/home`) || PathPrefix(`/home/`))"
+      - "traefik.http.routers.next-ui-home.entrypoints=web"
+      - "traefik.http.routers.next-ui-home.service=next-ui-service"
+    env_file:
+      - ./next-ui/.env
+    depends_on:
+      - session-auth
+    expose:
+      - 3000
+    networks:
+      - financial_manager
+
+  wallet:
     build:
       context: ./wallet
       dockerfile: docker/fastapi/Dockerfile
@@ -372,3 +424,4 @@ volumes:
   financial_mailpit_data:
   financial_rabbitmq_data:
   pgadmin_data:
+  next_ui_node_modules:

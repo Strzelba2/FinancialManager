@@ -25,6 +25,35 @@ from app.crud.transaction_crud import (
 logger = logging.getLogger(__name__)
 
 
+def normalize_transaction_rows_order(rows: list[TransactionIn]) -> list[TransactionIn]:
+    """
+    Normalize imported transaction order without destroying same-day sequencing.
+
+    Some bank exports, such as Velo PDF statements, arrive in reverse chronological
+    order (newest -> oldest). A plain `sorted(..., key=date)` breaks transactions
+    that share the same day because it preserves the parser's same-day order while
+    reordering only by date.
+
+    We therefore:
+    - keep already-ascending rows as-is
+    - reverse fully descending rows
+    - fall back to stable sorting by date only for mixed/irregular input
+    """
+    if len(rows) <= 1:
+        return list(rows)
+
+    is_ascending = all(rows[i].date <= rows[i + 1].date for i in range(len(rows) - 1))
+    if is_ascending:
+        return list(rows)
+
+    is_descending = all(rows[i].date >= rows[i + 1].date for i in range(len(rows) - 1))
+    if is_descending:
+        return list(reversed(rows))
+
+    logger.warning("normalize_transaction_rows_order: mixed import order detected; applying stable date sort")
+    return sorted(rows, key=lambda r: r.date)
+
+
 async def create_transactions_service(
     session: AsyncSession,
     payload: CreateTransactionsRequest,
@@ -57,10 +86,7 @@ async def create_transactions_service(
         logger.error("Unknown account_id provided")
         raise ValueError("Unknown account_id")
     
-    if payload.transactions[0].date > payload.transactions[-1].date:
-        rows: list[TransactionIn] = list(reversed(payload.transactions))
-    else:
-        rows = payload.transactions
+    rows: list[TransactionIn] = normalize_transaction_rows_order(list(payload.transactions))
 
     bal = await get_deposit_account_balance(session, account.id)
     
@@ -82,6 +108,8 @@ async def create_transactions_service(
     for i, r in enumerate(rows, start=0):
         amount = Decimal(r.amount)
         before = last_balance
+
+        logger.debug(f"Processing transaction {i}: amount={amount} before={before}")
 
         computed_after = before + amount
         if r.amount_after is not None:
@@ -244,7 +272,7 @@ async def create_transactions_rebalance_service(
     if not payload.transactions:
         return {"created": 0, "final_balance": Decimal(str(bal.available or 0)), "account_id": str(acc_id)}
 
-    rows = sorted(payload.transactions, key=lambda r: r.date)
+    rows = normalize_transaction_rows_order(list(payload.transactions))
 
     dt_start = rows[0].date
 

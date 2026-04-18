@@ -25,6 +25,8 @@ BANKS = [
     {"name": "Santander Polska",  "shortname": "SAN",  "bic": "WBKPPLPP"},
     {"name": "Pekao SA",          "shortname": "PEKAO", "bic": "PKOPPLPW"},
     {"name": "Alior Bank",        "shortname": "ALIOR", "bic": "ALBPPLPW"},
+    {"name": "VeloBank",          "shortname": "VELO", "bic": "GBGCPLPK"},
+    {"name": "Saxo Bank",         "shortname": "SAXO", "bic": "SAXODKKK"},
 ]
 
 

@@ -25,6 +25,13 @@ recreate-stock:
 recreate-pgadmin:
 	UID=$$(id -u) GID=$$(id -g)  docker compose -f docker-compose.yml up -d --force-recreate pgadmin
 
+recreate-next-ui:
+	UID=$$(id -u) GID=$$(id -g)  docker compose -f docker-compose.yml up -d --force-recreate next-ui
+
+wallet-migrate:
+	UID=$$(id -u) GID=$$(id -g) docker compose -f docker-compose.yml up -d wallet-db
+	UID=$$(id -u) GID=$$(id -g) docker compose -f docker-compose.yml run --rm wallet alembic upgrade head
+
 makemigrations:
 	docker compose -f docker-compose.yml run --rm session-auth python manage.py makemigrations
 

@@ -1,8 +1,8 @@
 from django.urls import path
 from .views import (
-    LoginView, LogoutView, RegisterView, VerifySessionView, 
-    ActivateAccountView, CryptoBatchView
-    )
+    LoginView, LogoutView, RegisterView, VerifySessionView,
+    ActivateAccountView, CryptoBatchView, SetWalletUserIdView,
+)
 from .views_health import healthz, readyz
 
 urlpatterns = [
@@ -12,6 +12,7 @@ urlpatterns = [
     path('verifySession/', VerifySessionView.as_view(), name='verifySession'),
     path('activate/<uidb64>/<token>/', ActivateAccountView.as_view(), name='activate'),
     path("crypto/batch", CryptoBatchView.as_view(), name="crypto-batch"),
+    path("wallet-user-id/", SetWalletUserIdView.as_view(), name="wallet-user-id"),
     path("healthz", healthz),
     path("readyz", readyz),
 ]

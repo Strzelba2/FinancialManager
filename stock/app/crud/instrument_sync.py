@@ -56,8 +56,16 @@ def should_skip_daily_sync(
     Returns:
         True if the sync should be skipped, otherwise False.
     """
-    if state.daily_last_success_end == target_end:
+    success_has_rows = (state.daily_last_fetched_rows or 0) > 0
+    same_target_success = state.daily_last_success_end == target_end
+
+    # Older buggy runs could mark success for an empty/non-CSV response.
+    # Treat that state as invalid so the next request can retry.
+    if same_target_success and success_has_rows:
         return True
+
+    if same_target_success and not success_has_rows:
+        return False
 
     if (
         state.daily_last_attempt_end == target_end
@@ -102,6 +110,8 @@ async def mark_daily_attempt(
     state.daily_last_attempt_at = now
     state.daily_last_attempt_end = target_end
     state.daily_last_requested_url = requested_url
+    state.daily_last_fetched_rows = None
+    state.daily_last_upserted_rows = None
     state.daily_last_error = None
     await session.flush()
 
@@ -139,7 +149,7 @@ async def mark_daily_success(
 async def mark_daily_failure(
     session: AsyncSession,
     state: InstrumentSyncState,
-    error: str,
+    error: object,
 ) -> None:
     """
     Mark a daily sync attempt as failed.
@@ -152,7 +162,7 @@ async def mark_daily_failure(
         state: Sync state row to update.
         error: Error message to store (will be truncated).
     """
-    trimmed = (error or "")[:_DAILY_ERROR_MAX_LEN]
+    trimmed = str(error or "")[:_DAILY_ERROR_MAX_LEN]
 
     state.daily_last_error = trimmed
     await session.flush()

@@ -1,7 +1,7 @@
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import BasePermission
 from django.conf import settings
-from utils.utils import get_client_ip, parse_allowed
+from utils.utils import get_client_ip, parse_allowed, is_ip_allowed
 
 
 import logging
@@ -21,7 +21,7 @@ class IPAllowlistPermission(BasePermission):
         
         ip: str = get_client_ip(request)
 
-        if ip not in wallet_allowed_ip:
+        if not is_ip_allowed(ip, wallet_allowed_ip):
             logger.error("ip is not in: wallet_allowed_ip")
             return False
         

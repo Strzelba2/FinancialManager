@@ -167,12 +167,15 @@ async def api_add_item(
     """
     try:
         stock_inst = await stock_client.resolve_instrument(mic=body.mic, symbol=body.symbol)
+        instrument_name = (stock_inst.name or body.symbol or "").strip()
+        if not instrument_name:
+            raise ValueError(f"Cannot determine instrument name for symbol={body.symbol}")
 
         inst = await get_or_create_instrument(
             session=session,
             mic=stock_inst.mic,
             symbol=stock_inst.symbol,
-            name=stock_inst.name,
+            name=instrument_name,
             currency=Currency(stock_inst.currency),
         )
         

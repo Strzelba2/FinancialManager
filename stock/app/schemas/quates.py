@@ -97,3 +97,8 @@ class SyncDailyRequest(BaseModel):
     overlap_days: int = Field(default=7, ge=0, le=60)
 
     include_items: bool = False
+
+
+class ImportDailyCsvRequest(SyncDailyRequest):
+    filename: Optional[str] = None
+    content_b64: str = Field(..., min_length=1)

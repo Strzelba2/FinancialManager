@@ -166,15 +166,14 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
 if not DEBUG:
-    STATIC_ROOT = BASE_DIR / "staticfiles"
     STORAGES = {
         "staticfiles": {
             "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
         }
     }
-else:
-    STATIC_ROOT = os.path.join(BASE_DIR, 'static/')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -186,6 +185,7 @@ AUTH_USER_MODEL = 'userauth.User'
 WALLET_DOMAIN = config("WALLET_DOMAIN", default="")
 UI_DOMAIN = config("UI_DOMAIN", default="")
 SESSION_DOMAIN = config("SESSION_DOMAIN", default="")
+NEXT_UI_DOMAIN = config("NEXT_UI_DOMAIN", default="")
 APP_PROTOCOL = config("APP_PROTOCOL", default="http")
 
 PASSWORD_RESET_TIMEOUT = 120
