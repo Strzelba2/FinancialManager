@@ -18,6 +18,12 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO" if env_type == "prod" else "DEBUG")
 logger = logging.getLogger()
 logger.setLevel(LOG_LEVEL)
 
+# Keep app logs verbose in local env, but silence low-level HTTP transport traces.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("openai._base_client").setLevel(logging.WARNING)
+
 if logger.hasHandlers():
     logger.handlers.clear()
 

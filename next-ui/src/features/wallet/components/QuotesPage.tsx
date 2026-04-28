@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import {
   Search, RefreshCw, TrendingUp, TrendingDown,
   ChevronUp, ChevronDown as ChevdownIcon, Minus,
-  MoreVertical, Bell, BarChart2, Star,
+  MoreVertical, Bell, BarChart2, Star, FileText,
 } from 'lucide-react'
 import type { QuoteRow } from '@/lib/api/stock'
 import { FavoritesDialog } from './FavoritesDialog'
@@ -78,14 +78,18 @@ function ThBtn({
 }
 
 function RowMenu({
-  symbol, mic, onClose, onFavorites, onAlert,
+  symbol, mic, top, right, onClose, onFavorites, onAlert,
 }: {
-  symbol: string; mic: string; onClose: () => void; onFavorites: () => void; onAlert: () => void
+  symbol: string; mic: string; top: number; right: number
+  onClose: () => void; onFavorites: () => void; onAlert: () => void
 }) {
   const router = useRouter()
+  const canOpenReport = mic !== 'STCM'
   return (
     <div
-      className="absolute right-0 top-8 z-50 bg-slate-900 border border-white/10 rounded-xl shadow-xl py-1 min-w-[160px] backdrop-blur-md"
+      style={{ position: 'fixed', top, right, zIndex: 9999 }}
+      className="bg-slate-900 border border-white/10 rounded-xl shadow-xl py-1 min-w-[160px] backdrop-blur-md"
+      data-row-menu
       onClick={(e) => e.stopPropagation()}
     >
       <button
@@ -106,6 +110,18 @@ function RowMenu({
         <BarChart2 className="w-4 h-4" />
         Wykresy
       </button>
+      {canOpenReport && (
+        <button
+          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+          onClick={() => {
+            onClose()
+            router.push(`/stock/${encodeURIComponent(mic)}/${encodeURIComponent(symbol)}/report`)
+          }}
+        >
+          <FileText className="w-4 h-4" />
+          Raport AI
+        </button>
+      )}
       <div className="my-1 border-t border-white/5" />
       <button
         className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors"
@@ -133,7 +149,7 @@ export function QuotesPage({ mic, initialRows }: Props) {
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
-  const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [openMenu, setOpenMenu] = useState<{ symbol: string; top: number; right: number } | null>(null)
   const [favoritesTarget, setFavoritesTarget] = useState<{ symbol: string; name: string | null } | null>(null)
   const [alertTarget, setAlertTarget] = useState<{ symbol: string; name: string; alert: PriceAlertModalData | null } | null>(null)
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(initialRows.length > 0)
@@ -601,20 +617,27 @@ export function QuotesPage({ mic, initialRows }: Props) {
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-right">
-                        <div className="relative inline-block" data-row-menu>
+                        <div className="inline-block" data-row-menu>
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              setOpenMenu(openMenu === row.symbol ? null : row.symbol)
+                              if (openMenu?.symbol === row.symbol) {
+                                setOpenMenu(null)
+                              } else {
+                                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                setOpenMenu({ symbol: row.symbol, top: rect.bottom + 4, right: window.innerWidth - rect.right })
+                              }
                             }}
                             className="p-1 rounded text-white/30 hover:text-white hover:bg-white/5 transition-colors"
                           >
                             <MoreVertical className="w-4 h-4" />
                           </button>
-                          {openMenu === row.symbol && (
+                          {openMenu?.symbol === row.symbol && (
                             <RowMenu
                               symbol={row.symbol}
                               mic={mic}
+                              top={openMenu.top}
+                              right={openMenu.right}
                               onClose={() => setOpenMenu(null)}
                               onAlert={() => void openAlertModal(row.symbol, row.name)}
                               onFavorites={() => setFavoritesTarget({ symbol: row.symbol, name: row.name })}

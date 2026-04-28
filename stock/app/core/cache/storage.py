@@ -104,6 +104,28 @@ class RedisStorage:
         except Exception as e:
             logger.error(f"Error setting key {redis_key}: {e}")
             return False
+
+    async def set_if_absent(self, key: str, value: Any, timeout: int = 3600) -> bool:
+        """
+        Store a value only when the key does not already exist.
+
+        Args:
+            key: The original (unprefixed) key.
+            value: The value to store.
+            timeout: Expiration time in seconds. Default is 3600 (1 hour).
+
+        Returns:
+            True when the value was stored, False when the key already existed
+            or when Redis returned an error.
+        """
+        redis_key = self._make_key(key)
+        try:
+            data = self._serialize(value)
+            result = await self.redis_client.set(redis_key, data, ex=timeout or None, nx=True)
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Error setting key if absent {redis_key}: {e}")
+            return False
             
     async def clear(self, key: str) -> bool:
         """
@@ -119,12 +141,12 @@ class RedisStorage:
         try:
             result = await self.redis_client.delete(redis_key)
             if result:
-                logger.debug("Deleted key .")
+                logger.debug("Deleted Redis key %r.", redis_key)
             else:
-                logger.debug("Key did not exist.")
+                logger.debug("Redis key %r did not exist.", redis_key)
             return bool(result)
         except Exception as e:
-            logger.error(f"Error deleting key : {e}")
+            logger.error(f"Error deleting key {redis_key}: {e}")
             return False
             
     async def exists(self, key: str) -> bool:

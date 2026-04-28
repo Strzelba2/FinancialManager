@@ -5,7 +5,8 @@ from typing import Optional, List
 import uuid
 from .base import (
     InstrumentBase, TimestampMixin, UUIDMixin, QuoteLatestBase,
-    CandleDailyBase, MarketBase, InstrumentSyncStateBase
+    CandleDailyBase, MarketBase, InstrumentSyncStateBase,
+    ReportAiSnapshotBase, ReportSnapshotBase,
 )
 
 
@@ -87,3 +88,76 @@ class InstrumentSyncState(InstrumentSyncStateBase, table=True):
             primary_key=True,
         )
     )
+
+
+class ReportAiSnapshot(ReportAiSnapshotBase, TimestampMixin, UUIDMixin, table=True):
+    __tablename__ = "report_ai_snapshot"
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "instrument_id",
+            "asset_class",
+            "period",
+            "schema_version",
+            name="uq_report_ai_snapshot_business_key",
+        ),
+        sa.Index(
+            "ix_report_ai_snapshot_lookup",
+            "instrument_id",
+            "asset_class",
+            "period",
+            "generated_at",
+        ),
+    )
+
+    instrument_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("instrument.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    instrument: Optional["Instrument"] = Relationship()
+
+
+class ReportSnapshot(ReportSnapshotBase, TimestampMixin, UUIDMixin, table=True):
+    __tablename__ = "report_snapshot"
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "instrument_id",
+            "asset_class",
+            "period",
+            "schema_version",
+            name="uq_report_snapshot_business_key",
+        ),
+        sa.Index(
+            "ix_report_snapshot_lookup",
+            "instrument_id",
+            "asset_class",
+            "period",
+            "generated_at",
+        ),
+    )
+
+    instrument_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("instrument.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    ai_snapshot_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("report_ai_snapshot.id", ondelete="RESTRICT"),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    instrument: Optional["Instrument"] = Relationship()
+    ai_snapshot: Optional["ReportAiSnapshot"] = Relationship()

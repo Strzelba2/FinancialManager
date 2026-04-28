@@ -1,4 +1,5 @@
 import { logger } from '@/lib/logger'
+import type { EquityReport, ReportPeriod } from '@/features/reports/types/equity'
 
 const BASE = process.env.STOCK_API_URL ?? ''
 const WARSAW_TZ = 'Europe/Warsaw'
@@ -208,6 +209,18 @@ export type ManualIngestStatus = {
   started_at?: string
 }
 
+export type EquityReportApiResponse = {
+  asset_class: 'equity'
+  report: EquityReport
+  available_periods: ReportPeriod[]
+}
+
+export type EquityReportResult = {
+  assetClass: 'equity'
+  report: EquityReport
+  availablePeriods: ReportPeriod[]
+}
+
 export async function getCeleryStatus(): Promise<RequestResult<CeleryStatus>> {
   return requestWithMeta<CeleryStatus>('/stock/celery/status')
 }
@@ -321,6 +334,34 @@ export async function importDailyCandlesCsv(
   return {
     ...result,
     data: normalizeSyncCandlesResult(result.data),
+  }
+}
+
+function normalizeEquityReportResult(raw: EquityReportApiResponse): EquityReportResult {
+  return {
+    assetClass: raw.asset_class,
+    report: raw.report,
+    availablePeriods: raw.available_periods,
+  }
+}
+
+export async function getEquityReport(
+  mic: string,
+  symbol: string,
+  period?: string | null,
+): Promise<RequestResult<EquityReportResult>> {
+  const qs = new URLSearchParams()
+  if (period?.trim()) qs.set('period', period.trim().toUpperCase())
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const result = await requestWithMeta<EquityReportApiResponse>(
+    `/stock/reports/${encodeURIComponent(mic)}/${encodeURIComponent(symbol)}${suffix}`,
+  )
+
+  if (!result.ok) return result
+
+  return {
+    ...result,
+    data: normalizeEquityReportResult(result.data),
   }
 }
 

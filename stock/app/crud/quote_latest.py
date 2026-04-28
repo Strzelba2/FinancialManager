@@ -83,8 +83,22 @@ async def fetch_latest_quote(session: AsyncSession, mic: str, symbol: str) -> Op
     stmt = (
         select(QuoteLatest)
         .join(Instrument, Instrument.id == QuoteLatest.instrument_id)
+        .join(Market, Market.id == Instrument.market_id)
         .options(joinedload(QuoteLatest.instrument)) 
-        .where(Instrument.mic == mic, Instrument.symbol == symbol)
+        .where(Market.mic == mic, Instrument.symbol == symbol)
+        .limit(1)
+    )
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
+async def get_latest_quote_for_instrument(
+    session: AsyncSession,
+    instrument_id,
+) -> Optional[QuoteLatest]:
+    stmt = (
+        select(QuoteLatest)
+        .where(QuoteLatest.instrument_id == instrument_id)
         .limit(1)
     )
     res = await session.execute(stmt)

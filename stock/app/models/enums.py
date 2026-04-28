@@ -22,3 +22,12 @@ class InstrumentType(str, Enum):
 class InstrumentStatus(str, Enum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
+
+
+class ReportAssetClass(str, Enum):
+    EQUITY = "equity"
+    ETF = "etf"
+    FUND = "fund"
+    BOND = "bond"
+    FX = "fx"
+    INDEX = "index"

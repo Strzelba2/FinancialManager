@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Depends, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone, date
-from typing import List, Any
+from typing import List, Any, Optional
 import asyncio
 import uuid
 import logging
@@ -26,6 +26,13 @@ from app.api.services.quotes import (
 from app.crud.candle_daily import list_candles_daily
 from app.markerdata.registry import get_provider
 from app.api.services.stock import ingest_market
+from app.reports.equity.schemas import EquityReportResponse
+from app.reports.equity.service import (
+    ReportConflictError,
+    ReportGenerationError,
+    ReportNotFoundError,
+    get_equity_report,
+)
 
 router = APIRouter()
 
@@ -306,6 +313,38 @@ async def get_latest_by_symbols(
         
     logger.debug(f"Response: get_latest_by_symbols returned {len(quotes)} quotes for symbols={symbols!r}")
     return quotes
+
+
+@router.get("/reports/{mic}/{symbol}", response_model=EquityReportResponse)
+async def get_equity_report_endpoint(
+    mic: str,
+    symbol: str,
+    request: Request,
+    period: Optional[str] = Query(default=None, description="Quarter key in YYYY-QN format"),
+    session: AsyncSession = Depends(db.get_session),
+) -> EquityReportResponse:
+    logger.info(
+        "Request: get_equity_report mic=%r symbol=%r period=%r",
+        mic,
+        symbol,
+        period,
+    )
+    try:
+        return await get_equity_report(
+            session=session,
+            storage=request.app.storage,
+            mic=mic,
+            symbol=symbol,
+            period=period,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ReportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ReportConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ReportGenerationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/instruments/{symbol}/candles/daily/sync", response_model=SyncDailyResponse)

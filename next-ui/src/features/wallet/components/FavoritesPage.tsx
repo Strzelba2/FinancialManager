@@ -1,10 +1,11 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Search, RefreshCw, Plus, Trash2, Bell, BellOff,
   TrendingUp, TrendingDown, MoreVertical, X, AlertCircle,
-  ChevronUp, ChevronDown as ChevdownIcon, Minus,
+  ChevronUp, ChevronDown as ChevdownIcon, Minus, FileText,
 } from 'lucide-react'
 import type { FavoriteItemRow } from '@/app/api/wallet/favorites/[id]/route'
 import type { FavoriteList } from '@/lib/api/wallet'
@@ -158,9 +159,17 @@ type Props = {
   initialItems: FavoriteItemRow[]
 }
 
-type ActionMenu = { symbol: string; name: string; alert: PriceAlertModalData | null; x: number; y: number }
+type ActionMenu = {
+  symbol: string
+  name: string
+  mic: string
+  alert: PriceAlertModalData | null
+  x: number
+  y: number
+}
 
 export function FavoritesPage({ initialLists, initialListId, initialItems }: Props) {
+  const router = useRouter()
   const [lists, setLists] = useState<FavoriteList[]>(initialLists)
   const [selectedListId, setSelectedListId] = useState<string | null>(initialListId)
   const [items, setItems] = useState<FavoriteItemRow[]>(initialItems)
@@ -500,7 +509,14 @@ export function FavoritesPage({ initialLists, initialListId, initialItems }: Pro
                             <button
                               onClick={(e) => {
                                 const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
-                                setActionMenu({ symbol: row.symbol, name: row.name, alert: row.alert, x: rect.left, y: rect.bottom })
+                                setActionMenu({
+                                  symbol: row.symbol,
+                                  name: row.name,
+                                  mic: row.mic,
+                                  alert: row.alert,
+                                  x: rect.left,
+                                  y: rect.bottom,
+                                })
                               }}
                               className="text-white/30 hover:text-white transition-colors p-1 rounded hover:bg-white/10"
                             >
@@ -542,6 +558,18 @@ export function FavoritesPage({ initialLists, initialListId, initialItems }: Pro
             )}
             {actionMenu.alert ? 'Edytuj alert' : 'Dodaj alert'}
           </button>
+          {actionMenu.mic !== 'STCM' && (
+            <button
+              onClick={() => {
+                router.push(`/stock/${encodeURIComponent(actionMenu.mic)}/${encodeURIComponent(actionMenu.symbol)}/report`)
+                setActionMenu(null)
+              }}
+              className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              Raport AI
+            </button>
+          )}
           {actionMenu.alert && (
             <button
               onClick={async () => { await fetch(`/api/wallet/alerts/${encodeURIComponent(actionMenu.symbol)}`, { method: 'DELETE' }); setActionMenu(null); if (selectedListId) loadItems(selectedListId) }}
