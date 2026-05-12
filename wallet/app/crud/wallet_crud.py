@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Wallet
-from app.schamas.schemas import WalletCreate, WalletUpdate
+from app.schemas.schemas import WalletCreate, WalletUpdate
 
 
 async def create_wallet(session: AsyncSession, data: WalletCreate) -> Wallet:

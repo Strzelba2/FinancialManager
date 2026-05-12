@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import db
 from app.api.deps import get_internal_user_id
 from app.crud.user_crud import get_user
-from app.schamas.schemas import RecurringExpenseCreate, RecurringExpenseUpdate, RecurringExpenseRead
+from app.schemas.schemas import RecurringExpenseCreate, RecurringExpenseUpdate, RecurringExpenseRead
 from app.crud.recurring_expenses_crud import (
     update_recurring_expense, create_recurring_expense, delete_recurring_expense,
     list_recurring_expenses)

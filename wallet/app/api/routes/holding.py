@@ -5,7 +5,7 @@ from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-from app.schamas.response import HoldingRowOut
+from app.schemas.response import HoldingRowOut
 from app.db.session import db
 from app.api.deps import get_internal_user_id
 from app.crud.holding_crud import list_holdings_rows_for_user

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
-from app.schamas.schemas import PriceAlertCreate, PriceAlertUpdate, PriceAlertRead
+from app.schemas.schemas import PriceAlertCreate, PriceAlertUpdate, PriceAlertRead
 from app.crud.price_alert_crud import (
     get_alert,
     upsert_alert,

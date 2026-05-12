@@ -7,7 +7,7 @@ from app.clients.stock_client import StockClient
 from app.api.deps import get_internal_user_id, get_stock_client
 from app.api.services.wallet_manager_service import get_wallet_manager_tree_service, create_monthly_snapshot_for_user_service
 from app.db.session import db
-from app.schamas.response import (
+from app.schemas.response import (
     WalletManagerWalletOut, CreateMonthlySnapshotIn, CreateMonthlySnapshotOut,
     WalletManagerTreeIn
 )

@@ -6,11 +6,11 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import db
-from app.schamas.response import (
+from app.schemas.response import (
     BrokerageEventWithHoldingRead, BrokerageEventsImportSummary, BrokerageEventPageOut,
     BrokerageEventRowOut, BatchUpdateBrokerageEventsRequest
     )
-from app.schamas.schemas import (
+from app.schemas.schemas import (
     BrokerageEventCreate, HoldingRead, BrokerageEventsImportRequest, BrokerageAccountRead
     )
 from app.api.services.brokerage_event import (

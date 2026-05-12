@@ -1,0 +1,40 @@
+[run]
+branch = True
+source =
+    userauth
+    utils
+    middleware
+omit =
+    */__init__.py
+    */__pycache__/*
+    */tests/*
+    */tests/artifacts/*
+    */migrations/*
+    config/*
+    static/*
+    staticfiles/*
+    templates/*
+    userauth/admin.py
+    userauth/apps.py
+    userauth/models.py
+    userauth/urls.py
+
+[report]
+precision = 2
+show_missing = True
+skip_empty = True
+include =
+    userauth/**/*.py
+    userauth/*.py
+    utils/**/*.py
+    utils/*.py
+    middleware/**/*.py
+    middleware/*.py
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:
+    raise NotImplementedError
+
+[html]
+title = FinancialManager Session Coverage

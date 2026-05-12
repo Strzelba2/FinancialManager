@@ -65,6 +65,12 @@ services:
       - rabbitmq
     command: ["bash", "docker/session/start.sh"]
     restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/healthz', timeout=3); sys.exit(0 if r.status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - financial_manager
 
@@ -206,11 +212,16 @@ services:
     depends_on:
       - wallet-db
     command: ["bash", "docker/fastapi/start.sh"]
-    
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8001/healthz', timeout=3); sys.exit(0 if r.status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - financial_manager
 
-  stock: 
+  stock:
     build:
       context: ./stock
       dockerfile: docker/fastapi/Dockerfile
@@ -226,9 +237,14 @@ services:
     env_file:
       - ./stock/app/core/.envs/.env.local
     depends_on:
-      - wallet-db
+      - stock-db
     command: ["bash", "docker/fastapi/start.sh"]
-    
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8001/healthz', timeout=3); sys.exit(0 if r.status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - financial_manager
 
@@ -243,7 +259,7 @@ services:
     env_file:
       - ./stock/app/core/.envs/.env.local
     depends_on:
-      - wallet-db
+      - stock-db
       - redis
       - rabbitmq
     command: ["bash", "docker/celery/worker/start.sh"]
@@ -274,7 +290,7 @@ services:
     env_file:
       - ./stock/app/core/.envs/.env.local
     depends_on:
-      - wallet-db
+      - stock-db
       - redis
       - rabbitmq
     command: ["bash", "docker/celery/beat/start.sh"]

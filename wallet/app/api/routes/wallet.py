@@ -9,10 +9,10 @@ import uuid
 
 from app.models.models import Holding
 from app.models.enums import Currency, CapitalGainKind
-from app.schamas.schemas import (
+from app.schemas.schemas import (
     UserCreate, WalletCreate, WalletCreateWithoutUser
     )
-from app.schamas.response import (
+from app.schemas.response import (
     WalletUserResponse, WalletResponse, WalletListItem, AccountListItem, BrokerageAccountListItem,
     QuoteBySymbolItem, BrokerageEventListItem, RealEstateItem, MetalHoldingItem, DebtItem,
     RecurringExpenseItem, YearGoalRead, WalletOut, WalletRenameIn, CpiMonthlyOut, MonthlySeriesOut,

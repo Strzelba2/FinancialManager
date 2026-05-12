@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import MetalHolding  
-from app.schamas.schemas import MetalHoldingCreate, MetalHoldingUpdate
+from app.schemas.schemas import MetalHoldingCreate, MetalHoldingUpdate
 from app.models.enums import MetalType
 
 

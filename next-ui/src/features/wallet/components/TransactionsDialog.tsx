@@ -466,7 +466,7 @@ function ImportTab({
       firstDateLabel: formatDateLabel(firstRow.date),
       lastTransactionLabel: formatDateLabel(selectedAccount.lastTransactionAt),
     }
-  }, [accountId, importMode, normalizedTxRows, selectedAccount])
+  }, [importMode, normalizedTxRows, selectedAccount])
 
   function resetParsedState() {
     setParseError(undefined)

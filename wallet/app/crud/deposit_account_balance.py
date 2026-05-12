@@ -9,7 +9,7 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import DepositAccountBalance, DepositAccount
-from app.schamas.schemas import DepositAccountBalanceCreate
+from app.schemas.schemas import DepositAccountBalanceCreate
 
 
 async def create_deposit_account_balance(

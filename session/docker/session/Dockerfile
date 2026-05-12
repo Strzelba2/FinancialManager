@@ -38,7 +38,8 @@ RUN groupadd -g ${GID} -r ${APP_GROUP} \
 COPY --chown=${APP_USER}:${APP_GROUP} . ${APP_HOME}/
 
 RUN pip install --upgrade pip \
-    && pip install -r requirements/requirements.txt
+    && pip install -r requirements/requirements.txt \
+    && pip install -r requirements/requirements-test.txt
 
 RUN sed -i 's/\r$//g' docker/session/start.sh && \
     chmod +x docker/session/start.sh

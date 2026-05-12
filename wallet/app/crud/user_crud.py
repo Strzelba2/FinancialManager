@@ -7,7 +7,7 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import User
-from app.schamas.schemas import UserCreate, UserUpdate
+from app.schemas.schemas import UserCreate, UserUpdate
 import logging
 
 logger = logging.getLogger(__name__)

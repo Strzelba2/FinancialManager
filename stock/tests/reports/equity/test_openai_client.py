@@ -6,6 +6,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import allure
+import pytest
 from openai import APIStatusError
 
 from app.reports.equity.openai_client import (
@@ -13,6 +15,8 @@ from app.reports.equity.openai_client import (
     _extract_parsed_payload,
     _is_likely_truncated_json_error,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def _mv(value, as_of="2024-12-31", unit=None, confidence="high", source="openai", note=None):
@@ -149,6 +153,12 @@ def _payload_dict() -> dict:
     }
 
 
+@allure.epic("Unit Tests")
+@allure.feature("Stock Equity Reports")
+@allure.story("OpenAI response parsing handles valid and malformed payloads")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("ai", "reports")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
 class ExtractParsedPayloadTests(unittest.TestCase):
     def test_detects_truncated_json_validation_errors(self) -> None:
         error = Exception("Invalid JSON: EOF while parsing a string [type=json_invalid]")
@@ -191,6 +201,17 @@ class ExtractParsedPayloadTests(unittest.TestCase):
         self.assertEqual(parsed.verdict.recommendation, "hold")
 
 
+@allure.epic("Unit Tests")
+@allure.feature("Stock Equity Reports")
+@allure.story("OpenAI client handles generation and truncation failure modes")
+@allure.severity(allure.severity_level.NORMAL)
+@allure.tag("ai", "reports")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Verifies the OpenAI client retry strategy when a model rejects the temperature "
+    "parameter. The client must retry without temperature on the first rejection, then "
+    "remember the model permanently to avoid the extra round-trip on subsequent calls."
+)
 class OpenAIClientGenerateTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         OpenAIEquityReportClient._models_without_temperature.clear()

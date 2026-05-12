@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Holding, Instrument, BrokerageAccount, Wallet
 from app.models.enums import BrokerageEventKind
-from app.schamas.schemas import (
+from app.schemas.schemas import (
     HoldingCreate, HoldingUpdate, BrokerageEventCreate
 )
 

@@ -13,8 +13,8 @@ from app.crud.real_estate_crud import (
     create_real_estate, list_real_estates, 
     update_real_estate, delete_real_estate, 
     )
-from app.schamas.schemas import RealEstateCreate, RealEstateRead, RealEstateUpdate
-from app.schamas.response import SellRealEstateIn
+from app.schemas.schemas import RealEstateCreate, RealEstateRead, RealEstateUpdate
+from app.schemas.response import SellRealEstateIn
 
 
 logger = logging.getLogger(__name__)

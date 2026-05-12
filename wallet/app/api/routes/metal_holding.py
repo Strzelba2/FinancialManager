@@ -13,8 +13,8 @@ from app.crud.metal_holding_crud import (
     list_metal_holdings_by_wallet, update_metal_holding,
     delete_metal_holding, create_metal_holding,
     )
-from app.schamas.schemas import MetalHoldingCreate, MetalHoldingRead, MetalHoldingUpdate
-from app.schamas.response import SellMetalIn
+from app.schemas.schemas import MetalHoldingCreate, MetalHoldingRead, MetalHoldingUpdate
+from app.schemas.response import SellMetalIn
 
 logger = logging.getLogger(__name__)
 

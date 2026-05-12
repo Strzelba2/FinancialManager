@@ -38,6 +38,7 @@ COPY --chown=${APP_USER}:${APP_GROUP} . ${APP_HOME}/
 
 RUN pip install --upgrade pip \
     && pip install -r requirements/requirements.txt \
+    && pip install -r requirements/requirements-test.txt \
     && pip install playwright
 
 RUN playwright install --with-deps chromium \

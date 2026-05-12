@@ -4,7 +4,7 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import YearGoal
-from app.schamas.schemas import YearGoalCreate, YearGoalUpdate
+from app.schemas.schemas import YearGoalCreate, YearGoalUpdate
 
 
 async def get_year_goal(session: AsyncSession, wallet_id: uuid.UUID, year: int) -> Optional[YearGoal]:

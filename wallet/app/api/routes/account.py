@@ -6,8 +6,8 @@ import uuid
 from app.crud.wallet_crud import get_wallet
 from app.crud.deposit_account_crud import delete_deposit_account, list_accounts_for_user, get_deposit_account_for_user
 from app.api.services.accounts import create_deposit_account_service, create_brokeage_account_service
-from app.schamas.response import AccountCreateResponse, AccountOut
-from app.schamas.schemas import (
+from app.schemas.response import AccountCreateResponse, AccountOut
+from app.schemas.schemas import (
     AccountCreation, DepositAccountRead, AccountType, BrokerageAccountCreate
 )
 from app.api.deps import get_internal_user_id, get_auth_crypto

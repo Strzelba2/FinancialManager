@@ -8,7 +8,7 @@ import logging
 
 from static.style import add_style, add_user_style, add_table_style
 from components.context.nav_context import NavContextBase
-from components.context.manual_refresh_quates import ManualRefreshQuates
+from components.context.manual_refresh_quotes import ManualRefreshQuotes
 from components.favorites import open_favorites_dialog
 from components.navbar_footer import footer
 from schemas.quotes import QuoteRow
@@ -23,7 +23,7 @@ MIC_CHOICES = {'GPW': 'XWAR', 'NEWCONNECT': 'XNCO', 'RAW': 'STCM'}
 MIC_BY_CODE = {v: k for k, v in MIC_CHOICES.items()}
 
 
-class Quotes(NavContextBase, ManualRefreshQuates):
+class Quotes(NavContextBase, ManualRefreshQuotes):
     """
     Quotes page: shows latest stock quotes for a given MIC with filters, summary,
     and a live “flash” effect when prices change.

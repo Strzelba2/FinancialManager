@@ -15,7 +15,7 @@ from app.crud.instrument_sync import (
     should_skip_daily_sync, mark_daily_attempt, get_or_create_sync_state,
     mark_daily_failure, mark_daily_success
 )
-from app.schemas.quates import (
+from app.schemas.quotes import (
     QuotePayloadOut, BulkQuotesOut, LatestQuoteBySymbol, SyncDailyResult, DailyRow
 )
 

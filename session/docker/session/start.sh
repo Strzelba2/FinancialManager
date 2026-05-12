@@ -108,4 +108,4 @@ else
     --error-logfile "-" \
     --capture-output
 fi
-echo "== Gunicorn exited ==
+echo "== Gunicorn exited =="

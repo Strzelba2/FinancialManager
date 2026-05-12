@@ -45,10 +45,32 @@ type XScaleContext = {
   buckets: XBucket[]
   dateToIndex: Map<string, number>
 }
+type GridRect = { x: number; y: number; width: number; height: number }
+type ChartModel = {
+  getComponent(name: string, index: number): { coordinateSystem: { getRect(): GridRect } }
+}
+type ChartLike = {
+  convertFromPixel(finder: Record<string, number>, value: [number, number]): unknown
+  convertToPixel(finder: Record<string, number>, value: [number, number]): unknown
+  getDom?: () => HTMLElement | null
+  getModel(): ChartModel
+  getOption?: () => unknown
+  getZr?: () => ZrLike | null
+  on(eventName: string, handler: () => void): void
+  setOption(option: unknown, opts?: unknown): void
+}
+type ZrPointerEvent = {
+  event?: { offsetX: number; offsetY: number; button?: number }
+  offsetX?: number
+  offsetY?: number
+  button?: number
+}
+type ZrLike = {
+  on(eventName: string, handler: (event: ZrPointerEvent) => void): void
+}
 
 type EngineState = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  chart: any
+  chart: ChartLike
   xScale: XScaleContext
   annos: Anno[]
   selectedId: string | null
@@ -558,22 +580,21 @@ function buildLineOption(
   }
 }
 
-function gridRect(chart: any): { x: number; y: number; width: number; height: number } | null {
+function gridRect(chart: ChartLike): GridRect | null {
   try {
     const grid = chart.getModel().getComponent('grid', 0)
-    return grid.coordinateSystem.getRect() as { x: number; y: number; width: number; height: number }
+    return grid.coordinateSystem.getRect()
   } catch { return null }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toData(chart: any, px: [number, number]): [number, number] | null {
+function toData(chart: ChartLike, px: [number, number]): [number, number] | null {
   try {
     const r = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, px)
     return Array.isArray(r) ? (r as [number, number]) : null
   } catch { return null }
 }
 
-function toPx(chart: any, data: [number, number]): [number, number] | null {
+function toPx(chart: ChartLike, data: [number, number]): [number, number] | null {
   try {
     const r = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, data)
     return Array.isArray(r) ? (r as [number, number]) : null
@@ -877,10 +898,8 @@ function attachDrawEngine(
   xScale: XScaleContext,
   cbs: { onStageChange: (s: number) => void; onModeReset: () => void },
 ): EngineState {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const c = chart as any
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const zr = c.getZr?.() as any
+  const c = chart as ChartLike
+  const zr = c.getZr?.()
   if (!zr) throw new Error('no ZRender')
 
   const opt = (c.getOption?.() ?? {}) as Record<string, unknown>
@@ -899,8 +918,7 @@ function attachDrawEngine(
   c.on('finished', () => scheduleRender(st))
   window.addEventListener('resize', () => scheduleRender(st))
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  zr.on('mousemove', (ev: any) => {
+  zr.on('mousemove', (ev) => {
     const e = ev.event ?? ev
     st.cursorPx = [e.offsetX as number, e.offsetY as number]
 
@@ -958,7 +976,7 @@ function attachDrawEngine(
     if (st.mode) scheduleRender(st)
   })
 
-  zr.on('click', (ev: any) => {
+  zr.on('click', (ev) => {
     const e = ev.event ?? ev
     const px: [number, number] = [e.offsetX as number, e.offsetY as number]
     const rect = gridRect(c)
@@ -1022,7 +1040,7 @@ function attachDrawEngine(
     }
   })
 
-  zr.on('mousedown', (ev: any) => {
+  zr.on('mousedown', (ev) => {
     const e = ev.event ?? ev
     if (e.button !== 0 || st.mode) return
     const px: [number, number] = [e.offsetX as number, e.offsetY as number]

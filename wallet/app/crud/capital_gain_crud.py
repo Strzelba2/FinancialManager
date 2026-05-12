@@ -9,7 +9,7 @@ from uuid import UUID
 
 
 from app.models.models import CapitalGain, DepositAccount
-from app.schamas.schemas import CapitalGainCreate
+from app.schemas.schemas import CapitalGainCreate
 from app.models.enums import CapitalGainKind, Currency
 
 

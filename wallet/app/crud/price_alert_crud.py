@@ -11,7 +11,7 @@ from sqlmodel import select
 from sqlalchemy.orm import selectinload
 
 from app.models.models import PriceAlert, Instrument
-from app.schamas.schemas import PriceAlertUpdate  
+from app.schemas.schemas import PriceAlertUpdate  
 
 
 async def get_alert(

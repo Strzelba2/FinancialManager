@@ -7,7 +7,7 @@ from app.db.session import db
 from app.crud.real_estates_price_crud import create_real_estate_price
 from app.api.services.real_estate import get_latest_price_with_fallback
 from app.models.enums import PropertyType, Currency
-from app.schamas.schemas import RealEstatePriceCreate, RealEstatePriceRead
+from app.schemas.schemas import RealEstatePriceCreate, RealEstatePriceRead
 
 
 logger = logging.getLogger(__name__)

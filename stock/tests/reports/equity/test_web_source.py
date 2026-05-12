@@ -5,6 +5,9 @@ import copy
 import unittest
 from datetime import date, datetime, timezone
 
+import allure
+import pytest
+
 from app.reports.equity.ai_schema import EquityAiPayload
 from app.reports.equity.web_source import (
     EquityWebSourceClient,
@@ -24,6 +27,8 @@ from app.reports.equity.web_source import (
 from app.reports.equity.builder import build_equity_report
 
 from .test_builder import make_ai_payload, make_candles
+
+pytestmark = pytest.mark.unit
 
 
 LISTING_HTML = """
@@ -483,6 +488,18 @@ PAP_NOTICE_WITH_SCRIPT_DOWNLOAD_LINK_HTML = """
 """
 
 
+@allure.epic("Unit Tests")
+@allure.feature("Stock Equity Reports")
+@allure.story("Web-source enrichment parses public facts without live network access")
+@allure.severity(allure.severity_level.NORMAL)
+@allure.tag("reports", "parsing")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Verifies web-source enrichment without live network access: HTML table parsers "
+    "for financial metrics and peer comparisons, PDF text parsers for MAR insider "
+    "transaction notices (buy/sell, aggregate and simple layouts), attachment link "
+    "extraction, and merge helpers that fill sparse AI payloads from scraped facts."
+)
 class EquityWebSourceTests(unittest.TestCase):
     def test_latest_metric_from_table_skips_empty_latest_cell(self) -> None:
         table = _ParsedTable(

@@ -1,4 +1,4 @@
-from app.schamas.schemas import UserCreate
+from app.schemas.schemas import UserCreate
 from app.models.models import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.crud.user_crud import get_user_by_username, create_user

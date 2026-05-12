@@ -14,11 +14,11 @@ import logging
 from app.models.models import (
     Transaction, DepositAccount, Wallet, DepositAccountBalance, CapitalGain
     )
-from app.schamas.schemas import (
+from app.schemas.schemas import (
     TransactionCreate, TransactionRead,
     TransactionUpdate,
 )
-from app.schamas.response import (
+from app.schemas.response import (
     BatchUpdateTransactionsRequest, BatchUpdateTransactionsResponse, Currency
 )
 

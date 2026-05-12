@@ -1,0 +1,7 @@
+pytest>=8.3,<9
+allure-pytest>=2.13,<3
+robotframework>=7,<8
+allure-robotframework>=2.13,<3
+robotframework-requests>=0.9,<1
+robotframework-browser[bb]>=19,<20
+httpx[http2]>=0.28,<0.29

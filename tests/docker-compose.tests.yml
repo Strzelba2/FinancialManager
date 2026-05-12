@@ -1,0 +1,52 @@
+services:
+  next-ui:
+    labels:
+      - "traefik.http.routers.next-ui-browser-tests-public.rule=Host(`traefik`) && (PathPrefix(`/home`) || PathPrefix(`/login`) || PathPrefix(`/register`) || PathPrefix(`/logout`))"
+      - "traefik.http.routers.next-ui-browser-tests-public.entrypoints=web"
+      - "traefik.http.routers.next-ui-browser-tests-public.service=next-ui-service"
+      - "traefik.http.routers.next-ui-browser-tests-public.priority=100"
+      - "traefik.http.routers.next-ui-browser-tests-static.rule=Host(`traefik`) && (PathPrefix(`/_next/`) || PathPrefix(`/favicon.ico`) || PathPrefix(`/.well-known/appspecific/`) || PathPrefix(`/__nextjs_source-map`))"
+      - "traefik.http.routers.next-ui-browser-tests-static.entrypoints=web"
+      - "traefik.http.routers.next-ui-browser-tests-static.service=next-ui-service"
+      - "traefik.http.routers.next-ui-browser-tests-static.priority=100"
+      - "traefik.http.routers.next-ui-browser-tests-protected.rule=Host(`traefik`)"
+      - "traefik.http.routers.next-ui-browser-tests-protected.entrypoints=web"
+      - "traefik.http.routers.next-ui-browser-tests-protected.service=next-ui-service"
+      - "traefik.http.routers.next-ui-browser-tests-protected.middlewares=next-forwardauth@docker,next-auth-errors@docker,nocache@docker"
+      - "traefik.http.routers.next-ui-browser-tests-protected.priority=1"
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: tests/docker/test-runner.Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    depends_on:
+      traefik:
+        condition: service_started
+      session-auth:
+        condition: service_healthy
+      wallet:
+        condition: service_healthy
+      stock:
+        condition: service_healthy
+      nice-ui:
+        condition: service_started
+      next-ui:
+        condition: service_started
+    networks:
+      - financial_manager
+
+  allure-ui:
+    image: nginx:1.27-alpine
+    ports:
+      - "5252:80"
+    volumes:
+      - ./tests/artifacts/allure-report:/usr/share/nginx/html:ro
+    networks:
+      - financial_manager
+
+networks:
+  financial_manager:
+    external: true

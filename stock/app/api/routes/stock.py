@@ -11,7 +11,7 @@ from app.db.session import db
 from app.schemas.schemas import (
     MarketOut, InstrumentOptionOut, InstrumentSearchRead, InstrumentRead
 )
-from app.schemas.quates import (
+from app.schemas.quotes import (
     LatestQuoteBySymbol, QuotesBySymbolsRequest, CandleDailyOut, SyncDailyResponse,
     SyncDailyRequest, ImportDailyCsvRequest, SyncDailyResult
 )

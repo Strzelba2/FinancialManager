@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 import logging
 import base64
 
-from app.schamas.schemas import (
+from app.schemas.schemas import (
     AccountCreation, DepositAccountCreate, DepositAccountRead, DepositAccountBalanceCreate,
     BrokerageAccountCreate, BrokerageAccountRead, BrokerageDepositLinkCreate
 )

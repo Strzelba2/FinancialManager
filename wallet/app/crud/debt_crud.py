@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Debt
-from app.schamas.schemas import DebtCreate, DebtUpdate
+from app.schemas.schemas import DebtCreate, DebtUpdate
 
 
 async def list_debts(

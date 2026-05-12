@@ -11,8 +11,8 @@ from app.crud.user_crud import get_user
 from app.core.exceptions import (
     ImportMismatchError, UnknownAccountError, UnknownUserError, DuplicateTransactionError
 )
-from app.schamas.schemas import CreateTransactionsRequest
-from app.schamas.response import (
+from app.schemas.schemas import CreateTransactionsRequest
+from app.schemas.response import (
     TransactionPageOut, BatchUpdateTransactionsRequest,
     BatchUpdateTransactionsResponse, TransactionRowOut
 )

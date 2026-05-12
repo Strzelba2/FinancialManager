@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import CapitalGain
 from app.models.enums import CapitalGainKind, Currency
-from app.schamas.response import SellMetalIn, SellRealEstateIn
-from app.schamas.schemas import TransactionCreate, MetalHoldingUpdate
+from app.schemas.response import SellMetalIn, SellRealEstateIn
+from app.schemas.schemas import TransactionCreate, MetalHoldingUpdate
 
 from app.crud.metal_holding_crud import get_metal_holding, delete_metal_holding, update_metal_holding
 from app.crud.real_estate_crud import get_real_estate, delete_real_estate

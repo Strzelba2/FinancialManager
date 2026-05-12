@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class ManualRefreshQuates:
+class ManualRefreshQuotes:
     """
     UI helper for manually refreshing quotes.
 
@@ -30,7 +30,7 @@ class ManualRefreshQuates:
         - If Celery workers respond to ping, performs a UI reload immediately.
         - Otherwise starts a manual ingest and begins polling its status.
         """
-        logger.info("ManualRefreshQuates: refresh click")
+        logger.info("ManualRefreshQuotes: refresh click")
         try:
             self.refresh_btn.disable()
         except Exception:
@@ -91,7 +91,7 @@ class ManualRefreshQuates:
 
             elif state == "error":
                 self._ingest_label.set_text("Failed ❌")
-                ui.notify(f"Update quates failed : {data.get('detail', '')}")
+                ui.notify(f"Update quotes failed: {data.get('detail', '')}")
                 self._stop_ingest_polling()
             elif state == "running":
                 self._time_running += 2
@@ -113,7 +113,7 @@ class ManualRefreshQuates:
             try:
                 t.cancel()
             except Exception:
-                logger.debug("ManualRefreshQuates: timer cancel failed", exc_info=True)
+                logger.debug("ManualRefreshQuotes: timer cancel failed", exc_info=True)
                 pass
             self._ingest_timer = None
             
@@ -122,7 +122,7 @@ class ManualRefreshQuates:
         except Exception:
             pass
         
-        logger.info("ManualRefreshQuates: polling stopped")
+        logger.info("ManualRefreshQuotes: polling stopped")
         
     async def _restore_ingest_status(self) -> None:
         """
@@ -132,7 +132,7 @@ class ManualRefreshQuates:
           - resumes polling if state == "running"
           - shows done/failed message otherwise
         """
-        logger.debug(f"ManualRefreshQuates: restore ingest status key={self.ingest_key!r}")
+        logger.debug(f"ManualRefreshQuotes: restore ingest status key={self.ingest_key!r}")
         data = await app.storage.stock.hgetall(self.ingest_key)
         state = (data or {}).get("state")
         
@@ -154,3 +154,4 @@ class ManualRefreshQuates:
             self._ingest_label.set_text(f"Quotes refresh: Failed ❌ {detail}")
         else:
             self._ingest_label.set_text("")
+

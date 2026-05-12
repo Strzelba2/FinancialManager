@@ -5,7 +5,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import RecurringExpense
-from app.schamas.schemas import RecurringExpenseCreate, RecurringExpenseUpdate
+from app.schemas.schemas import RecurringExpenseCreate, RecurringExpenseUpdate
 
 
 async def list_recurring_expenses(session: AsyncSession, wallet_id: uuid.UUID) -> List[RecurringExpense]:

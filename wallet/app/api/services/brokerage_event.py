@@ -6,7 +6,7 @@ import logging
 
 from app.models.models import Holding, BrokerageEvent
 from app.models.enums import BrokerageEventKind, CapitalGainKind
-from app.schamas.schemas import BrokerageEventCreate, TransactionIn, CreateTransactionsRequest, CapitalGainCreate
+from app.schemas.schemas import BrokerageEventCreate, TransactionIn, CreateTransactionsRequest, CapitalGainCreate
 from app.crud.holding_crud import get_or_create_holding, apply_event_to_holding
 from app.crud.broker_event_crud import create_brokerage_event, find_duplicate_brokerage_event
 from app.crud.deposit_account_crud import resolve_deposit_for_event

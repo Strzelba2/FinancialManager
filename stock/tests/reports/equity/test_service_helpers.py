@@ -4,6 +4,10 @@ import unittest
 from datetime import date
 from types import SimpleNamespace
 
+import allure
+import pytest
+
+from app.core.config import settings
 from app.reports.equity.service import (
     ai_snapshot_is_fresh,
     build_ai_cache_prompt_hash,
@@ -14,7 +18,21 @@ from app.reports.equity.service import (
     should_refresh_ai_for_grounded_narrative,
 )
 
+pytestmark = pytest.mark.unit
 
+
+@allure.epic("Unit Tests")
+@allure.feature("Stock Equity Reports")
+@allure.story("Report service refresh decisions are deterministic")
+@allure.severity(allure.severity_level.NORMAL)
+@allure.tag("reports", "ai")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Verifies report service refresh decisions: candle staleness gap (5-day rule), "
+    "AI snapshot freshness for current vs archived quarters, cache prompt hash "
+    "stability for the same identity inputs, web-source fetch conditions, and "
+    "quarter boundary handling at year-end."
+)
 class EquityServiceHelperTests(unittest.TestCase):
     def test_last_closed_quarter_handles_year_boundary(self) -> None:
         self.assertEqual(last_closed_quarter(date(2026, 1, 15)), "2025-Q4")
@@ -34,7 +52,7 @@ class EquityServiceHelperTests(unittest.TestCase):
     def test_ai_snapshot_freshness_distinguishes_current_and_archived_periods(self) -> None:
         ready_snapshot = SimpleNamespace(
             status="ready",
-            prompt_version="equity-v1",
+            prompt_version=settings.OPENAI_REPORT_PROMPT_VERSION,
             prompt_hash="hash-1",
             valid_until=date(2025, 7, 18),
         )
@@ -46,7 +64,7 @@ class EquityServiceHelperTests(unittest.TestCase):
         )
         stale_hash_snapshot = SimpleNamespace(
             status="ready",
-            prompt_version="equity-v1",
+            prompt_version=settings.OPENAI_REPORT_PROMPT_VERSION,
             prompt_hash="older-hash",
             valid_until=date(2025, 7, 18),
         )

@@ -13,7 +13,7 @@ from app.crud.year_goal_crud import (
     update_year_goal, delete_year_goal
     )
 from app.api.services.transactions import compute_wallet_ytd_income_expense_maps
-from app.schamas.schemas import YearGoalCreate, YearGoalRead, YearGoalUpdate
+from app.schemas.schemas import YearGoalCreate, YearGoalRead, YearGoalUpdate
 
 logger = logging.getLogger(__name__)
 

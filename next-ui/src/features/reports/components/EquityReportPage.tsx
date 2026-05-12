@@ -1,6 +1,6 @@
 'use client'
 
-import { startTransition, useEffect, useState } from 'react'
+import { startTransition, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   TrendingUp, TrendingDown, Minus, ExternalLink,
@@ -1176,16 +1176,11 @@ export function EquityReportPage({ report, availablePeriods }: Props) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [activeTab, setActiveTab] = useState<TabId>('fundamentals')
-  const [activePeriod, setActivePeriod] = useState(report.meta.period)
   const [legendOpen, setLegendOpen] = useState(false)
-
-  useEffect(() => {
-    setActivePeriod(report.meta.period)
-  }, [report.meta.period])
+  const activePeriod = report.meta.period
 
   function handlePeriodChange(period: string) {
     if (period === activePeriod) return
-    setActivePeriod(period)
 
     const params = new URLSearchParams(searchParams.toString())
     params.set('period', period)

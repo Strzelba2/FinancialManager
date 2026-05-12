@@ -3,7 +3,7 @@ from typing import List, Dict
 from decimal import Decimal
 import logging
 
-from app.schamas.response import QuoteBySymbolItem, PositionPerformance
+from app.schemas.response import QuoteBySymbolItem, PositionPerformance
 from app.models.models import Holding, Instrument
 from app.models.enums import Currency
 

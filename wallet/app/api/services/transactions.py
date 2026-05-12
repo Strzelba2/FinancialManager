@@ -5,7 +5,7 @@ from typing import Tuple, Dict
 import uuid
 import logging
 
-from app.schamas.schemas import (
+from app.schemas.schemas import (
     CreateTransactionsRequest, TransactionIn, TransactionCreate,
     CapitalGainCreate
 )

@@ -8,7 +8,7 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import BrokerageAccount, Wallet, Bank
-from app.schamas.schemas import (
+from app.schemas.schemas import (
     BrokerageAccountCreate,
     BrokerageAccountUpdate,
 )

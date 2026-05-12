@@ -4,10 +4,15 @@ import math
 import unittest
 from datetime import date, datetime, timedelta, timezone
 
+import allure
+import pytest
+
 from app.reports.equity.ai_schema import EquityAiPayload
 from app.reports.equity.builder import build_equity_report
 from app.reports.equity.local_metrics import aggregate_candles_weekly, bollinger, closes
 from app.reports.equity.sanitize import sanitize_equity_ai_payload
+
+pytestmark = pytest.mark.unit
 
 
 def mv(value, as_of="2024-12-31", unit=None, confidence="high", source="openai", note=None):
@@ -205,6 +210,19 @@ def make_candles(*, start: date = date(2024, 1, 1), periods: int = 330) -> list[
     return candles
 
 
+@allure.epic("Unit Tests")
+@allure.feature("Stock Equity Reports")
+@allure.story("Report builder keeps local metrics and response contracts stable")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("reports", "ai", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Builds the final equity report from an AI payload and market candle data. "
+    "Verifies local metric computation (PE, PB, PS, EV/EBITDA, Bollinger bands on "
+    "weekly candles, RSI, OBV), AI verdict reconciliation when local signals contradict "
+    "the AI score, valuation quadrant assignment (A/B/C/D), and sanitizer fallbacks "
+    "for placeholder and null values in the AI payload."
+)
 class BuildEquityReportTests(unittest.TestCase):
     def test_builder_computes_local_metrics_and_keeps_contract_shape(self) -> None:
         ai_payload = make_ai_payload()

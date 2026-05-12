@@ -11,7 +11,7 @@ from app.utils.dates import PL_MONTHS, try_parse_date
 from app.utils.regex_check import TIME_RE, DATE_RE
 from app.utils.text import strip_accents
 from app.utils.numbers import dec2, to_int_opt
-from app.schemas.quates import DailyRow
+from app.schemas.quotes import DailyRow
 from .config import MarketConfig
 
 logger = logging.getLogger(__name__)

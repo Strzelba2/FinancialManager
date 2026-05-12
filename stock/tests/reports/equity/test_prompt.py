@@ -3,9 +3,20 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
+import allure
+import pytest
+
 from app.reports.equity.prompt import SYSTEM_PROMPT, build_user_prompt
 
+pytestmark = pytest.mark.unit
 
+
+@allure.epic("Unit Tests")
+@allure.feature("Stock Equity Reports")
+@allure.story("Prompt contracts preserve grounded analysis instructions")
+@allure.severity(allure.severity_level.NORMAL)
+@allure.tag("reports", "ai")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
 class EquityPromptTests(unittest.TestCase):
     def test_prompt_tells_model_to_ground_narrative_in_public_web_facts(self) -> None:
         user_prompt = build_user_prompt(

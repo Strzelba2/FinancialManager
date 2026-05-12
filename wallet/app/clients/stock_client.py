@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional, List
 from datetime import date
 
 import httpx
-from app.schamas.response import (
+from app.schemas.response import (
     QuotesBySymbolsResponse, QuoteBySymbolItem, SyncDailyResponse, SyncDailyRequest,
     StockInstrumentRead
 )

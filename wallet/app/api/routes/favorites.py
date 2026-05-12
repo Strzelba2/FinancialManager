@@ -6,7 +6,7 @@ import logging
 
 from app.clients.stock_client import StockClient
 
-from app.schamas.schemas import (
+from app.schemas.schemas import (
     FavoriteListCreate, FavoriteListRead, FavoriteItemCreate,
     FavoriteItemRead, Currency
 )

@@ -29,4 +29,15 @@ commends.txt
 *.fontconfig
 *.pki
 html_dumps
-
+backups/
+.pytest_cache/
+.coverage
+*/.coverage
+tests/artifacts/
+tests/**/output.xml
+tests/**/log.html
+tests/**/report.html
+stock/tests/artifacts/
+wallet/tests/artifacts/
+session/tests/artifacts/
+next-ui/tests/artifacts/

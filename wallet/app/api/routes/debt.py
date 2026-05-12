@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import db
 from app.api.deps import get_internal_user_id
 from app.crud.user_crud import get_user
-from app.schamas.schemas import DebtCreate, DebtRead, DebtUpdate
+from app.schemas.schemas import DebtCreate, DebtRead, DebtUpdate
 from app.crud.debt_crud import delete_debt, create_debt, list_debts, get_debt, update_debt
 from app.crud.wallet_crud import get_wallet
 

@@ -7,7 +7,7 @@ from decimal import Decimal
 import uuid
 
 from app.models.models import BrokerageEvent, Instrument, BrokerageAccount, Wallet
-from app.schamas.schemas import BrokerageEventCreate
+from app.schemas.schemas import BrokerageEventCreate
 from app.crud.holding_crud import apply_event_to_holding, get_or_create_holding
 
 

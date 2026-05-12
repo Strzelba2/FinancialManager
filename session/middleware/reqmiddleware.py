@@ -76,7 +76,7 @@ class RequestMiddleware:
         logger.debug(f"Determined domain for request: {domain}")
 
         
-        if path in ["admin", "static", "activate", "crypto", "healthz"]:
+        if path in ["admin", "static", "activate", "crypto", "healthz", "readyz"]:
             return self.get_response(request)
 
         blocked_ip = BlockedIP.objects.filter(ip_address=ip).first()

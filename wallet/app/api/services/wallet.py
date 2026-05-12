@@ -7,9 +7,9 @@ from decimal import Decimal
 import logging
 import uuid
 
-from app.schamas.schemas import WalletCreate
+from app.schemas.schemas import WalletCreate
 from app.models.models import Wallet
-from app.schamas.response import WalletResponse, DashFlowMonthItem
+from app.schemas.response import WalletResponse, DashFlowMonthItem
 from app.utils.utils import normalize_name, month_floor, last_n_month_starts
 from app.crud.wallet_crud import (
     ensure_unique_name, create_wallet, get_wallet, delete_wallet

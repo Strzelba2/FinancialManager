@@ -15,6 +15,13 @@ type Props = {
   data: AssetsChartData
 }
 
+type TooltipParam = {
+  axisValue?: string | number
+  marker?: string
+  seriesName?: string
+  value?: number | null
+}
+
 const SERIES = {
   nominal: 'Nominalnie',
   real: 'Realnie (CPI)',
@@ -85,7 +92,7 @@ export function AssetsLineCard({ data }: Props) {
   const ccy = data.currency
   const showMom = hasData
 
-  const series: any[] = []
+  const series: Record<string, unknown>[] = []
   const leftLegend: string[]  = []  
 
   if (hasData) {
@@ -180,19 +187,19 @@ export function AssetsLineCard({ data }: Props) {
       borderColor: 'rgba(255,255,255,0.1)',
       textStyle: { color: '#fff', fontSize: 11 },
       confine: true,
-      formatter(params: any[]) {
+      formatter(params: TooltipParam[]) {
         if (!params?.length) return ''
         const label = params[0]?.axisValue ?? ''
         const pctSeries = new Set<string>([SERIES.inflation])
         const rows = params
           .filter((p) => p.value !== null && p.value !== undefined)
-          .map((p: any) => {
-            const isPercent = pctSeries.has(p.seriesName as string)
+          .map((p) => {
+            const isPercent = pctSeries.has(p.seriesName ?? '')
             const valStr = isPercent
-              ? fmtPct(p.value as number)
-              : fmtValFull(p.value as number, ccy)
+              ? fmtPct(p.value ?? 0)
+              : fmtValFull(p.value ?? 0, ccy)
             return `<div style="display:flex;justify-content:space-between;gap:14px;">
-              <span style="color:rgba(255,255,255,0.5)">${p.marker}${p.seriesName}</span>
+              <span style="color:rgba(255,255,255,0.5)">${p.marker ?? ''}${p.seriesName ?? ''}</span>
               <b>${valStr}</b>
             </div>`
           })

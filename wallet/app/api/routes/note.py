@@ -8,7 +8,7 @@ from app.db.session import db
 from app.api.deps import get_internal_user_id
 from app.crud.user_crud import get_user
 from app.crud.user_note_crud import get_user_note, upsert_user_note
-from app.schamas.schemas import UserNoteUpsert, UserNoteRead
+from app.schemas.schemas import UserNoteUpsert, UserNoteRead
 
 
 logger = logging.getLogger(__name__)

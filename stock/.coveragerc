@@ -1,0 +1,42 @@
+[run]
+branch = True
+source =
+    app
+    app/core
+    app/core/clients
+    app/markerdata
+    app/utils
+    app/validators
+omit =
+    */__init__.py
+    */__pycache__/*
+    */tests/*
+    */tests/artifacts/*
+    app/core/.envs/*
+    app/core/config.py
+    app/db/session.py
+    app/main.py
+    app/api/main.py
+    app/markerdata/config.py
+    app/models/base.py
+    app/models/enums.py
+    app/models/models.py
+    app/reports/equity/ai_schema.py
+    app/reports/equity/schemas.py
+    app/schemas/*.py
+
+[report]
+precision = 2
+show_missing = True
+skip_empty = True
+include =
+    app/**/*.py
+    app/*.py
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:
+    raise NotImplementedError
+
+[html]
+title = FinancialManager Stock Coverage

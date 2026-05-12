@@ -7,7 +7,7 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Instrument
-from app.schamas.schemas import InstrumentCreate, InstrumentUpdate
+from app.schemas.schemas import InstrumentCreate, InstrumentUpdate
 from app.models.enums import InstrumentType, Currency
 
 

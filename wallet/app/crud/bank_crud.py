@@ -8,7 +8,7 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Bank
-from app.schamas.schemas import BankCreate, BankUpdate
+from app.schemas.schemas import BankCreate, BankUpdate
 
 
 async def create_bank(session: AsyncSession, data: BankCreate) -> Bank:

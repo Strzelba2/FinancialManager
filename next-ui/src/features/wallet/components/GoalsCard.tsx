@@ -16,6 +16,12 @@ type Props = {
   href: string
 }
 
+type TooltipParam = {
+  axisValue?: string | number
+  seriesName?: string
+  value?: number
+}
+
 function fmtShort(v: number): string {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
   if (v >= 1_000) return `${Math.round(v / 1_000)}k`
@@ -101,14 +107,14 @@ export function GoalsCard({ data, href }: Props) {
       backgroundColor: 'rgba(15,23,42,0.92)',
       borderColor: 'rgba(255,255,255,0.1)',
       textStyle: { color: '#fff', fontSize: 11 },
-      formatter(params: any[]) {
+      formatter(params: TooltipParam[]) {
         if (!params?.length) return ''
         const label = (params[0]?.axisValue ?? '') as string
-        const cel = params.find((p: any) => p.seriesName === 'Cel YTD')
-        const stan = params.find((p: any) => p.seriesName === 'Stan YTD')
+        const cel = params.find((p) => p.seriesName === 'Cel YTD')
+        const stan = params.find((p) => p.seriesName === 'Stan YTD')
         if (!cel || !stan) return ''
-        const celVal = cel.value as number
-        const stanVal = stan.value as number
+        const celVal = cel.value ?? 0
+        const stanVal = stan.value ?? 0
         const pct = celVal > 0 ? Math.round((stanVal / celVal) * 100) : 0
         return `<div style="font-size:11px;min-width:150px">
           <div style="margin-bottom:4px;color:rgba(255,255,255,0.45)">${label}</div>

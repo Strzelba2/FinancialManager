@@ -8,7 +8,7 @@ from fastapi import Request
 
 from static.style import add_style, add_user_style, add_table_style
 from components.context.nav_context import NavContextBase
-from components.context.manual_refresh_quates import ManualRefreshQuates
+from components.context.manual_refresh_quotes import ManualRefreshQuotes
 from components.navbar_footer import footer
 
 from clients.wallet_client import WalletClient
@@ -22,7 +22,7 @@ from utils.utils import fmt_money
 logger = logging.getLogger(__name__)
 
 
-class HoldingsPage(NavContextBase, ManualRefreshQuates):
+class HoldingsPage(NavContextBase, ManualRefreshQuotes):
     """
     NiceGUI page/controller for brokerage holdings.
 
