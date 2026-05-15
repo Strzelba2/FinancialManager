@@ -44,6 +44,12 @@ Select the smallest useful test level:
 - accessibility test for WCAG compliance where applicable (see `docs/testing-strategy.md` section 5.8)
 - performance test for latency and load where applicable (see `docs/testing-strategy.md` section 5.9)
 
+Database isolation:
+
+- `session`, `stock`, and `wallet` component, integration, and functional tests that read
+  or mutate persisted data must use the test-runtime-managed database volumes.
+- Migration checks are integration tests, not unit tests.
+
 Coverage gates (enforced via `.coveragerc`):
 
 - `wallet` ≥ 2% (lowest coverage, highest financial risk — priority target)

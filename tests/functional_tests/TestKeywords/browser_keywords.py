@@ -22,10 +22,19 @@ def _run(keyword_name: str, *args: object) -> object:
 @keyword("Open Next Ui Browser")
 def open_next_ui_browser() -> None:
     headless = _variable("${HEADLESS}", "True")
-    base_url = _variable("${BASE_URL}", "http://traefik")
+    base_url = _variable("${BASE_URL}", "http://next.localhost")
+    host_resolver_rules = _variable("${HOST_RESOLVER_RULES}", "").strip()
     viewport = {"width": 1440, "height": 900}
+    browser_args = []
 
-    _run("New Browser", "chromium", f"headless={headless}")
+    if host_resolver_rules:
+        browser_args.append(f"--host-resolver-rules={host_resolver_rules}")
+
+    new_browser_args = ["chromium", f"headless={headless}"]
+    if browser_args:
+        new_browser_args.append(f"args={browser_args}")
+
+    _run("New Browser", *new_browser_args)
     _run("New Context", f"viewport={viewport}", "tracing=True")
     _run("New Page", base_url)
 
@@ -53,8 +62,8 @@ def capture_test_screenshot() -> None:
 
 @keyword("Go To Next Ui Path")
 def go_to_next_ui_path(path: str) -> None:
-    base_url = _variable("${BASE_URL}", "http://traefik")
-    _run("Go To", f"{base_url}{path}")
+    base_url = _variable("${BASE_URL}", "http://next.localhost")
+    _run("Go To", f"{base_url}{path}", "wait_until=domcontentloaded")
     _run("Wait For Load State", "domcontentloaded")
 
 

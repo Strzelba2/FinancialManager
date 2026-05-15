@@ -35,6 +35,16 @@ class MoneyUtilsTests(unittest.TestCase):
 
         self.assertEqual(result, Decimal("31.00"))
 
+    def test_compute_cash_effect_for_dividend_is_positive(self) -> None:
+        result = compute_cash_effect(BrokerageEventKind.DIV, Decimal("3"), Decimal("2.50"))
+
+        self.assertEqual(result, Decimal("7.50"))
+
+    def test_compute_cash_effect_for_non_cash_event_is_zero(self) -> None:
+        result = compute_cash_effect(BrokerageEventKind.SPLIT, Decimal("3"), Decimal("2.50"))
+
+        self.assertEqual(result, Decimal("0"))
+
     def test_fx_convert_returns_none_when_rate_is_missing(self) -> None:
         result = fx_convert(Decimal("100"), "USD", "PLN", {})
 
@@ -45,10 +55,18 @@ class MoneyUtilsTests(unittest.TestCase):
 
         self.assertEqual(result, Decimal("402.00"))
 
+    def test_fx_convert_returns_amount_when_currency_matches(self) -> None:
+        result = fx_convert(Decimal("100"), "PLN", "PLN", {})
+
+        self.assertEqual(result, Decimal("100"))
+
     def test_safe_ccy_prefers_enum_value(self) -> None:
         result = safe_ccy(SimpleNamespace(value="EUR"), "PLN")
 
         self.assertEqual(result, "EUR")
+
+    def test_safe_ccy_uses_fallback_for_none(self) -> None:
+        self.assertEqual(safe_ccy(None, "PLN"), "PLN")
 
     def test_dec_turns_none_into_zero(self) -> None:
         self.assertEqual(dec(None), Decimal("0"))

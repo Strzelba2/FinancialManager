@@ -295,9 +295,9 @@ Primary evidence:
 - `make component-test`
 - Allure component/API test results
 
-Component/API tests that read or mutate persisted `stock` or `wallet` data must run
-against dedicated test databases or disposable test database volumes. They must not use
-the local development databases that are kept for manual work, exploratory data, or
+Component/API tests that read or mutate persisted `session`, `stock`, or `wallet` data
+must run against the database volumes managed by the test runtime. They must not use the
+local development database volumes that are kept for manual work, exploratory data, or
 backup/restore workflows.
 
 ### 5.4 Integration Tests
@@ -314,7 +314,7 @@ Integration tests should cover:
 - Docker Compose service dependencies
 - Traefik routing
 - authentication flow used by another service
-- wallet or stock behavior that depends on persisted data
+- session, wallet, or stock behavior that depends on persisted data
 - cache behavior where applicable
 - service-to-service assumptions
 
@@ -330,6 +330,15 @@ Primary evidence:
 
 - `make integration-test`
 - Allure integration test results
+
+For `session`, `wallet`, and `stock`, the test runtime starts the services against fresh
+test database volumes, applies Django or Alembic migrations during service startup, and
+removes those test volumes after the test command finishes. Migration checks are
+integration evidence, not unit-test evidence. The test runtime uses a separate Docker
+Compose project, `financialmanager_tests`, so test service names and database hostnames
+resolve inside the isolated test network rather than to the developer's local stack.
+The `test-runner` service starts Traefik and the UI services through Compose
+dependencies, which keeps smoke and functional tests on the routed system boundary.
 
 ### 5.5 Smoke Tests
 
@@ -562,9 +571,9 @@ a non-arbitrary gate.
 
 | Area | Current Gate | Reason |
 | --- | ---: | --- |
-| `stock` | 50% | Existing coverage is high enough to enforce a meaningful baseline while improving parser, quote, report, and failure-mode tests. |
-| `wallet` | 2% | This is a temporary baseline and an explicit risk acceptance. Wallet contains high-risk financial logic and must be improved first. |
-| `session` | 15% | This is a starting baseline for authentication, session, blocking, HMAC, cookie, and 2FA-related tests. |
+| `stock` | 55% | Market-data parser, mapping, GPW client, and historical-browser helper tests have expanded coverage beyond equity reports. |
+| `wallet` | 8% | Validators, money/date edge cases, API dependency helpers, and auth/stock client error paths now support a higher starting gate. |
+| `session` | 25% | Crypto, HMAC, 2FA, IP allow-list, throttle, middleware, and health tests now support a stronger security baseline. |
 | `next-ui` | Report only | Frontend coverage is generated through Vitest, but no gate is enforced until the baseline reflects route guards, forms, API clients, and key UI states. |
 
 The backend gates use branch coverage and service-local `.coveragerc` files. Those
@@ -621,7 +630,7 @@ actually protects important behavior.
 
 | Stage | Stock | Wallet | Session | Meaning |
 | --- | ---: | ---: | ---: | --- |
-| Stage 1 | 50% | 2% | 15% | Current measured baseline with branch coverage enabled. |
+| Stage 1 | 55% | 8% | 25% | Current measured baseline with branch coverage enabled and first risk-focused unit expansion. |
 | Stage 2 | 70% | 25% | 40% | Priority unit tests added for the most important service logic. |
 | Stage 3 | 80% | 60% | 65% | API/component and integration tests added for important flows. |
 | Stage 4 | 90% | 90% | 90% | Mature target for line and branch coverage on production code. |
@@ -716,6 +725,19 @@ Before a change is considered locally acceptable:
 A change may still be accepted with a known gap, but the gap should be visible as a GitHub
 issue, TODO, documented exception, or test backlog item.
 
+#### Test Oracle Integrity
+
+Tests should verify the intended business rule, API contract, or user-visible behavior,
+not simply mirror whatever the current implementation happens to do. When the product
+logic says that an operation should be rejected, such as a duplicate user-owned resource,
+the test should assert the rejection even if the current code still accepts it.
+
+If a meaningful test fails because the implementation is wrong, the failure is useful
+evidence. Do not change the expected result only to make the suite green. Fix the
+production behavior, update the API/UI contract where needed, or document the gap as
+accepted work. A failing test that protects a real invariant is preferable to a passing
+test that silently legalizes a defect.
+
 ### 8.3 Pull Request Exit Criteria
 
 If the project uses pull requests, the pull request should meet the same quality criteria
@@ -774,8 +796,9 @@ Test data should follow these rules:
 - avoid real external network dependencies in unit tests
 - isolate data between tests
 - clean or recreate database state where needed
-- never treat the developer's local `stock` or `wallet` databases as disposable test
-  fixtures when they are used for manual work, exploratory data, or backups
+- never treat the developer's local `session`, `stock`, or `wallet` databases as
+  disposable test fixtures when they are used for manual work, exploratory data, or
+  backups
 - make expected values visible in the test
 - use clear names that explain the business scenario
 - keep test data close to the test when it improves readability
@@ -867,6 +890,19 @@ API and integration test data should cover:
 
 Integration tests may use Docker-based services and a real database, but the data should
 still be created and cleaned in a repeatable way.
+
+For `session`, `wallet`, and `stock`, the real database used by component, integration,
+and functional tests is the fresh test database volume created by
+`tests/docker/run_with_test_runtime.sh`. It is intentionally separate from the ordinary
+development database volumes used for manual work and backups. Inside the test runtime,
+the service env points to test database hosts such as `session-db`, `wallet-db`, and
+`stock-db` on the isolated `financialmanager_tests` network.
+
+The current system-test runtime should be treated as a dedicated test environment, not a
+parallel companion to the local development stack. Stop the normal dev stack before
+running `make test-all` or the individual system-test targets. This keeps Traefik routing
+and Docker provider discovery deterministic while still protecting local development
+database volumes from test data.
 
 ### 9.6 External And Market Data
 
@@ -1262,12 +1298,20 @@ The main workflow should live at:
 
 .github/workflows/quality.yml
 
-The workflow should run on every push to `main`. If pull requests are used later, the same
-quality workflow should also run before merge.
+The workflow should run on every push to `main` and be available through manual dispatch.
+This repository does not require a pull-request workflow for the current one-person
+development model.
 
-### 12.1 Push-To-Main Checks
+### 12.1 Implemented CI/CD Quality Workflow
 
-The push-to-main workflow should include:
+The implemented GitHub Actions workflow is `.github/workflows/quality.yml`. It runs on
+push to `main` and through manual dispatch. The workflow uses the
+repository Make targets instead of duplicating test commands:
+
+- `make quality-test`
+- `make test-all`
+
+The workflow includes:
 
 - Python compile checks for backend services
 - ESLint checks for `next-ui`
@@ -1280,6 +1324,7 @@ The push-to-main workflow should include:
 - coverage report generation
 - upload of Allure results as GitHub Actions artifacts
 - upload of coverage HTML reports as GitHub Actions artifacts
+- upload of Robot output, browser diagnostics, and the `next-ui` npm audit JSON report
 
 These checks are the main automated quality gate for the repository.
 
@@ -1296,6 +1341,7 @@ These checks should include:
 - service readiness checks
 - database migration checks
 - Traefik routing checks where applicable
+- fresh `session`, `wallet`, and `stock` test database volumes for stateful test runs
 
 These checks may run on every push when execution time is acceptable. If they become too
 slow, they can run on selected branches, manually, or before release candidates.

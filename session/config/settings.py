@@ -249,7 +249,7 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SESSION_COOKIE_AGE = 1800
 
 ENV_TYPE = config("ENV_TYPE", default="local")
-LOG_TO_STDOUT = ENV_TYPE == "prod"
+LOG_TO_STDOUT = ENV_TYPE in {"prod", "test"}
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO" if ENV_TYPE == "prod" else "DEBUG")
 
 LOGGING = {

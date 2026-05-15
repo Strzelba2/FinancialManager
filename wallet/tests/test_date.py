@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import allure
 import pytest
 
-from app.utils.date import month_key, monthly_index_from_daily_candles
+from app.utils.date import last_n_month_keys, month_key, monthly_index_from_daily_candles
 
 pytestmark = pytest.mark.unit
 
@@ -35,3 +35,9 @@ class DateUtilsTests(unittest.TestCase):
         result = monthly_index_from_daily_candles(candles)
 
         self.assertEqual(result, {"2026-04": 11.25, "2026-05": 12.5})
+
+    def test_last_n_month_keys_returns_at_least_current_month(self) -> None:
+        result = last_n_month_keys(0)
+
+        self.assertEqual(len(result), 1)
+        self.assertRegex(result[0], r"^\d{4}-\d{2}$")

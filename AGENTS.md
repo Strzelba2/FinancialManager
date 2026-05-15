@@ -47,6 +47,11 @@ still preserving the repository-wide safety, test integrity, and documentation r
   behavior, and planned work clearly.
 - Use ASCII text unless the edited file already uses another character set for a clear
   reason.
+- Ask for user approval before making broad or high-impact changes, such as introducing
+  a new implementation approach, adding multiple new files, changing orchestration or
+  routing architecture, or rewriting a significant part of the codebase. Small, scoped
+  edits and straightforward new implementation details requested by the user can be made
+  without a separate approval step.
 
 ## Agent Role Behavior
 
@@ -101,10 +106,12 @@ When reviewing or adding tests:
 - Prefer meaningful behavior coverage over percentage-only coverage.
 - Check positive and negative paths for high-risk behavior.
 - Verify that test data is deterministic and readable.
-- Require dedicated test databases or disposable test volumes for `stock` and `wallet`
-  component, integration, and functional tests that read or mutate persisted data.
-  Do not point those suites at local development databases used for manual work or
+- Require the test-runtime-managed database volumes for `session`, `stock`, and `wallet`
+  component, integration, and functional tests that read or mutate persisted data. Do not
+  point those suites at local development database volumes used for manual work or
   backup/restore workflows.
+- Keep those test-runtime database volumes inside the isolated `financialmanager_tests`
+  Docker Compose project, not the default local development project.
 - Check whether Allure and coverage evidence are affected.
 - Apply Allure markers to new tests. Required on every test class:
   `@allure.epic`, `@allure.feature`, `@allure.story`, `@allure.severity`,
@@ -356,9 +363,9 @@ Coverage commands use:
 
 Current Stage 1 coverage gates:
 
-- `stock`: 50%
-- `wallet`: 2%
-- `session`: 15%
+- `stock`: 55%
+- `wallet`: 8%
+- `session`: 25%
 
 These are starting gates, not final quality targets. The mature target is 90% line
 coverage and 90% branch coverage for production code, excluding generated and boilerplate

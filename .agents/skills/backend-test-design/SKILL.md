@@ -41,6 +41,10 @@ Integration tests should verify:
 - routing assumptions
 - cross-service behavior where needed
 
+For `session`, `stock`, and `wallet`, database-backed component and integration tests
+should use the test runtime's fresh database volumes. Migration behavior belongs in
+integration tests, not unit tests.
+
 Do not create tests that only increase coverage without protecting meaningful behavior.
 
 Allure metadata:

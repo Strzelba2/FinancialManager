@@ -30,7 +30,7 @@ from nicegui.client import Client
 from nicegui.page import page
 
 env_type = os.getenv("ENV_TYPE", "local")
-log_to_stdout = env_type == "prod"
+log_to_stdout = env_type in {"prod", "test"}
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO" if env_type == "prod" else "DEBUG")
 
 logger = logging.getLogger()

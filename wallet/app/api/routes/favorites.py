@@ -1,6 +1,6 @@
 import uuid
 from typing import Dict, Any, List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
@@ -63,7 +63,10 @@ async def api_create_list(
     Returns:
         The created list as `FavoriteListRead`.
     """
-    return await create_favorite_list(session, user_id, name=body.name, description=body.description)
+    try:
+        return await create_favorite_list(session, user_id, name=body.name, description=body.description)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
 
 
 @router.delete("/favorites/lists/{list_id}")

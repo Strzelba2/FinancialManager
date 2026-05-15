@@ -20,6 +20,6 @@ export async function POST(req: NextRequest) {
   }
 
   const result = await createFavoriteList(userId, { name: body.name.trim(), description: body.description ?? null })
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 })
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
   return NextResponse.json(result.data, { status: 201 })
 }

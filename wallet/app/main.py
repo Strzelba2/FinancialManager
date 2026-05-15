@@ -13,7 +13,7 @@ from app.clients.auth_client import AuthCryptoClient
 from app.clients.stock_client import StockClient
 
 env_type = os.getenv("ENV_TYPE", "local")
-log_to_stdout = env_type == "prod"
+log_to_stdout = env_type in {"prod", "test"}
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO" if env_type == "prod" else "DEBUG")
 
 logger = logging.getLogger()

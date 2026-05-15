@@ -45,3 +45,8 @@ Rules:
 - Do not make CI green by skipping meaningful tests without documenting the risk.
 - Keep local and CI/CD workflows aligned.
 - Configure artifact retention duration intentionally — do not leave it at runtime default without justification.
+- Keep stateful `session`, `stock`, and `wallet` system tests on fresh test-runtime
+  database volumes; do not point those suites at development database volumes used for
+  manual work or backups.
+- Keep the test-runtime stack in the isolated `financialmanager_tests` Docker Compose
+  project so it does not recreate or replace the developer's local service containers.

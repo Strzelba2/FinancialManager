@@ -1,0 +1,228 @@
+name: Quality
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Repository quality workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Prepare CI environment files
+        run: |
+          install -d session/config stock/app/core/.envs wallet/app/core/.envs pgadmin
+
+          cat > session/config/.env <<'EOF'
+          SECRET_KEY=ci-test-secret-key
+          WALLET_DOMAIN=wallet.localhost
+          UI_DOMAIN=wallet.localhost
+          SESSION_DOMAIN=session-auth.localhost
+          NEXT_UI_DOMAIN=next.localhost
+          APP_PROTOCOL=http
+          POSTGRES_DB=session_test
+          POSTGRES_USER=myuser
+          POSTGRES_PASSWORD=mypassword
+          POSTGRES_HOST=session-db
+          POSTGRES_PORT=5432
+          EMAIL_PORT=1025
+          EMAIL_HOST=mailpit
+          EMAIL_DOMAIN_ALLOWED_LIST=example.com,test.local
+          DEFAULT_FROM_EMAIL=noreply@test.local
+          RABBITMQ_DEFAULT_USER=admin
+          RABBITMQ_DEFAULT_PASS=admin
+          RABBITMQ_LOAD_DEFINITIONS=/etc/rabbitmq/definitions.json
+          RABBITMQ_ERLANG_COOKIE=ci-test-cookie
+          CELERY_BROKER_URL=amqp://admin:admin@rabbitmq
+          CELERY_RESULT_BACKEND=redis://redis:6379/0
+          CELERY_FLOWER_USER=admin
+          CELERY_FLOWER_PASSWORD=admin
+          RECAPTCHA_PUBLIC_KEY=ci-public-key
+          RECAPTCHA_PRIVATE_KEY=ci-private-key
+          ADMIN_PATH=admin
+          ADMIN_FAILURE_LIMIT=5
+          ADMIN_TEMPORARY_BLOCK_TIME=60
+          USER_TEMPORARY_BLOCK_TIME=60
+          ADMIN_ALLOWED_IPS=["127.0.0.1","172.16.0.0/12"]
+          ALLOWED_WALLET_IPS=["127.0.0.1","172.16.0.0/12"]
+          SERVER_SALT=ci-server-salt
+          VALID_HMAC=300
+          APP_AES_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+          APP_HMAC_KEY=ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=
+          DJANGO_COLLECTSTATIC=0
+          DJANGO_CREATE_SUPERUSER=0
+          DJANGO_SUPERUSER_USERNAME=admin
+          DJANGO_SUPERUSER_EMAIL=admin@test.local
+          DJANGO_SUPERUSER_PASSWORD=admin
+          DJANGO_SUPERUSER_FIRST_NAME=CI
+          DJANGO_SUPERUSER_LAST_NAME=User
+          ENV_TYPE=test
+          ALLOWED_HOSTS=session-auth,session-auth.localhost,localhost,127.0.0.1
+          REDIS_URL=redis://redis:6379/1
+          EOF
+
+          cat > wallet/app/core/.envs/.env.local <<'EOF'
+          PROJECT_NAME=FinancialManagerWalletCI
+          PROJECT_DESCRIPTION=FinancialManagerWalletCI
+          SITE_NAME=FinancialManagerWalletCI
+          POSTGRES_USER=myuser
+          POSTGRES_PASSWORD=mypassword
+          POSTGRES_DB=Wallet_test
+          POSTGRES_HOST=wallet-db
+          POSTGRES_PORT=5432
+          DATABASE_URL=postgresql+asyncpg://myuser:mypassword@wallet-db:5432/Wallet_test
+          REDIS_URL=redis://redis:6379/1
+          CELERY_BROKER_URL=amqp://admin:admin@rabbitmq
+          CELERY_RESULT_BACKEND=redis://redis:6379/0
+          AUTH_URL=http://session-auth:8000/
+          STOCK_API_URL=http://stock:8001/
+          ENV_TYPE=test
+          EOF
+
+          cat > stock/app/core/.envs/.env.local <<'EOF'
+          PROJECT_NAME=FinancialManagerStockCI
+          PROJECT_DESCRIPTION=FinancialManagerStockCI
+          SITE_NAME=FinancialManagerStockCI
+          POSTGRES_USER=myuser
+          POSTGRES_PASSWORD=mypassword
+          POSTGRES_DB=stock_test
+          POSTGRES_HOST=stock-db
+          POSTGRES_PORT=5432
+          DATABASE_URL=postgresql+asyncpg://myuser:mypassword@stock-db:5432/stock_test
+          REDIS_URL=redis://redis:6379/1
+          CELERY_BROKER_URL=amqp://admin:admin@rabbitmq
+          CELERY_RESULT_BACKEND=redis://redis:6379/0
+          ST_BASE_URL=http://marketdata.test
+          ST_START_WSE_QUOTE_URL=/wse
+          ST_START_NC_QUOTE_URL=/nc
+          ST_START_COMMODITIES_QUOTE_URL=/commodities
+          ST_START_CPI_QUOTE_URL=/cpi
+          GPW_BASE_URL=http://marketdata.test
+          GPW_PATH=/gpw
+          NC_BASE_URL=http://marketdata.test
+          NC_PATH=/nc
+          ENV_TYPE=test
+          OPENAI_API_KEY=
+          OPENAI_REPORT_MODEL=gpt-5.4-mini
+          OPENAI_REPORT_TIMEOUT_S=90
+          OPENAI_REPORT_MAX_RETRIES=0
+          OPENAI_REPORT_MAX_OUTPUT_TOKENS=12000
+          OPENAI_REPORT_TEMPERATURE=0.0
+          OPENAI_REPORT_ENABLE_WEB_SEARCH=false
+          OPENAI_REPORT_WEB_SEARCH_MAX_TOOL_CALLS=0
+          OPENAI_REPORT_PROMPT_VERSION=equity-v6
+          REPORT_SCHEMA_VERSION=1
+          EQUITY_WEB_SOURCE_ENABLED=false
+          EQUITY_WEB_SOURCE_BASE_URL=http://marketdata.test
+          EQUITY_WEB_SOURCE_TIMEOUT_S=20
+          EQUITY_WEB_SOURCE_GPW_LISTING_PATH=/gpw
+          EQUITY_WEB_SOURCE_NC_LISTING_PATH=/nc
+          EOF
+
+          cat > next-ui/.env <<'EOF'
+          WALLET_API_URL=http://wallet:8001
+          STOCK_API_URL=http://stock:8001
+          SESSION_AUTH_URL=http://session-auth:8000
+          NEXT_PUBLIC_APP_URL=http://next.localhost
+          NEXT_UI_DOMAIN=next.localhost
+          EOF
+
+          cat > ui/.env <<'EOF'
+          NICEGUI_REDIS_URL=redis://redis:6379/1
+          SECRET_KEY=ci-ui-secret-key
+          WALLET_API_URL=http://wallet:8001/
+          STOCK_API_URL=http://stock:8001/
+          UI_API_URL=http://wallet.localhost/
+          AUTH_URL=http://session-auth:8000/
+          CELERY_STOCK_WORKER=false
+          ENV_TYPE=test
+          EOF
+
+          cat > pgadmin/.env.local <<'EOF'
+          PGADMIN_DEFAULT_EMAIL=admin@test.local
+          PGADMIN_DEFAULT_PASSWORD=admin
+          PGADMIN_SERVER_JSON_FILE=/pgadmin4/servers.json
+          PGADMIN_REPLACE_SERVERS_ON_STARTUP=True
+          PGPASS_FILE=/var/lib/pgadmin/pgpass
+          EOF
+
+      - name: Run static quality checks
+        id: quality
+        run: make quality-test
+
+      - name: Run test pyramid and reports
+        id: tests
+        if: always()
+        run: make test-all TEST_ALL_REPORT_TARGET=allure-report
+
+      - name: Upload Allure evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: allure-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            tests/artifacts/allure-results
+            tests/artifacts/allure-report
+            stock/tests/artifacts/allure-results
+            wallet/tests/artifacts/allure-results
+            session/tests/artifacts/allure-results
+            next-ui/tests/artifacts/allure-results
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-reports
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            tests/artifacts/allure-report/coverage
+            stock/tests/artifacts/coverage.xml
+            stock/tests/artifacts/coverage-html
+            wallet/tests/artifacts/coverage.xml
+            wallet/tests/artifacts/coverage-html
+            session/tests/artifacts/coverage.xml
+            session/tests/artifacts/coverage-html
+            next-ui/tests/artifacts/coverage-html
+
+      - name: Upload Robot and browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: robot-browser-diagnostics
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            tests/artifacts/robot-output
+            tests/artifacts/**/*.zip
+
+      - name: Upload npm audit report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: next-ui-npm-audit
+          retention-days: 14
+          if-no-files-found: warn
+          path: next-ui/tests/artifacts/npm-audit.json
+
+      - name: Fail when quality workflow failed
+        if: always() && (steps.quality.outcome == 'failure' || steps.tests.outcome == 'failure')
+        run: |
+          echo "quality outcome: ${{ steps.quality.outcome }}"
+          echo "test pyramid outcome: ${{ steps.tests.outcome }}"
+          exit 1

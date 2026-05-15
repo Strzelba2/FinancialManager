@@ -29,7 +29,8 @@ This repository uses an explicit test pyramid with dedicated tooling and Docker 
 
 - Unit tests use deterministic factories and mocks instead of live dependencies.
 - Component tests verify public routes, status codes, content types, redirects, and user-visible contract behavior.
-- Integration tests verify service readiness, OpenAPI route contracts, and real Docker dependencies.
+- Integration tests verify service readiness, OpenAPI route contracts, database
+  migrations, and real Docker dependencies.
 - Functional tests use stable selectors, attach screenshots through Robot/Allure, and cover important UI journeys.
 - Allure labels use `epic` for layer, `feature` for service/domain, `story` for behavior,
   `severity` for risk importance, `tag` for cross-cutting filters (e.g. `auth`, `money`,
@@ -66,6 +67,22 @@ make integration-test
 
 `make unit-test` and `make test-all` do not stop after the first failed suite. They continue through every configured batch, then generate Allure so you can inspect the full failure set in one report. The final command still exits with an error code if anything failed.
 
+`make smoke-test`, `make functional-test`, `make component-test`, and
+`make integration-test` run through `tests/docker/run_with_test_runtime.sh`. That wrapper
+starts `session`, `wallet`, and `stock` against fresh test database volumes and removes
+those test volumes after the command exits. The normal development database volumes are
+not used as test fixtures. The wrapper uses a separate Docker Compose project named
+`financialmanager_tests`, so service names such as `session-db`, `wallet-db`, and
+`stock-db` resolve to test containers inside the test network instead of the local
+development containers. The `test-runner` service also brings Traefik and the UI
+services into the test project through Compose dependencies, so smoke and functional
+tests exercise the same routed service boundary as a user-facing stack.
+
+Before running system tests (`make smoke-test`, `make functional-test`,
+`make component-test`, `make integration-test`, or `make test-all`), stop the normal
+local development stack with `make down`. The current test runtime is isolated at the
+database-volume level, but it is not intended to run in parallel with the dev stack.
+
 `make coverage-unit` runs service-local Python unit tests with incremental coverage gates
 and `next-ui` Vitest unit coverage as a reported frontend baseline. It writes HTML
 coverage reports beside the Allure report. After `make coverage-unit` or `make allure-up`,
@@ -99,6 +116,18 @@ make allure-up
 
 The Allure UI is served at `http://localhost:5252`.
 
+GitHub Actions uploads the generated report as the `allure-evidence` artifact instead of
+serving a browser-accessible container from the runner. Download and view the latest CI
+report locally with:
+
+```bash
+make ci-allure-up
+```
+
+Pass `RUN_ID=<github-run-id>` to inspect a specific run. The script replaces
+`tests/artifacts/ci-allure` on each download so old CI reports do not pile up in the
+working tree.
+
 ## Reporting
 
 - Unit tests write Allure results into each service:
@@ -123,9 +152,9 @@ making coverage look healthier than the behavior tests really prove.
 
 Current Stage 1 thresholds:
 
-- `stock`: 50%
-- `wallet`: 2%
-- `session`: 15%
+- `stock`: 55%
+- `wallet`: 8%
+- `session`: 25%
 - `next-ui`: reported only until a meaningful frontend baseline is accepted
 
 Planned ratchet path:

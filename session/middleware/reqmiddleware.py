@@ -146,7 +146,7 @@ class RequestMiddleware:
         else:
             logger.info("Unauthenticated access attempt")
             return formatted_response(request,
-                                      {'error': 'User do not have permison to this site, Please login',
+                                      {'error': 'User does not have permission to this site. Please login.',
                                        "href": f"{settings.APP_PROTOCOL}://{domain}/login",
                                        "text": "Go to Login"},
                                       template_name="401.html",

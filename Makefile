@@ -1,8 +1,10 @@
 .DEFAULT_GOAL := build
 
 COMPOSE = env UID=$$(id -u) GID=$$(id -g) docker compose -f docker-compose.yml
-TEST_COMPOSE = env UID=$$(id -u) GID=$$(id -g) docker compose -f docker-compose.yml -f tests/docker-compose.tests.yml
+TEST_COMPOSE_PROJECT_NAME ?= financialmanager_tests
+TEST_COMPOSE = env TEST_COMPOSE_PROJECT_NAME=$(TEST_COMPOSE_PROJECT_NAME) UID=$$(id -u) GID=$$(id -g) docker compose -p $(TEST_COMPOSE_PROJECT_NAME) -f docker-compose.yml -f tests/docker-compose.tests.yml
 COVERAGE_CHANGED_LINES_FILE ?= /tmp/financialmanager-coverage-changed-lines.json
+TEST_ALL_REPORT_TARGET ?= allure-up
 
 .PHONY: \
 	network-create \
@@ -12,7 +14,7 @@ COVERAGE_CHANGED_LINES_FILE ?= /tmp/financialmanager-coverage-changed-lines.json
 	unit-test unit-test-stock unit-test-wallet unit-test-session unit-test-next-ui \
 	coverage-unit coverage-unit-stock coverage-unit-wallet coverage-unit-session coverage-unit-next-ui \
 	quality-test quality-test-python quality-test-next-ui \
-	test-all allure-report allure-up allure-down \
+	test-all allure-report allure-up allure-down ci-allure-up \
 	bash env superuser \
 	db-backup db-backup-session db-backup-stock db-backup-wallet \
 	db-restore-session-latest db-restore-stock-latest db-restore-wallet-latest db-restore-all-latest \
@@ -65,17 +67,17 @@ stock-migrate: network-create
 	$(COMPOSE) up -d stock-db
 	$(COMPOSE) run --rm stock alembic upgrade head
 
-smoke-test: network-create
-	$(TEST_COMPOSE) run --rm test-runner bash tests/docker/run_robot_smoke.sh
+smoke-test:
+	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_robot_smoke.sh
 
-functional-test: network-create
-	$(TEST_COMPOSE) run --rm test-runner bash tests/docker/run_robot_functional.sh
+functional-test:
+	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_robot_functional.sh
 
-component-test: network-create
-	$(TEST_COMPOSE) run --rm test-runner bash tests/docker/run_pytest_group.sh component_tests
+component-test:
+	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_pytest_group.sh component_tests
 
-integration-test: network-create
-	$(TEST_COMPOSE) run --rm test-runner bash tests/docker/run_pytest_group.sh integration_tests
+integration-test:
+	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_pytest_group.sh integration_tests
 
 unit-test: network-create
 	MAKE="$(MAKE)" REPORT_TARGET="allure-report" bash tests/run_make_batch.sh unit-test-stock unit-test-wallet unit-test-session unit-test-next-ui
@@ -108,17 +110,17 @@ coverage-unit: network-create
 coverage-unit-stock: network-create
 	rm -rf stock/tests/artifacts/allure-results stock/tests/artifacts/coverage.xml stock/tests/artifacts/coverage-html
 	mkdir -p stock/tests/artifacts/allure-results
-	$(COMPOSE) run --rm --no-deps stock python -m pytest -c pytest.ini tests --alluredir tests/artifacts/allure-results --cov --cov-config=.coveragerc --cov-branch --cov-report=term-missing --cov-report=xml:tests/artifacts/coverage.xml --cov-report=html:tests/artifacts/coverage-html --cov-fail-under=50
+	$(COMPOSE) run --rm --no-deps stock python -m pytest -c pytest.ini tests --alluredir tests/artifacts/allure-results --cov --cov-config=.coveragerc --cov-branch --cov-report=term-missing --cov-report=xml:tests/artifacts/coverage.xml --cov-report=html:tests/artifacts/coverage-html --cov-fail-under=55
 
 coverage-unit-wallet: network-create
 	rm -rf wallet/tests/artifacts/allure-results wallet/tests/artifacts/coverage.xml wallet/tests/artifacts/coverage-html
 	mkdir -p wallet/tests/artifacts/allure-results
-	$(COMPOSE) run --rm --no-deps wallet python -m pytest -c pytest.ini tests --alluredir tests/artifacts/allure-results --cov --cov-config=.coveragerc --cov-branch --cov-report=term-missing --cov-report=xml:tests/artifacts/coverage.xml --cov-report=html:tests/artifacts/coverage-html --cov-fail-under=2
+	$(COMPOSE) run --rm --no-deps wallet python -m pytest -c pytest.ini tests --alluredir tests/artifacts/allure-results --cov --cov-config=.coveragerc --cov-branch --cov-report=term-missing --cov-report=xml:tests/artifacts/coverage.xml --cov-report=html:tests/artifacts/coverage-html --cov-fail-under=8
 
 coverage-unit-session: network-create
 	rm -rf session/tests/artifacts/allure-results session/tests/artifacts/coverage.xml session/tests/artifacts/coverage-html
 	mkdir -p session/tests/artifacts/allure-results
-	$(COMPOSE) run --rm --no-deps session-auth python -m pytest -c pytest.ini tests --alluredir tests/artifacts/allure-results --cov --cov-config=.coveragerc --cov-branch --cov-report=term-missing --cov-report=xml:tests/artifacts/coverage.xml --cov-report=html:tests/artifacts/coverage-html --cov-fail-under=15
+	$(COMPOSE) run --rm --no-deps session-auth python -m pytest -c pytest.ini tests --alluredir tests/artifacts/allure-results --cov --cov-config=.coveragerc --cov-branch --cov-report=term-missing --cov-report=xml:tests/artifacts/coverage.xml --cov-report=html:tests/artifacts/coverage-html --cov-fail-under=25
 
 coverage-unit-next-ui: network-create
 	$(COMPOSE) run --rm --no-deps --user 0:0 next-ui sh -c 'rm -rf tests/artifacts/allure-results tests/artifacts/coverage-html'
@@ -141,14 +143,14 @@ quality-test-next-ui: network-create
 	$(COMPOSE) run --rm --no-deps next-ui npm run test:quality
 
 test-all: network-create
-	MAKE="$(MAKE)" REPORT_TARGET="allure-up" bash tests/run_make_batch.sh coverage-unit-stock coverage-unit-wallet coverage-unit-session coverage-unit-next-ui smoke-test functional-test component-test integration-test
+	MAKE="$(MAKE)" REPORT_TARGET="$(TEST_ALL_REPORT_TARGET)" bash tests/run_make_batch.sh coverage-unit-stock coverage-unit-wallet coverage-unit-session coverage-unit-next-ui smoke-test functional-test component-test integration-test
 
-allure-report: network-create
+allure-report:
 	python3 tests/docker/collect_changed_lines.py --output "$(COVERAGE_CHANGED_LINES_FILE)"
 	GIT_COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
 	GIT_BRANCH=$$(git branch --show-current 2>/dev/null || echo "unknown") \
 	GIT_STATUS=$$(git diff --quiet && git diff --cached --quiet && echo "clean" || echo "has local changes") \
-	$(TEST_COMPOSE) run --rm \
+	$(TEST_COMPOSE) run --rm --no-deps \
 		-e GIT_COMMIT -e GIT_BRANCH -e GIT_STATUS \
 		-v "$(COVERAGE_CHANGED_LINES_FILE):/tmp/coverage-changed-lines.json:ro" \
 		test-runner bash tests/docker/generate_allure_report.sh
@@ -159,6 +161,9 @@ allure-up: allure-report
 allure-down:
 	-$(TEST_COMPOSE) stop allure-ui
 	-$(TEST_COMPOSE) rm -f allure-ui
+
+ci-allure-up:
+	bash scripts/download-ci-allure.sh
 
 session-makemigrations: network-create
 	$(COMPOSE) run --rm session-auth python manage.py makemigrations

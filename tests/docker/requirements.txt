@@ -5,3 +5,4 @@ allure-robotframework>=2.13,<3
 robotframework-requests>=0.9,<1
 robotframework-browser[bb]>=19,<20
 httpx[http2]>=0.28,<0.29
+psycopg[binary]>=3.2,<4

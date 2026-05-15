@@ -38,26 +38,27 @@ async def create_favorite_list(
     name: str,
     description: Optional[str] = None,
 ) -> FavoriteList:
+    clean_name = name.strip()
+    stmt = select(FavoriteList).where(
+        FavoriteList.user_id == user_id,
+        FavoriteList.name == clean_name,
+    )
+    existing = (await session.execute(stmt)).scalars().first()
+    if existing:
+        raise ValueError("Favorite list with this name already exists for this user.")
+
     obj = FavoriteList(
         user_id=user_id,
-        name=name.strip(),
+        name=clean_name,
         description=(description.strip() if description else None),
     )
     session.add(obj)
 
     try:
         await session.commit()
-    except IntegrityError:
+    except IntegrityError as e:
         await session.rollback()
-        stmt = select(FavoriteList).where(
-            FavoriteList.user_id == user_id,
-            FavoriteList.name == obj.name,
-        )
-        res = await session.execute(stmt)
-        existing = res.scalars().first()
-        if existing:
-            return existing
-        raise
+        raise ValueError("Favorite list with this name already exists for this user.") from e
 
     await session.refresh(obj)
     return obj

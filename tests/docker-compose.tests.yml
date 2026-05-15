@@ -1,19 +1,99 @@
 services:
   next-ui:
-    labels:
-      - "traefik.http.routers.next-ui-browser-tests-public.rule=Host(`traefik`) && (PathPrefix(`/home`) || PathPrefix(`/login`) || PathPrefix(`/register`) || PathPrefix(`/logout`))"
-      - "traefik.http.routers.next-ui-browser-tests-public.entrypoints=web"
-      - "traefik.http.routers.next-ui-browser-tests-public.service=next-ui-service"
-      - "traefik.http.routers.next-ui-browser-tests-public.priority=100"
-      - "traefik.http.routers.next-ui-browser-tests-static.rule=Host(`traefik`) && (PathPrefix(`/_next/`) || PathPrefix(`/favicon.ico`) || PathPrefix(`/.well-known/appspecific/`) || PathPrefix(`/__nextjs_source-map`))"
-      - "traefik.http.routers.next-ui-browser-tests-static.entrypoints=web"
-      - "traefik.http.routers.next-ui-browser-tests-static.service=next-ui-service"
-      - "traefik.http.routers.next-ui-browser-tests-static.priority=100"
-      - "traefik.http.routers.next-ui-browser-tests-protected.rule=Host(`traefik`)"
-      - "traefik.http.routers.next-ui-browser-tests-protected.entrypoints=web"
-      - "traefik.http.routers.next-ui-browser-tests-protected.service=next-ui-service"
-      - "traefik.http.routers.next-ui-browser-tests-protected.middlewares=next-forwardauth@docker,next-auth-errors@docker,nocache@docker"
-      - "traefik.http.routers.next-ui-browser-tests-protected.priority=1"
+    volumes:
+      - next_ui_test_build:/app/.next
+
+  session-db:
+    ports: !reset []
+    environment:
+      POSTGRES_DB: session_test
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+    volumes:
+      - session_test_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d session_test -h localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  wallet-db:
+    ports: !reset []
+    environment:
+      POSTGRES_DB: Wallet_test
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+    volumes:
+      - wallet_test_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d Wallet_test -h localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  stock-db:
+    ports: !reset []
+    environment:
+      POSTGRES_DB: stock_test
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+    volumes:
+      - stock_test_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d stock_test -h localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  session-auth:
+    environment:
+      ENV_TYPE: test
+      POSTGRES_HOST: session-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: session_test
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      DJANGO_CREATE_SUPERUSER: "0"
+
+  wallet:
+    environment:
+      ENV_TYPE: test
+      POSTGRES_HOST: wallet-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: Wallet_test
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      DATABASE_URL: ""
+
+  stock:
+    environment:
+      ENV_TYPE: test
+      POSTGRES_HOST: stock-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: stock_test
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      DATABASE_URL: ""
+
+  redis:
+    container_name: "${TEST_COMPOSE_PROJECT_NAME:-financialmanager_tests}_redis"
+    ports: !reset []
+
+  mailpit:
+    ports: !reset []
+
+  rabbitmq:
+    ports: !reset []
+
+  flower:
+    ports: !reset []
+
+  pgadmin:
+    container_name: "${TEST_COMPOSE_PROJECT_NAME:-financialmanager_tests}_pgadmin"
+    ports: !reset []
 
   test-runner:
     build:
@@ -23,6 +103,12 @@ services:
     volumes:
       - .:/workspace
     depends_on:
+      session-db:
+        condition: service_healthy
+      wallet-db:
+        condition: service_healthy
+      stock-db:
+        condition: service_healthy
       traefik:
         condition: service_started
       session-auth:
@@ -49,4 +135,11 @@ services:
 
 networks:
   financial_manager:
-    external: true
+    name: "${TEST_COMPOSE_PROJECT_NAME:-financialmanager_tests}_network"
+    external: false
+
+volumes:
+  session_test_db:
+  wallet_test_db:
+  stock_test_db:
+  next_ui_test_build:
