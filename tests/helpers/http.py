@@ -8,7 +8,6 @@ import httpx
 
 def wait_for_response(
     url: str,
-    *,
     expected_statuses: Iterable[int],
     headers: Mapping[str, str] | None = None,
     follow_redirects: bool = True,

@@ -23,18 +23,64 @@ from .models import User, UserKeys
 from .two_factor import TwoFactor
 from .hmac_token import HmacToken
 from .authentication import SessionAuthenticationWithoutCSRF, IPAllowlistPermission
-from utils.utils import formatted_response
+from utils.utils import formatted_response, get_client_ip
 from .crypto import unwrap_dek, derive_keys_from_dek, encrypt_bytes, decrypt_bytes, hmac_bytes
 
 
 import logging
 import time
+import hashlib
 from urllib.parse import unquote
 import json
 import base64
 from datetime import timedelta
 
 logger = logging.getLogger("session-auth")
+
+
+def _valid_hmac_ttl_seconds() -> int:
+    return int(getattr(settings, "VALID_HMAC", 1200))
+
+
+def _active_login_key(user_id) -> str:
+    return f"active_login:{user_id}"
+
+
+def _request_fingerprint_hash(request) -> str:
+    raw = "|".join(
+        [
+            get_client_ip(request),
+            request.META.get("HTTP_SEC_CH_UA_PLATFORM", ""),
+            request.META.get("HTTP_USER_AGENT", ""),
+        ]
+    )
+    return hashlib.sha256(f"{settings.SERVER_SALT}:{raw}".encode("utf-8")).hexdigest()
+
+
+def _store_active_login(request, user) -> None:
+    if not request.session.session_key:
+        return
+
+    now = int(time.time())
+    cache.set(
+        _active_login_key(user.pk),
+        {
+            "session_key": request.session.session_key,
+            "fingerprint_hash": _request_fingerprint_hash(request),
+            "created_at": now,
+            "last_seen_at": now,
+        },
+        timeout=_valid_hmac_ttl_seconds(),
+    )
+
+
+def _clear_active_login(user_id, session_key) -> None:
+    if not user_id or not session_key:
+        return
+
+    active_login = cache.get(_active_login_key(user_id))
+    if active_login and active_login.get("session_key") == session_key:
+        cache.delete(_active_login_key(user_id))
 
 
 class RegisterView(APIView):
@@ -236,8 +282,7 @@ class LoginView(APIView):
         ).isoformat()
 
         logger.warning(
-            "Too many login attempts for %s. Retry after %ss (until %s).",
-            email,
+            "Too many login attempts. Retry after %ss (until %s).",
             retry_after_seconds,
             blocked_until,
         )
@@ -257,10 +302,7 @@ class LoginView(APIView):
         """
         Build a 429 response for a permanently blocked user.
         """
-        logger.error(
-            "User %s has been permanently blocked after repeated login failures.",
-            email,
-        )
+        logger.error("User has been permanently blocked after repeated login failures.")
         return Response(
             {
                 "error": "Too many login attempts. User has been blocked permanently. Contact the administrator.",
@@ -270,6 +312,27 @@ class LoginView(APIView):
                 "blocked_permanently": True,
             },
             status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    def _record_failed_login_attempt(self, login_attempts_key, login_attempts):
+        cache.set(
+            login_attempts_key,
+            login_attempts + 1,
+            timeout=settings.USER_TEMPORARY_BLOCK_TIME,
+        )
+
+    def _concurrent_login_response(self, email, login_attempts_key, login_attempts):
+        self._record_failed_login_attempt(login_attempts_key, login_attempts)
+        logger.warning("Concurrent login attempt rejected for active session.")
+        return Response(
+            {
+                "error": (
+                    "Konto jest już aktywne na innym urządzeniu. "
+                    "Wyloguj się z poprzedniego urządzenia albo spróbuj ponownie za kilka minut."
+                ),
+                "blocked_permanently": False,
+            },
+            status=status.HTTP_409_CONFLICT,
         )
     
     def post(self, request, *args, **kwargs):
@@ -292,14 +355,18 @@ class LoginView(APIView):
             login_attempts_key = f"login_attempts_{email}"
             login_attempts = cache.get(login_attempts_key, 0)
             
-            to_many_login_attempts_key = f"to_many_login_attempts_{email}"
-            to_many_login_attempts = cache.get(to_many_login_attempts_key, 0)
-            logger.debug(f"Login attempts for {email}: {login_attempts}, Too many attempts count: {to_many_login_attempts}")
+            too_many_login_attempts_key = f"too_many_login_attempts_{email}"
+            too_many_login_attempts = cache.get(too_many_login_attempts_key, 0)
+            logger.debug("Login attempts checked.")
           
             if login_attempts >= 3:
-                cache.set(to_many_login_attempts_key, to_many_login_attempts + 1, timeout=settings.USER_TEMPORARY_BLOCK_TIME*2)
+                cache.set(
+                    too_many_login_attempts_key,
+                    too_many_login_attempts + 1,
+                    timeout=settings.USER_TEMPORARY_BLOCK_TIME * 2,
+                )
 
-                if to_many_login_attempts >= 2:   
+                if too_many_login_attempts >= 2:
                     user = User.objects.filter(email=email).first()
                     if user:
                         if not user.is_blocked:
@@ -326,6 +393,16 @@ class LoginView(APIView):
                         },
                         status=status.HTTP_401_UNAUTHORIZED,
                     )
+
+                active_login = cache.get(_active_login_key(user.pk))
+                fingerprint_hash = _request_fingerprint_hash(request)
+                if active_login and active_login.get("fingerprint_hash") != fingerprint_hash:
+                    return self._concurrent_login_response(
+                        email,
+                        login_attempts_key,
+                        login_attempts,
+                    )
+
                 try:  
                     login(request, user)  
                 except Exception as e:
@@ -336,7 +413,7 @@ class LoginView(APIView):
 
                 hmac = HmacToken.calculate_token(request.session.session_key, request, timestamp)
                 
-                cache.delete(to_many_login_attempts_key)
+                cache.delete(too_many_login_attempts_key)
                 cache.delete(login_attempts_key)
                 
                 if getattr(user, "is_two_factor", False):
@@ -350,6 +427,7 @@ class LoginView(APIView):
                     'hmac_token',
                     f"{str(timestamp)}:{hmac}",
                     httponly=True,
+                    secure=True,
                     samesite='Lax',
                 )
                 user_data = {
@@ -358,12 +436,13 @@ class LoginView(APIView):
                     'email': request.user.email,
                 }
                 cache.set(f'session:{request.session.session_key}', user_data, timeout=3600)
+                _store_active_login(request, user)
                 
                 logger.info("Login successful.")
                 return response
         
             else:
-                cache.set(login_attempts_key, login_attempts + 1, timeout=settings.USER_TEMPORARY_BLOCK_TIME)
+                self._record_failed_login_attempt(login_attempts_key, login_attempts)
                 logger.warning("Invalid login payload.")
                 return Response({"error": serializer.errors},
                                 status=status.HTTP_401_UNAUTHORIZED)
@@ -392,12 +471,14 @@ class LogoutView(APIView):
             200 OK with a generic success message.
         """
         logger.info("Logout requested.")
+        user_id = getattr(request.user, "pk", None)
+        session_key = request.session.session_key
         try:
             logout(request)
-            request.session.flush()
+            _clear_active_login(user_id, session_key)
             logger.info("Logout successful; session flushed.")
-        except Exception as e:
-            logger.info(f"Exceprions from logout: {e}")
+        except Exception:
+            logger.warning("Logout error.", exc_info=True)
                 
         response = Response({"message": "Logout successful"}, status=status.HTTP_200_OK)
         response.delete_cookie("hmac", path="/", samesite='Lax')
@@ -451,7 +532,7 @@ class VerifySessionView(APIView):
         session_id = request.COOKIES.get("sessionid")
         hmac_token = request.COOKIES.get("hmac")
         
-        logger.debug(f"hmac_token:{hmac_token}")
+        logger.debug("Session verification HMAC cookie presence checked.")
         
         login_url = self._login_url(request)
 
@@ -470,9 +551,9 @@ class VerifySessionView(APIView):
         
         try:
             timestamp, provided_hmac = unquote(hmac_token).strip('"').split(":")
-            logger.info(f"htim:  {timestamp}/{provided_hmac}")
-        except Exception as e:
-            logger.warning(f"Failed to parse hmac token: {e}")
+            logger.debug("Session verification HMAC token parsed.")
+        except Exception:
+            logger.warning("Failed to parse HMAC token.")
             return formatted_response(request,
                                       {"error": "Invalid HMAC format.",
                                        "href": login_url,
@@ -481,7 +562,7 @@ class VerifySessionView(APIView):
                                       status=400)
         
         if not HmacToken.is_valid_hmac(provided_hmac, request, timestamp):
-            logger.warning(f"HMAC verification failed for user {request.user.username}")
+            logger.warning("HMAC verification failed.")
             logout(request)
             response = HttpResponseRedirect(login_url)
             return response
@@ -507,6 +588,7 @@ class VerifySessionView(APIView):
         response.headers["X-First-Name"] = request.user.first_name or ""
         response.headers["X-Email"] = request.user.email or ""
         response.headers["X-User-Id"] = request.session.get('wallet_user_id', '')
+        _store_active_login(request, request.user)
 
         logger.debug(f"header User: {response.headers['X-User']}")
         logger.debug(f"header User-Id: {response.headers['X-User-Id']}")

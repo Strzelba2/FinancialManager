@@ -3,6 +3,7 @@
 import { cookies, headers } from 'next/headers'
 import { z } from 'zod'
 import { logger } from '@/lib/logger'
+import { sessionAuthReferer, shouldUseSecureAuthCookies } from './cookie-options'
 
 const LoginSchema = z.object({
   email: z.email({ error: 'Podaj poprawny adres email' }).trim(),
@@ -53,8 +54,12 @@ function extractSessionAuthMessage(value: unknown): string | undefined {
 
 function loginFallbackMessage(status: number): string {
   switch (status) {
+    case 403:
+      return 'Logowanie zostało zablokowane ze względów bezpieczeństwa.'
     case 401:
       return 'Nieprawidłowy email lub hasło'
+    case 409:
+      return 'Logowanie jest już aktywne. Odśwież stronę albo spróbuj ponownie za chwilę.'
     case 429:
       return 'Zbyt wiele prób logowania. Spróbuj ponownie później.'
     case 500:
@@ -96,13 +101,12 @@ export async function loginAction(
 
   let response: Response
   try {
-    const nextUiDomain = process.env.NEXT_UI_DOMAIN ?? 'next.localhost'
     response = await fetch(`${authUrl}/login/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        Referer: `http://${nextUiDomain}/login`,
+        Referer: sessionAuthReferer('/login'),
         ...(clientIp ? { 'X-Original-Client-IP': clientIp } : {}),
         ...(userAgent ? { 'User-Agent': userAgent } : {}),
         ...(uaPlatform ? { 'Sec-CH-UA-Platform': uaPlatform } : {}),
@@ -130,12 +134,14 @@ export async function loginAction(
       }
     }
 
-    logger.warn({ status: response.status, email, body: rawBody, message }, 'login rejected by session-auth')
+    logger.warn({ status: response.status }, 'login rejected by session-auth')
     return { message }
   }
 
   const cookieStore = await cookies()
   const rawSetCookie = response.headers.getSetCookie?.() ?? []
+  const secure = shouldUseSecureAuthCookies()
+  const authCookies: Array<{ name: 'sessionid' | 'hmac'; value: string }> = []
 
   for (const raw of rawSetCookie) {
     const [nameValue] = raw.split(';')
@@ -146,14 +152,25 @@ export async function loginAction(
     const value = nameValue.slice(eqIdx + 1).trim()
 
     if (name === 'sessionid' || name === 'hmac_token' || name === 'hmac') {
-      cookieStore.set(name === 'hmac_token' ? 'hmac' : name, value, {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-      })
+      authCookies.push({ name: name === 'sessionid' ? 'sessionid' : 'hmac', value })
     }
   }
 
-  logger.info({ email }, 'login successful')
+  const authCookieNames = new Set(authCookies.map((cookie) => cookie.name))
+  if (!authCookieNames.has('sessionid') || !authCookieNames.has('hmac')) {
+    logger.warn('login succeeded without required auth cookies')
+    return { message: 'Brak danych sesji w odpowiedzi serwera autoryzacji' }
+  }
+
+  for (const cookie of authCookies) {
+    cookieStore.set(cookie.name, cookie.value, {
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+      secure,
+    })
+  }
+
+  logger.info('login successful')
   return { success: true }
 }

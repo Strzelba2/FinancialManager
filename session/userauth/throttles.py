@@ -51,9 +51,50 @@ class RegisterIPThrottle(AnonRateThrottle):
         logger.warning("Throttle failure: too many attempts from IP.")
         raise Throttled(detail='Too many attempts. Your IP may be temporarily blocked.')
 
+    def _record_blocked_ip(self, request: HttpRequest) -> None:
+        ip = get_client_ip(request)
+        user_agent = request.META.get('HTTP_USER_AGENT', '')
+        referer = request.META.get('HTTP_REFERER', '')
+        endpoint = request.path
+
+        blocked_ip = BlockedIP.objects.filter(ip_address=ip).first()
+        if blocked_ip:
+            if blocked_ip.is_temporary:
+                blocked_ip.is_temporary = False
+                blocked_ip.save(update_fields=["is_temporary"])
+                logger.error("Temporary blocked IP escalated to permanent.")
+                raise Throttled(detail='Your IP has been blocked, please contact the administrator.')
+
+            logger.error("Request from permanently blocked IP.")
+            raise Throttled(detail='Your IP has been permanently blocked.')
+
+        BlockedIP.objects.create(
+            ip_address=ip,
+            user_agent=user_agent,
+            referer=referer,
+            endpoint=endpoint,
+        )
+        logger.error("New IP blocked due to throttle abuse.")
+
+    def allow_request(self, request: HttpRequest, view) -> bool:
+        try:
+            allowed = super().allow_request(request, view)
+        except Throttled:
+            self._record_blocked_ip(request)
+            raise
+
+        if not allowed:
+            self._record_blocked_ip(request)
+
+        return allowed
+
     def throttle_request(self, request: HttpRequest, view) -> bool:
         """
         Apply the throttle logic. If the limit is exceeded, block the IP.
+
+        DRF's request lifecycle calls `allow_request`. This method keeps the same
+        block-and-escalate behavior for direct helper/unit-test callers that still
+        exercise the older `throttle_request` hook.
 
         Args:
             request (HttpRequest): Incoming request.
@@ -62,31 +103,14 @@ class RegisterIPThrottle(AnonRateThrottle):
         Returns:
             bool: True if allowed, False otherwise.
         """
-        allowed = super().throttle_request(request, view)
+        try:
+            allowed = super().throttle_request(request, view)
+        except Throttled:
+            self._record_blocked_ip(request)
+            raise
+
         if not allowed:
-            ip = get_client_ip(request)
-            user_agent = request.META.get('HTTP_USER_AGENT', '')
-            referer = request.META.get('HTTP_REFERER', '')
-            endpoint = request.path
-
-            blocked_ip = BlockedIP.objects.filter(ip_address=ip).first()
-            if blocked_ip:
-                if blocked_ip.is_temporary:
-                    blocked_ip.is_temporary = False
-                    blocked_ip.save(update_fields=["is_temporary"])
-                    logger.error("Temporary blocked IP escalated to permanent.")
-                    raise Throttled(detail='Your IP has been blocked, please contact the administrator.')
-                else:
-                    logger.error("Request from permanently blocked IP.")
-                    raise Throttled(detail='Your IP has been permanently blocked.')
-
-            BlockedIP.objects.create(
-                ip_address=ip,
-                user_agent=user_agent,
-                referer=referer,
-                endpoint=endpoint,
-            )
-            logger.error("New IP blocked due to throttle abuse.")
+            self._record_blocked_ip(request)
             
         return allowed
     

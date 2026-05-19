@@ -1,10 +1,12 @@
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth import get_user_model
+from django.contrib.auth import hashers
 from django.db.models import Q
 import logging
 from typing import Optional
 
 logger = logging.getLogger("django")
+_DUMMY_PASSWORD_HASH = hashers.make_password("dummy-password")
 
 
 class UsernameOrEmailBackend(ModelBackend):
@@ -25,7 +27,7 @@ class UsernameOrEmailBackend(ModelBackend):
             The authenticated user object if credentials are valid; otherwise, None.
         """
         
-        logger.info("Starting authentication process for username/email: %s", username)
+        logger.info("Starting authentication process.")
         
         if username is None or password is None:
             logger.warning("Username or password was not provided.")
@@ -34,15 +36,16 @@ class UsernameOrEmailBackend(ModelBackend):
         UserModel = get_user_model()
         try:
             user = UserModel.objects.get(Q(email=username) | Q(username=username))
-            logger.info("User found for username/email: %s", username)
+            logger.info("User candidate found.")
             
         except UserModel.DoesNotExist:
-            logger.warning("No user found for username/email: %s", username)
+            hashers.check_password(password, _DUMMY_PASSWORD_HASH)
+            logger.warning("No user found for supplied credentials.")
             return None
         
         if user.check_password(password):
-            logger.info("Password verification successful for user: %s", username)
+            logger.info("Password verification successful.")
             return user
         else:
-            logger.warning("Password verification failed for user: %s", username)
+            logger.warning("Password verification failed.")
             return None

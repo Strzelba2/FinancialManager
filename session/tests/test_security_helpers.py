@@ -223,3 +223,88 @@ class RegisterIPThrottleTests(SimpleTestCase):
 
         self.assertFalse(existing.is_temporary)
         existing.save.assert_called_once_with(update_fields=["is_temporary"])
+
+    @patch("userauth.throttles.BlockedIP")
+    @patch("rest_framework.throttling.AnonRateThrottle.throttle_request", return_value=False, create=True)
+    def test_failed_request_rejects_existing_permanent_block(
+        self,
+        _base_throttle: MagicMock,
+        blocked_ip: MagicMock,
+    ) -> None:
+        request = self.factory.post("/register/", REMOTE_ADDR="10.0.0.13")
+        existing = MagicMock(is_temporary=False)
+        blocked_ip.objects.filter.return_value.first.return_value = existing
+
+        with self.assertRaisesRegex(Throttled, "permanently blocked"):
+            RegisterIPThrottle().throttle_request(request, view=None)
+
+        existing.save.assert_not_called()
+        blocked_ip.objects.create.assert_not_called()
+
+    @patch("userauth.throttles.BlockedIP")
+    @patch("rest_framework.throttling.AnonRateThrottle.allow_request", return_value=True, create=True)
+    def test_allow_request_returns_true_when_base_throttle_allows(
+        self,
+        _base_allow: MagicMock,
+        blocked_ip: MagicMock,
+    ) -> None:
+        request = self.factory.post("/register/", REMOTE_ADDR="10.0.0.14")
+
+        self.assertTrue(RegisterIPThrottle().allow_request(request, view=None))
+
+        blocked_ip.objects.filter.assert_not_called()
+        blocked_ip.objects.create.assert_not_called()
+
+    @patch("userauth.throttles.BlockedIP")
+    @patch("rest_framework.throttling.AnonRateThrottle.allow_request", return_value=False, create=True)
+    def test_allow_request_records_block_when_base_throttle_denies(
+        self,
+        _base_allow: MagicMock,
+        blocked_ip: MagicMock,
+    ) -> None:
+        request = self.factory.post(
+            "/register/",
+            REMOTE_ADDR="10.0.0.15",
+            HTTP_USER_AGENT="pytest",
+            HTTP_REFERER="http://next.localhost/register",
+        )
+        blocked_ip.objects.filter.return_value.first.return_value = None
+
+        self.assertFalse(RegisterIPThrottle().allow_request(request, view=None))
+
+        blocked_ip.objects.create.assert_called_once_with(
+            ip_address="10.0.0.15",
+            user_agent="pytest",
+            referer="http://next.localhost/register",
+            endpoint="/register/",
+        )
+
+    @patch("userauth.throttles.BlockedIP")
+    @patch("rest_framework.throttling.AnonRateThrottle.allow_request", side_effect=Throttled(detail="limit"), create=True)
+    def test_allow_request_records_block_and_reraises_throttled(
+        self,
+        _base_allow: MagicMock,
+        blocked_ip: MagicMock,
+    ) -> None:
+        request = self.factory.post("/register/", REMOTE_ADDR="10.0.0.16")
+        blocked_ip.objects.filter.return_value.first.return_value = None
+
+        with self.assertRaises(Throttled):
+            RegisterIPThrottle().allow_request(request, view=None)
+
+        blocked_ip.objects.create.assert_called_once()
+
+    @patch("userauth.throttles.BlockedIP")
+    @patch("rest_framework.throttling.AnonRateThrottle.throttle_request", side_effect=Throttled(detail="limit"), create=True)
+    def test_throttle_request_records_block_and_reraises_base_throttled(
+        self,
+        _base_throttle: MagicMock,
+        blocked_ip: MagicMock,
+    ) -> None:
+        request = self.factory.post("/register/", REMOTE_ADDR="10.0.0.17")
+        blocked_ip.objects.filter.return_value.first.return_value = None
+
+        with self.assertRaises(Throttled):
+            RegisterIPThrottle().throttle_request(request, view=None)
+
+        blocked_ip.objects.create.assert_called_once()

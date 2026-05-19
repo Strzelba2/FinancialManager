@@ -100,7 +100,7 @@ def needs_candle_refresh(max_candle_date: date | None, latest_trade_date: date) 
     return max_candle_date < (latest_trade_date - timedelta(days=5))
 
 
-def snapshot_is_usable(snapshot, *, ai_fresh: bool, latest_trade_date: date, candle_latest_date: date | None) -> bool:
+def snapshot_is_usable(snapshot, ai_fresh: bool, latest_trade_date: date, candle_latest_date: date | None) -> bool:
     if snapshot is None:
         return False
     if not ai_fresh:
@@ -129,7 +129,7 @@ def should_refresh_ai_for_grounded_narrative(
     )
 
 
-def build_ai_cache_prompt_hash(*, mic: str, symbol: str, period: str) -> str:
+def build_ai_cache_prompt_hash(mic: str, symbol: str, period: str) -> str:
     cache_identity = f"equity|{mic.strip().upper()}|{symbol.strip().upper()}|{period}"
     return prompt_hash(
         SYSTEM_PROMPT,

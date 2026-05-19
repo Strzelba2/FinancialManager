@@ -498,7 +498,7 @@ def _parse_decimal(value: str | None) -> float | int | None:
     return number
 
 
-def _scale_metric_value(raw: float | int | None, *, source_kind: str) -> float | int | None:
+def _scale_metric_value(raw: float | int | None, source_kind: str) -> float | int | None:
     if raw is None:
         return None
     if source_kind != "thousand_pln":
@@ -1311,7 +1311,7 @@ def merge_web_source_facts(
                 return False
         return True
 
-    def _apply_metric(section: dict[str, Any], key: str, metric: WebMetric | None, *, override: bool = True) -> None:
+    def _apply_metric(section: dict[str, Any], key: str, metric: WebMetric | None, override: bool = True) -> None:
         if metric is None or metric.value is None:
             return
         if override or _metric_missing(section.get(key)):
@@ -1538,7 +1538,7 @@ def merge_web_source_report_metrics(
 
     data = report.model_dump(mode="json")
 
-    def _apply_report_metric(section: dict[str, Any], key: str, metric: WebMetric | None, *, allow_null: bool = False) -> None:
+    def _apply_report_metric(section: dict[str, Any], key: str, metric: WebMetric | None, allow_null: bool = False) -> None:
         if metric is None:
             return
         if metric.value is None and not allow_null:

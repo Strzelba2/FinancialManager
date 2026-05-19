@@ -5,12 +5,24 @@ TEST_COMPOSE_PROJECT_NAME ?= financialmanager_tests
 TEST_COMPOSE = env TEST_COMPOSE_PROJECT_NAME=$(TEST_COMPOSE_PROJECT_NAME) UID=$$(id -u) GID=$$(id -g) docker compose -p $(TEST_COMPOSE_PROJECT_NAME) -f docker-compose.yml -f tests/docker-compose.tests.yml
 COVERAGE_CHANGED_LINES_FILE ?= /tmp/financialmanager-coverage-changed-lines.json
 TEST_ALL_REPORT_TARGET ?= allure-up
+LOGIN_CAPACITY_STEPS ?= 250,500,1000
+LOGIN_CAPACITY_MAX_USERS ?= 1000
+LOGIN_CAPACITY_MIN_PASS_USERS ?= 500
+LOGIN_CAPACITY_PATHS ?= /wallet,/transactions
+LOGIN_CAPACITY_REQUEST_TIMEOUT_SECONDS ?= 30
+LOGIN_CAPACITY_STOP_ON_FAILURE ?= 1
+LOGIN_CAPACITY_SESSION_ENV_TYPE ?= prod
+LOGIN_CAPACITY_SESSION_GUNICORN_WORKERS ?= 3
+LOGIN_CAPACITY_SESSION_GUNICORN_TIMEOUT ?= 60
+LOGIN_CAPACITY_SESSION_GUNICORN_LOG_LEVEL ?= info
+LOGIN_CAPACITY_SESSION_ALLOWED_HOSTS ?= wallet.localhost,localhost,127.0.0.1,session-auth,session-auth.localhost,next.localhost
 
 .PHONY: \
 	network-create \
 	build down down-v up recreate recreate-session recreate-wallet recreate-stock recreate-pgadmin recreate-next-ui \
 	session-makemigrations makemigrations session-migrate migrate wallet-migrate stock-migrate \
 	smoke-test functional-test component-test integration-test \
+	security-fuzz-test security-load-test login-stress-test login-capacity-test dast-plan-test login-dast-test login-security-test \
 	unit-test unit-test-stock unit-test-wallet unit-test-session unit-test-next-ui \
 	coverage-unit coverage-unit-stock coverage-unit-wallet coverage-unit-session coverage-unit-next-ui \
 	quality-test quality-test-python quality-test-next-ui \
@@ -79,6 +91,45 @@ component-test:
 integration-test:
 	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_pytest_group.sh integration_tests
 
+security-fuzz-test:
+	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_pytest_group.sh security_tests
+
+security-load-test:
+	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_pytest_group.sh performance_tests
+
+login-stress-test:
+	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_pytest_group.sh load_tests -m "not capacity"
+
+login-capacity-test:
+	SESSION_AUTH_ENV_TYPE="$(LOGIN_CAPACITY_SESSION_ENV_TYPE)" \
+	SESSION_AUTH_GUNICORN_WORKERS="$(LOGIN_CAPACITY_SESSION_GUNICORN_WORKERS)" \
+	SESSION_AUTH_GUNICORN_TIMEOUT="$(LOGIN_CAPACITY_SESSION_GUNICORN_TIMEOUT)" \
+	SESSION_AUTH_GUNICORN_LOG_LEVEL="$(LOGIN_CAPACITY_SESSION_GUNICORN_LOG_LEVEL)" \
+	SESSION_AUTH_ALLOWED_HOSTS="$(LOGIN_CAPACITY_SESSION_ALLOWED_HOSTS)" \
+	bash tests/docker/run_with_test_runtime.sh env \
+		LOGIN_CAPACITY_ENABLED=1 \
+		LOGIN_CAPACITY_STEPS="$(LOGIN_CAPACITY_STEPS)" \
+		LOGIN_CAPACITY_MAX_USERS="$(LOGIN_CAPACITY_MAX_USERS)" \
+		LOGIN_CAPACITY_MIN_PASS_USERS="$(LOGIN_CAPACITY_MIN_PASS_USERS)" \
+		LOGIN_CAPACITY_PATHS="$(LOGIN_CAPACITY_PATHS)" \
+		LOGIN_CAPACITY_REQUEST_TIMEOUT_SECONDS="$(LOGIN_CAPACITY_REQUEST_TIMEOUT_SECONDS)" \
+		LOGIN_CAPACITY_STOP_ON_FAILURE="$(LOGIN_CAPACITY_STOP_ON_FAILURE)" \
+		SESSION_AUTH_ENV_TYPE="$(LOGIN_CAPACITY_SESSION_ENV_TYPE)" \
+		SESSION_AUTH_GUNICORN_WORKERS="$(LOGIN_CAPACITY_SESSION_GUNICORN_WORKERS)" \
+		SESSION_AUTH_GUNICORN_TIMEOUT="$(LOGIN_CAPACITY_SESSION_GUNICORN_TIMEOUT)" \
+		SESSION_AUTH_GUNICORN_LOG_LEVEL="$(LOGIN_CAPACITY_SESSION_GUNICORN_LOG_LEVEL)" \
+		SESSION_AUTH_ALLOWED_HOSTS="$(LOGIN_CAPACITY_SESSION_ALLOWED_HOSTS)" \
+		bash tests/docker/run_login_capacity_probe.sh
+
+dast-plan-test:
+	bash tests/docker/run_with_test_runtime.sh bash tests/docker/run_pytest_group.sh dast_tests
+
+login-dast-test:
+	bash tests/docker/run_zap_login_dast.sh
+
+login-security-test: network-create
+	MAKE="$(MAKE)" REPORT_TARGET="allure-report" bash tests/run_make_batch.sh security-fuzz-test security-load-test dast-plan-test
+
 unit-test: network-create
 	MAKE="$(MAKE)" REPORT_TARGET="allure-report" bash tests/run_make_batch.sh unit-test-stock unit-test-wallet unit-test-session unit-test-next-ui
 
@@ -143,7 +194,7 @@ quality-test-next-ui: network-create
 	$(COMPOSE) run --rm --no-deps next-ui npm run test:quality
 
 test-all: network-create
-	MAKE="$(MAKE)" REPORT_TARGET="$(TEST_ALL_REPORT_TARGET)" bash tests/run_make_batch.sh coverage-unit-stock coverage-unit-wallet coverage-unit-session coverage-unit-next-ui smoke-test functional-test component-test integration-test
+	MAKE="$(MAKE)" REPORT_TARGET="$(TEST_ALL_REPORT_TARGET)" bash tests/run_make_batch.sh coverage-unit-stock coverage-unit-wallet coverage-unit-session coverage-unit-next-ui smoke-test functional-test component-test integration-test security-fuzz-test security-load-test login-stress-test dast-plan-test
 
 allure-report:
 	python3 tests/docker/collect_changed_lines.py --output "$(COVERAGE_CHANGED_LINES_FILE)"

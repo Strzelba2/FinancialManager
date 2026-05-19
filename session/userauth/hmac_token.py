@@ -36,13 +36,13 @@ class HmacToken:
         message = f"{session_id}{get_client_ip(request)}{request.META.get("HTTP_SEC_CH_UA_PLATFORM", "")}"\
                   f"{request.META.get("HTTP_USER_AGENT", "")}{timestamp}"
         
-        logger.debug(f"Calculating HMAC for message: {message}")
+        logger.debug("Calculating HMAC token.")
         
         hmac_signature = hmac.new(settings.SERVER_SALT.encode(), message.encode(), hashlib.sha256).hexdigest()
 
         encoded_hmac_signature = base64.b64encode(hmac_signature.encode()).decode()
 
-        logger.debug(f"HMAC token calculated successfully: {encoded_hmac_signature}")
+        logger.debug("HMAC token calculated successfully.")
         return encoded_hmac_signature
     
     @staticmethod
@@ -69,8 +69,7 @@ class HmacToken:
             return False
         session_id = request.COOKIES.get("sessionid")
         expected_hmac = HmacToken.calculate_token(session_id, request, timestamp)
-        logger.debug(f"Comparing provided HMAC with expected HMAC: {provided_hmac} \
-                     vs {expected_hmac} for session ID: {session_id}")
+        logger.debug("Comparing provided HMAC with expected HMAC.")
 
         return hmac.compare_digest(provided_hmac, expected_hmac)
     

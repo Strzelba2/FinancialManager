@@ -261,6 +261,7 @@ class UserAdmin(BaseUserAdmin):
         """
         keys = [
             f"login_attempts_{user.email}",
+            f"too_many_login_attempts_{user.email}",
             f"to_many_login_attempts_{user.email}",
         ]
         removed = 0

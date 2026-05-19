@@ -57,3 +57,18 @@ class MiddlewareTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"The User-Agent header is missing.", response.content)
+
+    @override_settings(NEXT_UI_DOMAIN="next.localhost", UI_DOMAIN="wallet.localhost", APP_PROTOCOL="http")
+    @patch("middleware.reqmiddleware.BlockedIP")
+    def test_request_middleware_rejects_bot_user_agent(self, blocked_ip_mock: MagicMock) -> None:
+        blocked_ip_mock.objects.filter.return_value.first.return_value = None
+        middleware = RequestMiddleware(MagicMock(return_value=HttpResponse("ok")))
+        request = self.factory.get(
+            "/wallet",
+            HTTP_USER_AGENT="Googlebot/2.1 (+http://www.google.com/bot.html)",
+        )
+
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"Bots are blocked.", response.content)

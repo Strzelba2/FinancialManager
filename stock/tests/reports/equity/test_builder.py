@@ -184,7 +184,7 @@ def make_ai_payload() -> EquityAiPayload:
     )
 
 
-def make_candles(*, start: date = date(2024, 1, 1), periods: int = 330) -> list[dict]:
+def make_candles(start: date = date(2024, 1, 1), periods: int = 330) -> list[dict]:
     candles: list[dict] = []
     for idx in range(periods):
         day = start + timedelta(days=idx)

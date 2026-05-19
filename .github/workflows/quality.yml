@@ -31,7 +31,7 @@ jobs:
           WALLET_DOMAIN=wallet.localhost
           UI_DOMAIN=wallet.localhost
           SESSION_DOMAIN=session-auth.localhost
-          NEXT_UI_DOMAIN=next.localhost
+          NEXT_UI_DOMAIN=next.localhost:8081
           APP_PROTOCOL=http
           POSTGRES_DB=session_test
           POSTGRES_USER=myuser
@@ -136,8 +136,9 @@ jobs:
           WALLET_API_URL=http://wallet:8001
           STOCK_API_URL=http://stock:8001
           SESSION_AUTH_URL=http://session-auth:8000
-          NEXT_PUBLIC_APP_URL=http://next.localhost
-          NEXT_UI_DOMAIN=next.localhost
+          NEXT_PUBLIC_APP_URL=http://next.localhost:8081
+          NEXT_UI_DOMAIN=next.localhost:8081
+          APP_PROTOCOL=http
           EOF
 
           cat > ui/.env <<'EOF'

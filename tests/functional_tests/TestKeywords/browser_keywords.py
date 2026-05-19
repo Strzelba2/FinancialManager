@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from html import escape
+from urllib.parse import quote
+
 from robot.api.deco import keyword
 from robot.libraries.BuiltIn import BuiltIn
 
@@ -75,3 +78,56 @@ def page_should_have_heading(heading: str) -> None:
 @keyword("Page Should Have Text")
 def page_should_have_text(text: str) -> None:
     _run("Get Text", f"text={text}", "contains", text)
+
+
+@keyword("Page Should Not Have Text")
+def page_should_not_have_text(text: str) -> None:
+    body = str(_run("Get Text", "body"))
+    if text in body:
+        raise AssertionError(f"Page unexpectedly contains text: {text}")
+
+
+@keyword("Cross Site Form Post To Next Ui Path Should Be Blocked")
+def cross_site_form_post_to_next_ui_path_should_be_blocked(path: str) -> None:
+    base_url = _variable("${BASE_URL}", "http://next.localhost")
+    target = f"{base_url}{path}"
+    html = f"""
+<!doctype html>
+<html lang="en">
+  <body>
+    <form id="csrf" method="post" action="{escape(target)}">
+      <input name="csrf_probe" value="1">
+    </form>
+    <script>document.getElementById('csrf').submit()</script>
+  </body>
+</html>
+"""
+    _run("Go To", f"data:text/html;charset=utf-8,{quote(html)}", "wait_until=domcontentloaded")
+    try:
+        _run("Wait For Load State", "networkidle")
+    except Exception as exc:
+        _built_in().log(f"Network idle was not reached after cross-site form POST: {exc}", "WARN")
+
+    current_url = str(_run("Get Url"))
+    body = str(_run("Get Text", "body"))
+    success_markers = ("success", "summary", "created", "updated")
+    handler_markers = ("Nieprawidłowe żądanie", "Podaj", "Dodaj co najmniej")
+    auth_markers = (
+        "401 - Access Denied",
+        "User does not have permission",
+        "Go to Login",
+        "FinancialManager",
+        "Not authenticated",
+    )
+
+    if any(marker in body for marker in success_markers + handler_markers):
+        raise AssertionError(
+            "Cross-site form POST reached the protected Next API handler instead "
+            f"of being blocked by the auth boundary. URL={current_url!r}, body={body[:500]!r}"
+        )
+
+    if not any(marker in body for marker in auth_markers):
+        raise AssertionError(
+            "Cross-site form POST did not show an expected auth-boundary response. "
+            f"URL={current_url!r}, body={body[:500]!r}"
+        )

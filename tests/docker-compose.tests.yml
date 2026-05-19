@@ -50,13 +50,17 @@ services:
 
   session-auth:
     environment:
-      ENV_TYPE: test
+      ENV_TYPE: ${SESSION_AUTH_ENV_TYPE:-test}
       POSTGRES_HOST: session-db
       POSTGRES_PORT: "5432"
       POSTGRES_DB: session_test
       POSTGRES_USER: myuser
       POSTGRES_PASSWORD: mypassword
       DJANGO_CREATE_SUPERUSER: "0"
+      ALLOWED_HOSTS: ${SESSION_AUTH_ALLOWED_HOSTS:-wallet.localhost,localhost,127.0.0.1,session-auth,session-auth.localhost}
+      GUNICORN_WORKERS: ${SESSION_AUTH_GUNICORN_WORKERS:-3}
+      GUNICORN_TIMEOUT: ${SESSION_AUTH_GUNICORN_TIMEOUT:-60}
+      GUNICORN_LOG_LEVEL: ${SESSION_AUTH_GUNICORN_LOG_LEVEL:-info}
 
   wallet:
     environment:

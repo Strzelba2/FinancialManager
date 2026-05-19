@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.http import JsonResponse
 from django.template.response import TemplateResponse
 import json
@@ -9,20 +10,40 @@ import logging
 logger = logging.getLogger("session-auth")
 
 
+def _trusted_client_ip_header_source(remote_addr: str) -> bool:
+    if not remote_addr:
+        return False
+
+    trusted_entries = getattr(settings, "TRUSTED_CLIENT_IP_HEADER_PROXIES", [])
+    trusted_entries = parse_allowed(trusted_entries) if trusted_entries else []
+    if trusted_entries:
+        return is_ip_allowed(remote_addr, trusted_entries)
+
+    try:
+        remote_ip = ip_address(remote_addr)
+    except ValueError:
+        return False
+
+    return remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local
+
+
 def get_client_ip(request):
-    original_ip = request.META.get("HTTP_X_ORIGINAL_CLIENT_IP", "").strip()
-    if original_ip:
-        return original_ip
+    remote_addr = request.META.get("REMOTE_ADDR", "").strip()
 
-    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if x_forwarded_for:
-        return x_forwarded_for.split(",")[0].strip()
+    if _trusted_client_ip_header_source(remote_addr):
+        original_ip = request.META.get("HTTP_X_ORIGINAL_CLIENT_IP", "").strip()
+        if original_ip:
+            return original_ip
 
-    x_real_ip = request.META.get("HTTP_X_REAL_IP", "")
-    if x_real_ip:
-        return x_real_ip.strip()
+        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
+        if x_forwarded_for:
+            return x_forwarded_for.split(",")[0].strip()
 
-    return request.META.get("REMOTE_ADDR", "").strip()
+        x_real_ip = request.META.get("HTTP_X_REAL_IP", "")
+        if x_real_ip:
+            return x_real_ip.strip()
+
+    return remote_addr
 
 
 def formatted_response(request, data, template_name=None, status=200):

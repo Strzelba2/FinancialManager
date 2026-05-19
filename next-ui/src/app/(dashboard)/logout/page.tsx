@@ -1,51 +1,38 @@
-import { cookies, headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { logger } from '@/lib/logger'
+import Link from 'next/link'
+import { LogOut } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { logoutAction } from '@/features/auth/actions/logout'
 
-export default async function LogoutPage() {
-  const cookieStore = await cookies()
-  const sessionid = cookieStore.get('sessionid')?.value
-  const hmac = cookieStore.get('hmac')?.value
-
-  const authUrl = process.env.SESSION_AUTH_URL
-
-  if (authUrl) {
-    const reqHeaders = await headers()
-    const xForwardedFor = reqHeaders.get('x-forwarded-for') ?? ''
-    const clientIp =
-      (xForwardedFor.split(',')[0] ?? '').trim() ||
-      reqHeaders.get('x-real-ip') ||
-      ''
-    const userAgent = reqHeaders.get('user-agent') ?? ''
-    const uaPlatform = reqHeaders.get('sec-ch-ua-platform') ?? ''
-    const nextUiDomain = process.env.NEXT_UI_DOMAIN ?? 'next.localhost'
-
-    const cookieHeader = [
-      sessionid ? `sessionid=${sessionid}` : '',
-      hmac ? `hmac=${hmac}` : '',
-    ]
-      .filter(Boolean)
-      .join('; ')
-
-    try {
-      const res = await fetch(`${authUrl}/logout/`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          Referer: `http://${nextUiDomain}/logout`,
-          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-          ...(clientIp ? { 'X-Original-Client-IP': clientIp } : {}),
-          ...(userAgent ? { 'User-Agent': userAgent } : {}),
-          ...(uaPlatform ? { 'Sec-CH-UA-Platform': uaPlatform } : {}),
-        },
-      })
-      logger.info({ status: res.status }, 'session-auth logout response')
-    } catch (err) {
-      logger.error({ err }, 'session-auth logout request failed')
-    }
-  } else {
-    logger.error('SESSION_AUTH_URL is not configured')
-  }
-
-  redirect('/login')
+export default function LogoutPage() {
+  return (
+    <div className="mx-auto flex min-h-[calc(100vh-8rem)] max-w-md items-center px-4">
+      <Card className="w-full border-white/10 bg-white/10 text-white shadow-2xl backdrop-blur-md">
+        <CardHeader className="text-center">
+          <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full border border-red-400/30 bg-red-500/20">
+            <LogOut className="h-6 w-6 text-red-300" />
+          </div>
+          <CardTitle className="text-xl text-white">Wylogować z konta?</CardTitle>
+          <CardDescription className="text-white/65">
+            Sesja zostanie zakończona po potwierdzeniu.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <form action={logoutAction}>
+            <Button
+              type="submit"
+              variant="destructive"
+              className="h-9 w-full"
+            >
+              <LogOut className="h-4 w-4" />
+              Wyloguj się
+            </Button>
+          </form>
+          <Button asChild variant="outline" className="h-9 w-full border-white/20 bg-white/10 text-white hover:bg-white/15">
+            <Link href="/wallet">Wróć do portfela</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  )
 }

@@ -15,6 +15,11 @@ for source_dir in \
   "${ROOT_DIR}/tests/artifacts/allure-results/functional_tests" \
   "${ROOT_DIR}/tests/artifacts/allure-results/component_tests" \
   "${ROOT_DIR}/tests/artifacts/allure-results/integration_tests" \
+  "${ROOT_DIR}/tests/artifacts/allure-results/security_tests" \
+  "${ROOT_DIR}/tests/artifacts/allure-results/performance_tests" \
+  "${ROOT_DIR}/tests/artifacts/allure-results/load_tests" \
+  "${ROOT_DIR}/tests/artifacts/allure-results/load_capacity" \
+  "${ROOT_DIR}/tests/artifacts/allure-results/dast_tests" \
   "${ROOT_DIR}/stock/tests/artifacts/allure-results" \
   "${ROOT_DIR}/wallet/tests/artifacts/allure-results" \
   "${ROOT_DIR}/session/tests/artifacts/allure-results" \
@@ -49,6 +54,7 @@ Coverage\ stock=http://localhost:5252/coverage/stock/
 Coverage\ wallet=http://localhost:5252/coverage/wallet/
 Coverage\ session=http://localhost:5252/coverage/session/
 Coverage\ next-ui=http://localhost:5252/coverage/next-ui/
+Login\ capacity\ report=http://localhost:5252/load-capacity/login_capacity_probe.html
 EOF
 
 cat > "${COMBINED_DIR}/categories.json" <<'EOF'
@@ -81,6 +87,11 @@ python "${ROOT_DIR}/tests/docker/generate_npm_audit_result.py" \
 allure generate "${COMBINED_DIR}" --clean -o "${REPORT_DIR}"
 
 mkdir -p "${COVERAGE_DIR}"
+
+if [ -d "${ROOT_DIR}/tests/artifacts/load-capacity" ]; then
+  mkdir -p "${REPORT_DIR}/load-capacity"
+  cp -R "${ROOT_DIR}/tests/artifacts/load-capacity/." "${REPORT_DIR}/load-capacity/"
+fi
 
 for item in \
   "stock:${ROOT_DIR}/stock/tests/artifacts/coverage-html" \
