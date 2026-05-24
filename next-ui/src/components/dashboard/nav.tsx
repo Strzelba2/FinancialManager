@@ -174,6 +174,9 @@ export function DashboardNav({ username }: Props) {
                 <Link href="/brokerage/holdings" className="text-white/70 hover:text-white">Pozycje</Link>
                 <Link href="/user/favorites" className="text-white/70 hover:text-white">Ulubione</Link>
                 <div className="border-t border-white/10 pt-4">
+                  <Link href="/settings/profile" className="block text-white/70 hover:text-white">Profile</Link>
+                </div>
+                <div className="border-t border-white/10 pt-4">
                   <Link href="/logout" className="text-red-400 hover:text-red-300">Logout</Link>
                 </div>
               </div>

@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
 import psycopg
 from robot.api.deco import keyword
+
+TESTS_ROOT = Path(__file__).resolve().parents[2]
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.append(str(TESTS_ROOT))
+
+from helpers.totp import fresh_totp_code
 
 ROBOT_LIBRARY_SCOPE = "SUITE"
 
@@ -116,6 +124,11 @@ def reset_functional_auth_rate_limits() -> None:
     ) as conn:
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM userauth_blockedip")
+
+
+@keyword("Generate Functional User Totp Code")
+def generate_functional_user_totp_code(user: dict[str, str]) -> str:
+    return fresh_totp_code(user["email"], user["username"])
 
 
 @keyword("Create Active Functional User")

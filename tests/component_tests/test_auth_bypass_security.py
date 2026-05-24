@@ -11,6 +11,8 @@ import httpx
 import psycopg
 import pytest
 
+from tests.helpers.totp import totp_code
+
 
 PASSWORD = "ComponentPass123!"
 BROWSER_USER_AGENT = (
@@ -102,6 +104,28 @@ def _set_cookie_headers(response: httpx.Response) -> list[str]:
 
 def _auth_cookie_names(response: httpx.Response) -> set[str]:
     return {cookie.name for cookie in response.cookies.jar}
+
+
+def _set_user_two_factor(email: str, enabled: bool) -> None:
+    with psycopg.connect(
+        host="session-db",
+        port=5432,
+        dbname="session_test",
+        user="myuser",
+        password="mypassword",
+    ) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE userauth_user
+                   SET is_two_factor = %s,
+                       is_verified = FALSE
+                 WHERE email = %s
+             RETURNING id
+                """,
+                (enabled, email),
+            )
+            assert cursor.fetchone() is not None
 
 
 def _verify_session(
@@ -373,7 +397,7 @@ class TestLoginIpThrottle:
 @pytest.mark.db
 @allure.epic("System Tests")
 @allure.feature("Component")
-@allure.story("Login does not create sessions for rejected attempts and rotates fixed session ids")
+@allure.story("Login cookie, session fixation, and 2FA contracts are enforced")
 @allure.severity(allure.severity_level.BLOCKER)
 @allure.tag("session", "auth", "security", "cookies")
 @allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
@@ -431,6 +455,182 @@ class TestLoginSessionCookieContract:
         assert response.cookies.get("sessionid") is not None
         assert response.cookies.get("sessionid") != fixed_session_id
         assert response.cookies.get("hmac_token") is not None
+
+    def test_two_factor_login_requires_totp_before_hmac_cookie_is_issued(self, session_url: str) -> None:
+        user = _create_active_user(session_url)
+        _set_user_two_factor(user["email"], enabled=True)
+        client_ip = "10.222.2.42"
+
+        login_response = _login(session_url, user, client_ip=client_ip)
+
+        assert login_response.status_code == 202
+        assert login_response.json() == {"requires_two_factor": True}
+        sessionid = login_response.cookies.get("sessionid")
+        assert sessionid
+        assert "hmac_token" not in _auth_cookie_names(login_response)
+
+        invalid_response = httpx.post(
+            f"{session_url}/two-factor/verify/",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Referer": "http://next.localhost:8081/two-factor",
+                "User-Agent": BROWSER_USER_AGENT,
+                "Sec-CH-UA-Platform": '"Linux"',
+                "X-Original-Client-IP": client_ip,
+            },
+            cookies={"sessionid": sessionid},
+            json={"token": "000000"},
+            timeout=10.0,
+        )
+        assert invalid_response.status_code == 401
+        assert "hmac_token" not in _auth_cookie_names(invalid_response)
+
+        valid_response = httpx.post(
+            f"{session_url}/two-factor/verify/",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Referer": "http://next.localhost:8081/two-factor",
+                "User-Agent": BROWSER_USER_AGENT,
+                "Sec-CH-UA-Platform": '"Linux"',
+                "X-Original-Client-IP": client_ip,
+            },
+            cookies={"sessionid": sessionid},
+            json={"token": totp_code(user["email"], user["username"])},
+            timeout=10.0,
+        )
+
+        assert valid_response.status_code == 200
+        hmac_token = valid_response.cookies.get("hmac_token")
+        assert hmac_token
+        verify_response = _verify_session(
+            session_url,
+            sessionid,
+            hmac_token,
+            client_ip=client_ip,
+        )
+        assert verify_response.status_code == 200
+
+    def test_new_two_factor_login_invalidates_previous_pending_challenge(self, session_url: str) -> None:
+        user = _create_active_user(session_url)
+        _set_user_two_factor(user["email"], enabled=True)
+
+        first_login = _login(
+            session_url,
+            user,
+            client_ip="10.222.2.44",
+            user_agent=BROWSER_USER_AGENT,
+        )
+        first_sessionid = first_login.cookies.get("sessionid")
+        assert first_login.status_code == 202
+        assert first_sessionid
+
+        second_login = _login(
+            session_url,
+            user,
+            client_ip="10.222.2.45",
+            user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        )
+        second_sessionid = second_login.cookies.get("sessionid")
+        assert second_login.status_code == 202
+        assert second_sessionid
+
+        stale_verify = httpx.post(
+            f"{session_url}/two-factor/verify/",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Referer": "http://next.localhost:8081/two-factor",
+                "User-Agent": BROWSER_USER_AGENT,
+                "Sec-CH-UA-Platform": '"Linux"',
+                "X-Original-Client-IP": "10.222.2.44",
+            },
+            cookies={"sessionid": first_sessionid},
+            json={"token": totp_code(user["email"], user["username"])},
+            timeout=10.0,
+        )
+
+        assert stale_verify.status_code == 409
+        assert stale_verify.json() == {"error": "Two-factor verification expired. Please log in again."}
+        assert "hmac_token" not in _auth_cookie_names(stale_verify)
+
+        current_verify = httpx.post(
+            f"{session_url}/two-factor/verify/",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Referer": "http://next.localhost:8081/two-factor",
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+                "Sec-CH-UA-Platform": '"iOS"',
+                "X-Original-Client-IP": "10.222.2.45",
+            },
+            cookies={"sessionid": second_sessionid},
+            json={"token": totp_code(user["email"], user["username"])},
+            timeout=10.0,
+        )
+
+        assert current_verify.status_code == 200
+        assert current_verify.cookies.get("hmac_token")
+
+    def test_two_factor_setup_does_not_enable_until_totp_is_confirmed(self, session_url: str) -> None:
+        user = _create_active_user(session_url)
+        login_response = _login(session_url, user, client_ip="10.222.2.43")
+        sessionid = login_response.cookies.get("sessionid")
+        hmac_token = login_response.cookies.get("hmac_token")
+        assert login_response.status_code == 200
+        assert sessionid
+        assert hmac_token
+
+        setup_response = httpx.post(
+            f"{session_url}/two-factor/setup/",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Referer": "http://next.localhost:8081/settings/profile",
+                "User-Agent": BROWSER_USER_AGENT,
+                "Sec-CH-UA-Platform": '"Linux"',
+                "X-Original-Client-IP": "10.222.2.43",
+            },
+            cookies={"sessionid": sessionid, "hmac": hmac_token},
+            json={},
+            timeout=10.0,
+        )
+
+        assert setup_response.status_code == 200
+        assert setup_response.json()["image"]
+
+        status_response = httpx.get(
+            f"{session_url}/two-factor/status/",
+            headers={
+                "Accept": "application/json",
+                "Referer": "http://next.localhost:8081/settings/profile",
+                "User-Agent": BROWSER_USER_AGENT,
+                "X-Original-Client-IP": "10.222.2.43",
+            },
+            cookies={"sessionid": sessionid, "hmac": hmac_token},
+            timeout=10.0,
+        )
+        assert status_response.status_code == 200
+        assert status_response.json() == {"is_two_factor_enabled": False}
+
+        enable_response = httpx.post(
+            f"{session_url}/two-factor/enable/",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Referer": "http://next.localhost:8081/settings/profile",
+                "User-Agent": BROWSER_USER_AGENT,
+                "Sec-CH-UA-Platform": '"Linux"',
+                "X-Original-Client-IP": "10.222.2.43",
+            },
+            cookies={"sessionid": sessionid, "hmac": hmac_token},
+            json={"token": totp_code(user["email"], user["username"])},
+            timeout=10.0,
+        )
+
+        assert enable_response.status_code == 200
+        assert enable_response.json() == {"is_two_factor_enabled": True}
 
     def test_inactive_user_is_rejected_without_auth_cookies(self, session_url: str) -> None:
         user = _create_active_user(session_url)

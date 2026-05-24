@@ -50,12 +50,15 @@ describe('next-ui proxy', () => {
     const proxy = await loadProxy()
     const response = proxy(request('/login', 'next-ui:3000'))
     const logoutResponse = proxy(request('/logout', 'next-ui:3000'))
+    const twoFactorResponse = proxy(request('/two-factor', 'next-ui:3000'))
     const homeResponse = proxy(request('/home', 'next-ui:3000'))
 
     expect(response.status).toBe(200)
     expect(response.headers.get('x-middleware-next')).toBe('1')
     expect(logoutResponse.status).toBe(200)
     expect(logoutResponse.headers.get('x-middleware-next')).toBe('1')
+    expect(twoFactorResponse.status).toBe(200)
+    expect(twoFactorResponse.headers.get('x-middleware-next')).toBe('1')
     expect(homeResponse.status).toBe(200)
     expect(homeResponse.headers.get('x-middleware-next')).toBe('1')
   })
@@ -91,6 +94,19 @@ describe('next-ui proxy', () => {
     expect(loginResponse.headers.get('location')).toBe('http://next.localhost/home')
     expect(registerResponse.status).toBe(307)
     expect(registerResponse.headers.get('location')).toBe('http://next.localhost/home')
+  })
+
+  it('keeps the two-factor route public even if an identity header is present', async () => {
+    await nextUiUnitStory('Proxy keeps the two-factor challenge route public', {
+      severity: 'critical',
+      tags: ['next-ui', 'auth', 'routing', '2fa'],
+    })
+
+    const proxy = await loadProxy()
+    const response = proxy(request('/two-factor', 'next.localhost', { 'x-user': 'artur' }))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
   })
 
   it('allows protected routes from any host when no trusted host config is present', async () => {

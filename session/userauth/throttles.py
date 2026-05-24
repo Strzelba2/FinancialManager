@@ -18,6 +18,20 @@ class VerifySessionThrottle(UserRateThrottle):
     scope = 'verify_session'
 
 
+class TwoFactorManagementThrottle(UserRateThrottle):
+    """
+    Throttle authenticated setup and enable/disable 2FA operations.
+    """
+    scope = 'two_factor_management'
+
+
+class TwoFactorVerifyThrottle(UserRateThrottle):
+    """
+    Throttle TOTP verification attempts before a session receives full auth.
+    """
+    scope = 'two_factor_verify'
+
+
 class RegisterIPThrottle(AnonRateThrottle):
     """
     Throttle for registration attempts.

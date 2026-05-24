@@ -65,6 +65,8 @@ REST_FRAMEWORK = {
         'anon': '10/minute',
         'user': '1000/day',
         'verify_session': '100/minute',
+        'two_factor_management': '10/minute',
+        'two_factor_verify': '10/minute',
         'register': '2/minute',
         'login': '4/minute'
     },

@@ -105,6 +105,36 @@ Logout Page Requires Explicit Confirmation Before Ending Session
     Page Should Have Text    401 - Access Denied
     Capture Test Screenshot
 
+User Can Enable 2FA And Complete Next Login Challenge
+    [Tags]    auth    2fa    security    critical    allure.label.story:User enables 2FA in profile and completes Next UI login challenge    allure.label.severity:blocker    allure.label.tag:auth    allure.label.tag:security    allure.label.tag:2fa
+    ${user}=    Create Active Functional User    twofaui
+    Go To Next Ui Path    /login
+    Fill Text    input[name="email"]    ${user}[email]
+    Fill Text    input[name="password"]    ${user}[password]
+    Click    role=button[name=/zaloguj/i]
+    Wait For Function    () => window.location.pathname.includes('/wallet')
+    Go To Next Ui Path    /settings/profile
+    Page Should Have Text    Uwierzytelnianie dwuskładnikowe
+    Click    role=button[name=/Wygeneruj kod QR/i]
+    Get Element    img[alt="Kod QR 2FA"]
+    ${code}=    Generate Functional User Totp Code    ${user}
+    Fill Text    input[name="token"]    ${code}
+    Click    role=button[name=/Włącz 2FA/i]
+    Page Should Have Text    Status: aktywne
+    Go To Next Ui Path    /logout
+    Click    role=button[name=/wyloguj się/i]
+    Wait For Function    () => window.location.pathname.includes('/login')
+    Go To Next Ui Path    /login
+    Fill Text    input[name="email"]    ${user}[email]
+    Fill Text    input[name="password"]    ${user}[password]
+    Click    role=button[name=/zaloguj/i]
+    Wait For Function    () => window.location.pathname.includes('/two-factor')
+    ${login_code}=    Generate Functional User Totp Code    ${user}
+    Fill Text    input[name="token"]    ${login_code}
+    Click    role=button[name=/Potwierdź kod/i]
+    Wait For Function    () => window.location.pathname.includes('/wallet')
+    Capture Test Screenshot
+
 Duplicate Favorite List Shows Conflict Message
     [Tags]    wallet    favorites    critical    allure.label.story:Duplicate favorite list names are rejected in Next UI    allure.label.severity:critical    allure.label.tag:wallet    allure.label.tag:favorites    allure.label.tag:financial-data
     ${user}=    Create Active Functional User    favui

@@ -12,9 +12,13 @@ login attempts.
 In scope:
 
 - `POST /login/` in `session-auth`
+- `POST /two-factor/verify/`, `POST /two-factor/setup/`,
+  `POST /two-factor/enable/`, `POST /two-factor/disable/`, and
+  `GET /two-factor/status/` in `session-auth`
 - `POST /logout/` in `session-auth`
 - `GET /verifySession/` in `session-auth`
 - `next-ui` login server action and route guard behavior
+- `next-ui` two-factor login challenge and profile settings UI
 - `next-ui` browser-to-API auth boundary for protected wallet/stock mutations
 - Login throttling, `BlockedIP`, user temporary block, and permanent user block
 
@@ -39,6 +43,17 @@ Out of scope:
 - Repeated attempts from the same IP are still governed by `LoginIPThrottle` and
   create `BlockedIP` evidence when the throttle is exceeded.
 - Repeated account-level failures can escalate to a permanent user block.
+- If a user has 2FA enabled, password login returns a pending session and a
+  `202 Accepted` challenge instead of an HMAC cookie.
+- A pending 2FA session cannot access protected routes until the TOTP code is
+  verified for that specific Django session.
+- Only the latest pending 2FA login for a user can be completed. `session-auth`
+  stores the current pending session key in cache for five minutes, and a newer
+  password login replaces the old pending challenge.
+- A valid TOTP token is accepted only once inside the 90-second validation
+  window; `session-auth` records used tokens in cache and rejects replays.
+- 2FA setup in `next-ui` does not enable the flag when the QR code is generated;
+  the flag is persisted only after a valid TOTP code is submitted.
 
 The request fingerprint is derived from the trusted client IP, `User-Agent`, and
 `Sec-CH-UA-Platform`, then hashed with the server salt before being stored in the
@@ -55,12 +70,18 @@ cache.
 5. If the user is blocked, the request returns the permanent block contract.
 6. If another fresh active login exists for a different fingerprint, the request
    returns `409 Conflict` and records the failed login attempt.
-7. On success, Django rotates the session key, `sessionid` and `hmac_token`
-   cookies are issued, and the active login cache entry is stored for the HMAC
-   validity window.
-8. `verifySession` validates and refreshes the HMAC cookie and refreshes the
+7. If 2FA is enabled, Django rotates the session key, stores that session key as
+   the latest pending 2FA login, and returns `202 Accepted` with a pending
+   `sessionid`; `next-ui` redirects to `/two-factor`.
+8. The `/two-factor` page submits the TOTP code to `session-auth`; only a valid
+   code from the latest pending session marks that Django session as
+   2FA-verified and issues `hmac_token`.
+9. If 2FA is not enabled, or once 2FA verification succeeds, `sessionid` and
+   `hmac_token` cookies are issued and the active login cache entry is stored
+   for the HMAC validity window.
+10. `verifySession` validates and refreshes the HMAC cookie and refreshes the
    active login cache TTL.
-9. `next-ui` renders `/logout` as a confirmation page. The session is ended only
+11. `next-ui` renders `/logout` as a confirmation page. The session is ended only
    when the user submits the logout Server Action, which calls `session-auth`
    `POST /logout/`, clears the browser cookies, and redirects to `/login`.
 
@@ -71,6 +92,38 @@ cache.
 - Status: `200 OK`
 - Body: `{"message": "Login successful"}`
 - Cookies: `sessionid`, `hmac_token`
+
+`POST /login/` success with 2FA enabled:
+
+- Status: `202 Accepted`
+- Body: `{"requires_two_factor": true}`
+- Cookies: `sessionid`
+- No `hmac_token` is issued
+
+`POST /two-factor/verify/` success:
+
+- Status: `200 OK`
+- Body: `{"message": "Two-factor verification successful"}`
+- Cookies: `hmac_token`
+
+`POST /two-factor/verify/` without a matching pending challenge, after that
+session is already verified, for an expired/replaced pending challenge, or for a
+user without 2FA enabled:
+
+- Status: `409 Conflict`
+- Body includes `error`
+- No auth cookies are issued
+
+`POST /two-factor/setup/` success:
+
+- Status: `200 OK`
+- Body includes `image` as a base64 SVG QR code
+- Does not change `is_two_factor`
+
+`POST /two-factor/enable/` and `POST /two-factor/disable/`:
+
+- Require an authenticated Django session and a valid 6-digit TOTP token
+- Return `is_two_factor_enabled`
 
 `POST /login/` second fresh fingerprint:
 
@@ -103,6 +156,26 @@ a successful login response does not expose both required auth cookies.
   server-to-server calls on the internal Docker network. They use the existing
   session/HMAC/Referer contract and are not treated as public browser CSRF
   endpoints for the Next UI flow.
+- `session-auth` applies the same allowed-Referer middleware check to
+  `/two-factor/*` calls as it does to login and registration requests, and
+  setup/enable/disable operations have a dedicated authenticated management
+  throttle.
+- `verifySession` accepts the `text/x-component` media type used by Next.js
+  Server Actions so Traefik ForwardAuth can authorize protected action POSTs
+  before they reach `next-ui`.
+- 2FA validation, QR generation, and enable/disable persistence stay in
+  `session-auth`; `next-ui` only renders the flow and forwards user-submitted
+  codes through Server Actions.
+- 2FA verification is tracked per Django session. The legacy admin flow can keep
+  using its existing `User.is_verified` behavior without granting web sessions
+  global 2FA verification.
+- TOTP secrets are deterministically derived from email, username, and
+  `SERVER_SALT` because this design does not persist a separate 2FA secret
+  column. That keeps the current data model small, but salt compromise plus known
+  user identifiers would allow regeneration of user TOTP secrets; deployment
+  controls must protect `SERVER_SALT`. Rotating `SERVER_SALT` would invalidate
+  already-provisioned authenticator apps, so a future migration to per-user
+  stored secrets should be planned before changing the derivation salt.
 - `GET /logout` must not perform a state change. Logout is an explicit
   `POST`-backed Server Action in `next-ui`.
 - `X-Original-Client-IP`, `X-Forwarded-For`, and `X-Real-IP` are trusted only
@@ -128,15 +201,16 @@ Evidence expected from the testing process:
   contracts.
 - `next-ui` unit tests for login action API handling, MSW-based auth mocking,
   cookie security flags, 403/409 mapping, fail-closed cookie handling, login page
-  states, and proxy route guards.
+  states, 2FA challenge handling, profile 2FA states, and proxy route guards.
 - Component tests for successful login, rejected login, session fixation, HMAC
-  verification, HMAC refresh, logout, SQL injection and XSS payload rejection,
-  Referer/User-Agent abuse, direct header spoofing, `BlockedIP`, user blocks,
-  active login refresh, and second-device rejection.
+  verification, HMAC refresh, 2FA login verification, 2FA setup-before-enable,
+  logout, SQL injection and XSS payload rejection, Referer/User-Agent abuse,
+  direct header spoofing, `BlockedIP`, user blocks, active login refresh, and
+  second-device rejection.
 - Integration tests for Traefik ForwardAuth and public/protected route contracts.
 - Functional Robot tests for the browser login path, anonymous route protection,
-  XSS and SQL injection payload rejection through the form, and visible
-  second-device conflict messaging.
+  profile 2FA activation, 2FA login challenge completion, XSS and SQL injection
+  payload rejection through the form, and visible second-device conflict messaging.
 - Security fuzzing tests for malformed login payloads, type mutations, injection
   strings, and oversized input.
 - Login load/security tests for abusive request bursts, IP throttle stability, and

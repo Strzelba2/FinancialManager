@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import allure
@@ -9,14 +10,15 @@ from django.test import RequestFactory, SimpleTestCase, override_settings
 
 from middleware.logmiddleware import RequestLoggingMiddleware
 from middleware.reqmiddleware import RequestMiddleware
+from userauth.two_factor import TWO_FACTOR_VERIFIED_SESSION_KEY
 
 pytestmark = pytest.mark.unit
 
 
 @allure.epic("Unit Tests")
 @allure.feature("Session")
-@allure.story("Session middleware handles low-risk request decisions")
-@allure.severity(allure.severity_level.NORMAL)
+@allure.story("Session middleware enforces request and 2FA route decisions")
+@allure.severity(allure.severity_level.BLOCKER)
 @allure.tag("middleware", "security")
 @allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
 class MiddlewareTests(SimpleTestCase):
@@ -72,3 +74,104 @@ class MiddlewareTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertIn(b"Bots are blocked.", response.content)
+
+    @override_settings(NEXT_UI_DOMAIN="next.localhost", UI_DOMAIN="wallet.localhost", APP_PROTOCOL="http")
+    @patch("middleware.reqmiddleware.BlockedIP")
+    def test_request_middleware_redirects_unverified_2fa_session_to_next_ui_two_factor(
+        self,
+        blocked_ip_mock: MagicMock,
+    ) -> None:
+        blocked_ip_mock.objects.filter.return_value.first.return_value = None
+        middleware = RequestMiddleware(MagicMock(return_value=HttpResponse("ok")))
+        request = self.factory.get(
+            "/wallet",
+            HTTP_USER_AGENT="Mozilla/5.0",
+            HTTP_REFERER="http://next.localhost/wallet",
+        )
+        request.user = SimpleNamespace(
+            pk=42,
+            is_authenticated=True,
+            is_two_factor=True,
+        )
+        request.session = {}
+
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "http://next.localhost/two-factor")
+
+    @override_settings(NEXT_UI_DOMAIN="next.localhost", UI_DOMAIN="wallet.localhost", APP_PROTOCOL="http")
+    @patch("middleware.reqmiddleware.BlockedIP")
+    def test_request_middleware_allows_two_factor_verify_for_pending_session(
+        self,
+        blocked_ip_mock: MagicMock,
+    ) -> None:
+        blocked_ip_mock.objects.filter.return_value.first.return_value = None
+        response = HttpResponse("ok")
+        get_response = MagicMock(return_value=response)
+        middleware = RequestMiddleware(get_response)
+        request = self.factory.post(
+            "/two-factor/verify/",
+            HTTP_USER_AGENT="Mozilla/5.0",
+            HTTP_REFERER="http://next.localhost/two-factor",
+        )
+        request.user = SimpleNamespace(
+            pk=42,
+            is_authenticated=True,
+            is_two_factor=True,
+        )
+        request.session = {}
+
+        result = middleware(request)
+
+        self.assertIs(result, response)
+        get_response.assert_called_once_with(request)
+
+    @override_settings(NEXT_UI_DOMAIN="next.localhost", UI_DOMAIN="wallet.localhost", APP_PROTOCOL="http")
+    @patch("middleware.reqmiddleware.BlockedIP")
+    def test_request_middleware_rejects_two_factor_request_without_referer(
+        self,
+        blocked_ip_mock: MagicMock,
+    ) -> None:
+        blocked_ip_mock.objects.filter.return_value.first.return_value = None
+        get_response = MagicMock(return_value=HttpResponse("ok"))
+        middleware = RequestMiddleware(get_response)
+        request = self.factory.post(
+            "/two-factor/verify/",
+            HTTP_USER_AGENT="Mozilla/5.0",
+        )
+        request.user = SimpleNamespace(
+            pk=42,
+            is_authenticated=True,
+            is_two_factor=True,
+        )
+        request.session = {}
+
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Missing referer header.", response.content)
+        get_response.assert_not_called()
+
+    @override_settings(NEXT_UI_DOMAIN="next.localhost", UI_DOMAIN="wallet.localhost", APP_PROTOCOL="http")
+    @patch("middleware.reqmiddleware.BlockedIP")
+    def test_request_middleware_allows_verified_2fa_session_to_continue(
+        self,
+        blocked_ip_mock: MagicMock,
+    ) -> None:
+        blocked_ip_mock.objects.filter.return_value.first.return_value = None
+        response = HttpResponse("ok")
+        get_response = MagicMock(return_value=response)
+        middleware = RequestMiddleware(get_response)
+        request = self.factory.get("/wallet", HTTP_USER_AGENT="Mozilla/5.0")
+        request.user = SimpleNamespace(
+            pk=42,
+            is_authenticated=True,
+            is_two_factor=True,
+        )
+        request.session = {TWO_FACTOR_VERIFIED_SESSION_KEY: 42}
+
+        result = middleware(request)
+
+        self.assertIs(result, response)
+        get_response.assert_called_once_with(request)

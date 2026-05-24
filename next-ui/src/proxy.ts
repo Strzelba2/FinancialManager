@@ -6,6 +6,7 @@ const PUBLIC_PATH_PREFIXES = [
   '/login',
   '/logout',
   '/register',
+  '/two-factor',
 ]
 
 function bareHost(value: string): string {
@@ -66,7 +67,10 @@ export function proxy(request: NextRequest) {
   // X-User is injected by Traefik ForwardAuth when session is valid.
   // If user is already logged in and visits /login or /register — send them home.
   const xUser = request.headers.get('x-user')
-  if (xUser && (pathname.startsWith('/login') || pathname.startsWith('/register'))) {
+  if (
+    xUser &&
+    (pathname.startsWith('/login') || pathname.startsWith('/register'))
+  ) {
     return NextResponse.redirect(new URL('/home', request.url))
   }
 

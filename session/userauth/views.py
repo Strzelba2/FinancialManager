@@ -17,10 +17,16 @@ from django.utils.html import strip_tags
 from django.contrib.auth import login, logout
 
 from .serializers import RegisterSerializer, LoginSerializer, CryptoBatchRequest
-from .throttles import VerifySessionThrottle, RegisterIPThrottle, LoginIPThrottle
+from .throttles import (
+    LoginIPThrottle,
+    RegisterIPThrottle,
+    TwoFactorManagementThrottle,
+    TwoFactorVerifyThrottle,
+    VerifySessionThrottle,
+)
 from .tokens import account_activation_token
 from .models import User, UserKeys
-from .two_factor import TwoFactor
+from .two_factor import TwoFactor, TwoFactorSessionState
 from .hmac_token import HmacToken
 from .authentication import SessionAuthenticationWithoutCSRF, IPAllowlistPermission
 from utils.utils import formatted_response, get_client_ip
@@ -36,6 +42,17 @@ import base64
 from datetime import timedelta
 
 logger = logging.getLogger("session-auth")
+
+
+class NextServerActionRenderer(JSONRenderer):
+    """
+    Renderer for Next.js Server Action ForwardAuth calls.
+
+    The `rsc` format is intentionally non-global and only works because
+    VerifySessionView lists this renderer explicitly.
+    """
+    media_type = "text/x-component"
+    format = "rsc"
 
 
 def _valid_hmac_ttl_seconds() -> int:
@@ -81,6 +98,55 @@ def _clear_active_login(user_id, session_key) -> None:
     active_login = cache.get(_active_login_key(user_id))
     if active_login and active_login.get("session_key") == session_key:
         cache.delete(_active_login_key(user_id))
+
+
+def _session_user_data(user) -> dict[str, str]:
+    return {
+        'username': user.username,
+        'first_name': user.first_name,
+        'email': user.email,
+    }
+
+
+def _set_hmac_cookie(response, request) -> None:
+    timestamp = int(time.time())
+    hmac = HmacToken.calculate_token(request.session.session_key, request, timestamp)
+    # next-ui maps this session-auth response cookie to its browser-side `hmac` cookie.
+    response.set_cookie(
+        'hmac_token',
+        f"{str(timestamp)}:{hmac}",
+        httponly=True,
+        secure=True,
+        samesite='Lax',
+    )
+
+
+def _login_success_response(request, user, message="Login successful") -> Response:
+    response = Response({"message": message}, status=status.HTTP_200_OK)
+    _set_hmac_cookie(response, request)
+    # Keep the cached identity tied to the user approved by the login or 2FA flow.
+    cache.set(
+        f'session:{request.session.session_key}',
+        _session_user_data(user),
+        timeout=3600,
+    )
+    _store_active_login(request, user)
+    return response
+
+
+def _request_requires_two_factor(request, user) -> bool:
+    return getattr(user, "is_two_factor", False) and not TwoFactorSessionState.is_verified(request, user)
+
+
+def _clean_two_factor_token(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    token = value.strip().replace(" ", "")
+    if not token.isdigit() or len(token) != 6:
+        return None
+
+    return token
 
 
 class RegisterView(APIView):
@@ -339,9 +405,9 @@ class LoginView(APIView):
         """
         Handle login request. On success:
           - Authenticates user
-          - Generates HMAC session cookie
+          - Generates HMAC session cookie when 2FA is not required
           - Clears login attempt counters
-          - Redirects to 2FA if required
+          - Returns a JSON 2FA challenge when required
 
         Returns:
             Response: Success message or error response.
@@ -408,35 +474,20 @@ class LoginView(APIView):
                 except Exception as e:
                     logger.error(f"Login error for user : {str(e)}")
                     return Response({'error': 'Login failed.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-                timestamp = int(time.time())
-
-                hmac = HmacToken.calculate_token(request.session.session_key, request, timestamp)
                 
                 cache.delete(too_many_login_attempts_key)
                 cache.delete(login_attempts_key)
                 
                 if getattr(user, "is_two_factor", False):
-                    if not getattr(user, "is_verified", False):
-                        logger.info("Redirecting to 2FA verification.")
-                        return HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{settings.WALLET_DOMAIN}/two_factor")
+                    TwoFactorSessionState.mark_pending(request, user)
+                    logger.info("Login requires two-factor verification.")
+                    return Response(
+                        {"requires_two_factor": True},
+                        status=status.HTTP_202_ACCEPTED,
+                    )
 
-                response = Response({"message": "Login successful"}, status=status.HTTP_200_OK)
-                
-                response.set_cookie(
-                    'hmac_token',
-                    f"{str(timestamp)}:{hmac}",
-                    httponly=True,
-                    secure=True,
-                    samesite='Lax',
-                )
-                user_data = {
-                    'username': request.user.username,
-                    'first_name': request.user.first_name,
-                    'email': request.user.email,
-                }
-                cache.set(f'session:{request.session.session_key}', user_data, timeout=3600)
-                _store_active_login(request, user)
+                TwoFactorSessionState.clear(request, user)
+                response = _login_success_response(request, user)
                 
                 logger.info("Login successful.")
                 return response
@@ -497,6 +548,7 @@ class VerifySessionView(APIView):
     """
     permission_classes = [AllowAny] 
     throttle_classes = [VerifySessionThrottle]
+    renderer_classes = [JSONRenderer, TemplateHTMLRenderer, NextServerActionRenderer]
 
     def _login_url(self, request) -> str:
         """
@@ -519,6 +571,17 @@ class VerifySessionView(APIView):
             domain = settings.UI_DOMAIN
 
         return f"{settings.APP_PROTOCOL}://{domain}/login"
+
+    def _two_factor_url(self, request) -> str:
+        forwarded_host = request.META.get("HTTP_X_FORWARDED_HOST", "").split(":")[0]
+        next_host = (settings.NEXT_UI_DOMAIN or "").split(":")[0]
+
+        if next_host and forwarded_host == next_host:
+            domain = settings.NEXT_UI_DOMAIN
+        else:
+            domain = settings.UI_DOMAIN
+
+        return f"{settings.APP_PROTOCOL}://{domain}/two-factor"
     
     def get(self, request, *args, **kwargs):
         """
@@ -548,6 +611,10 @@ class VerifySessionView(APIView):
         if not request.user or not request.user.is_authenticated:
             logger.info("Unauthenticated user during session verification; redirecting.")
             return HttpResponseRedirect(login_url)
+
+        if _request_requires_two_factor(request, request.user):
+            logger.info("Two-factor verification required during session verification.")
+            return HttpResponseRedirect(self._two_factor_url(request))
         
         try:
             timestamp, provided_hmac = unquote(hmac_token).strip('"').split(":")
@@ -618,6 +685,190 @@ class SetWalletUserIdView(APIView):
         request.session['wallet_user_id'] = wallet_user_id
         logger.info("wallet_user_id saved to session.")
         return Response({"ok": True}, status=status.HTTP_200_OK)
+
+
+class TwoFactorStatusView(APIView):
+    """
+    Return the current user's 2FA status for frontend settings screens.
+    """
+    authentication_classes = [SessionAuthenticationWithoutCSRF]
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [VerifySessionThrottle]
+    renderer_classes = [JSONRenderer]
+
+    def get(self, request, *args, **kwargs) -> Response:
+        return Response(
+            {"is_two_factor_enabled": bool(getattr(request.user, "is_two_factor", False))},
+            status=status.HTTP_200_OK,
+        )
+
+
+class TwoFactorSetupView(APIView):
+    """
+    Generate a QR code for the current user without enabling 2FA yet.
+    """
+    authentication_classes = [SessionAuthenticationWithoutCSRF]
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [TwoFactorManagementThrottle]
+    renderer_classes = [JSONRenderer]
+
+    def post(self, request, *args, **kwargs) -> Response:
+        user = request.user
+        if _request_requires_two_factor(request, user):
+            return Response(
+                {"error": "Two-factor authentication is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        secret_key = TwoFactor.generate_secret_key(email=user.email, username=user.username)
+        provisioning_uri = TwoFactor.generate_provisioning_uri(secret_key, username=user.username)
+        qr_code_image = TwoFactor.generate_qr_code(provisioning_uri)
+
+        logger.info("2FA setup QR code generated.")
+        return Response(
+            {
+                "image": qr_code_image,
+                "is_two_factor_enabled": bool(getattr(user, "is_two_factor", False)),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class TwoFactorEnableView(APIView):
+    """
+    Enable 2FA only after the current user proves possession of a valid TOTP code.
+    """
+    authentication_classes = [SessionAuthenticationWithoutCSRF]
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [TwoFactorManagementThrottle]
+    renderer_classes = [JSONRenderer]
+
+    def post(self, request, *args, **kwargs) -> Response:
+        user = request.user
+        if _request_requires_two_factor(request, user):
+            return Response(
+                {"error": "Two-factor authentication is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        token = _clean_two_factor_token(request.data.get("token"))
+        if not token:
+            return Response({"error": "A valid 6-digit token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not TwoFactor.verify_token(user.email, user.username, token):
+            return Response({"error": "Invalid 2FA code."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if not user.is_two_factor:
+            user.is_two_factor = True
+            user.save(update_fields=["is_two_factor"])
+
+        TwoFactorSessionState.mark_verified(request, user)
+        logger.info("User enabled 2FA.")
+        return Response({"is_two_factor_enabled": True}, status=status.HTTP_200_OK)
+
+
+class TwoFactorDisableView(APIView):
+    """
+    Disable 2FA after the current user confirms a valid TOTP code.
+
+    This intentionally does not use `_request_requires_two_factor`: a user with
+    an authenticated pending-2FA session can disable 2FA only after proving TOTP
+    possession, while setup and enable still require a fully verified session.
+    """
+    authentication_classes = [SessionAuthenticationWithoutCSRF]
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [TwoFactorManagementThrottle]
+    renderer_classes = [JSONRenderer]
+
+    def post(self, request, *args, **kwargs) -> Response:
+        user = request.user
+        token = _clean_two_factor_token(request.data.get("token"))
+        if not token:
+            return Response({"error": "A valid 6-digit token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not TwoFactor.verify_token(user.email, user.username, token):
+            return Response({"error": "Invalid 2FA code."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if user.is_two_factor or getattr(user, "is_verified", False):
+            user.is_two_factor = False
+            # `is_verified` is retained for the legacy Django admin 2FA flow.
+            # Next UI web sessions use TwoFactorSessionState instead.
+            user.is_verified = False
+            user.save(update_fields=["is_two_factor", "is_verified"])
+
+        TwoFactorSessionState.clear(request, user)
+        logger.info("User disabled 2FA.")
+        return Response({"is_two_factor_enabled": False}, status=status.HTTP_200_OK)
+
+
+class TwoFactorVerifyView(APIView):
+    """
+    Verify a pending 2FA login and issue the HMAC cookie only after TOTP succeeds.
+    """
+    authentication_classes = [SessionAuthenticationWithoutCSRF]
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [TwoFactorVerifyThrottle]
+    renderer_classes = [JSONRenderer]
+
+    def post(self, request, *args, **kwargs) -> Response:
+        user = request.user
+        if not getattr(user, "is_two_factor", False):
+            TwoFactorSessionState.clear(request, user)
+            return Response(
+                {"error": "Two-factor authentication is not enabled for this user."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if TwoFactorSessionState.is_verified(request, user):
+            return Response(
+                {"error": "Two-factor verification is already complete for this session."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if not TwoFactorSessionState.is_pending(request, user):
+            return Response(
+                {"error": "Two-factor verification is not pending for this session."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if not TwoFactorSessionState.is_current_pending_login(request, user):
+            TwoFactorSessionState.clear(request, user)
+            logout(request)
+            return Response(
+                {"error": "Two-factor verification expired. Please log in again."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        token = _clean_two_factor_token(request.data.get("token"))
+        if not token:
+            return Response({"error": "A valid 6-digit token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempts = TwoFactorSessionState.failed_attempts(request)
+        if attempts >= TwoFactorSessionState.MAX_ATTEMPTS:
+            TwoFactorSessionState.clear(request, user)
+            logout(request)
+            return Response(
+                {"error": "Too many failed 2FA attempts. Please log in again."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        if not TwoFactor.verify_token(user.email, user.username, token):
+            attempts = TwoFactorSessionState.record_failed_attempt(request)
+            if attempts >= TwoFactorSessionState.MAX_ATTEMPTS:
+                logger.warning("Too many failed user 2FA attempts. Logging out.")
+                TwoFactorSessionState.clear(request, user)
+                logout(request)
+                return Response(
+                    {"error": "Too many failed 2FA attempts. Please log in again."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
+            return Response({"error": "Invalid 2FA code."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        TwoFactorSessionState.mark_verified(request, user)
+        response = _login_success_response(request, user, message="Two-factor verification successful")
+        logger.info("2FA verification successful.")
+        return response
 
 
 class QRCodeView(APIView):

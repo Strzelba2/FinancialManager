@@ -57,7 +57,7 @@ class TestNextUiAuthRoutingContract:
         compose = _compose_text()
         labels = _service_labels(compose, "next-ui", "wallet")
 
-        assert "traefik.http.routers.next-ui-login.rule=Host(`next.localhost`) && (PathPrefix(`/login`) || PathPrefix(`/register`) || PathPrefix(`/logout`))" in labels
+        assert "traefik.http.routers.next-ui-login.rule=Host(`next.localhost`) && (PathPrefix(`/login`) || PathPrefix(`/register`) || PathPrefix(`/logout`) || PathPrefix(`/two-factor`))" in labels
         assert "traefik.http.routers.next-ui-login.service=next-ui-service" in labels
         assert "traefik.http.routers.next-ui-login.middlewares=next-forwardauth@docker" not in labels
 

@@ -198,6 +198,41 @@ describe('loginAction', () => {
     }))
   })
 
+  it('stores the pending session and returns a 2FA challenge without HMAC cookies', async () => {
+    await nextUiUnitStory('Login action handles session-auth two-factor challenges', {
+      severity: 'blocker',
+      tags: ['auth', 'security', '2fa', 'api-contract'],
+    })
+    server.use(http.post('http://session-auth:8000/login/', async ({ request }) => {
+      mocks.loginRequests.push({
+        body: await request.json(),
+        headers: Object.fromEntries(request.headers.entries()),
+        method: request.method,
+        url: request.url,
+      })
+      const headers = new Headers({ 'Content-Type': 'application/json' })
+      headers.append('Set-Cookie', 'sessionid=pending-session; Path=/; HttpOnly; SameSite=Lax')
+      return HttpResponse.json({ requires_two_factor: true }, { status: 202, headers })
+    }))
+    const loginAction = await loadLoginAction()
+
+    await expect(loginAction(undefined, formData())).resolves.toEqual({ requiresTwoFactor: true })
+
+    expect(mocks.cookieSet).toHaveBeenCalledTimes(1)
+    expect(mocks.cookieSet).toHaveBeenCalledWith('sessionid', 'pending-session', {
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+      secure: false,
+    })
+    expect(mocks.cookieSet).not.toHaveBeenCalledWith(
+      'hmac',
+      expect.any(String),
+      expect.any(Object),
+    )
+    expect(mocks.loggerInfo).toHaveBeenCalledWith('login requires two-factor verification')
+  })
+
   it('rejects invalid local form input before calling session-auth', async () => {
     await nextUiUnitStory('Login action validates form data before server calls', {
       severity: 'critical',

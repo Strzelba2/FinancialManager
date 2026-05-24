@@ -5,6 +5,7 @@ from user_agents import parse
 from typing import Callable
 
 from userauth.models import BlockedIP
+from userauth.two_factor import TwoFactorSessionState
 from utils.utils import get_client_ip, formatted_response
 
 import logging
@@ -107,9 +108,9 @@ class RequestMiddleware:
                                        "text": "Go Back"},
                                       template_name="403.html",
                                       status=403)
-        if path in ["login", "register"]:
+        if path in ["login", "register", "two-factor"]:
             if not referer:
-                logger.warning("Missing Referer header on login/register attempt")
+                logger.warning("Missing Referer header on auth request")
                 return formatted_response(request,
                                           {"error": "Missing referer header.",
                                            "href": "javascript:history.back()",
@@ -136,13 +137,26 @@ class RequestMiddleware:
                                           template_name="400.html",
                                           status=400)
             
-            return self.get_response(request)
+            if path in ["login", "register"]:
+                return self.get_response(request)
+
+        if path in ["two-factor", "logout"]:
+            if request.user.is_authenticated:
+                return self.get_response(request)
+
+            logger.info("Unauthenticated access attempt")
+            return formatted_response(request,
+                                      {'error': 'User does not have permission to this site. Please login.',
+                                       "href": f"{settings.APP_PROTOCOL}://{domain}/login",
+                                       "text": "Go to Login"},
+                                      template_name="401.html",
+                                      status=401)
 
         if request.user.is_authenticated:
             if request.user.is_two_factor:
-                if not request.user.is_verified:
+                if not TwoFactorSessionState.is_verified(request, request.user):
                     logger.info("Redirecting unverified 2FA user to verification page")
-                    return HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{domain}/two_factor")
+                    return HttpResponseRedirect(f"{settings.APP_PROTOCOL}://{domain}/two-factor")
         else:
             logger.info("Unauthenticated access attempt")
             return formatted_response(request,

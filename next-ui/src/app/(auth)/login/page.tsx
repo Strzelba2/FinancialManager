@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useEffect, useState } from 'react'
+import { useActionState, useEffect } from 'react'
 import Link from 'next/link'
 import { TrendingUp, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,10 +11,13 @@ import { loginAction } from '@/features/auth/actions/login'
 
 export default function LoginPage() {
   const [state, action, isPending] = useActionState(loginAction, undefined)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
 
   useEffect(() => {
+    if (state?.requiresTwoFactor) {
+      window.location.href = '/two-factor'
+      return
+    }
+
     if (state?.success) {
       window.location.href = '/wallet'
     }
@@ -43,8 +46,6 @@ export default function LoginPage() {
               type="email"
               placeholder="jan@example.com"
               autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
             />
             {state?.errors?.email && (
               <p className="text-sm text-destructive">{state.errors.email[0]}</p>
@@ -59,8 +60,6 @@ export default function LoginPage() {
               name="password"
               type="password"
               autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
             />
             {state?.errors?.password && (
               <p className="text-sm text-destructive">{state.errors.password[0]}</p>

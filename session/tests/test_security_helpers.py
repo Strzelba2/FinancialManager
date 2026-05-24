@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import allure
@@ -21,10 +22,24 @@ from userauth.crypto import (
 )
 from userauth.hmac_token import HmacToken
 from userauth.throttles import RegisterIPThrottle
-from userauth.two_factor import TwoFactor
+from userauth.two_factor import (
+    TWO_FACTOR_ATTEMPTS_SESSION_KEY,
+    TWO_FACTOR_PENDING_LOGIN_TTL_SECONDS,
+    TWO_FACTOR_PENDING_SESSION_KEY,
+    TWO_FACTOR_USED_TOKEN_TTL_SECONDS,
+    TWO_FACTOR_VERIFIED_SESSION_KEY,
+    TwoFactor,
+    TwoFactorSessionState,
+)
 from utils.utils import get_client_ip, is_ip_allowed, parse_allowed
 
 pytestmark = pytest.mark.unit
+
+
+class MutableSession(dict):
+    def __init__(self, session_key: str | None = "session-key", *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.session_key = session_key
 
 
 @allure.epic("Unit Tests")
@@ -107,6 +122,14 @@ class HmacTokenTests(SimpleTestCase):
 @allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
 @override_settings(SERVER_SALT="unit-test-salt")
 class TwoFactorTests(SimpleTestCase):
+    def _request(self, session_key: str | None = "session-key"):
+        request = RequestFactory().post("/two-factor/verify/")
+        request.session = MutableSession(session_key)
+        return request
+
+    def _user(self):
+        return SimpleNamespace(pk=42)
+
     def test_secret_generation_is_stable_for_same_identity(self) -> None:
         first = TwoFactor.generate_secret_key("User@Example.com", "artur")
         second = TwoFactor.generate_secret_key("user@example.com", "artur")
@@ -114,12 +137,77 @@ class TwoFactorTests(SimpleTestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 32)
 
-    def test_verify_token_accepts_current_totp_and_rejects_invalid_token(self) -> None:
+    @patch("userauth.two_factor.cache")
+    def test_mark_pending_records_current_pending_session_with_short_ttl(self, cache: MagicMock) -> None:
+        request = self._request("pending-session")
+        user = self._user()
+
+        TwoFactorSessionState.mark_pending(request, user)
+
+        self.assertEqual(request.session[TWO_FACTOR_PENDING_SESSION_KEY], 42)
+        self.assertEqual(request.session[TWO_FACTOR_ATTEMPTS_SESSION_KEY], 0)
+        self.assertNotIn(TWO_FACTOR_VERIFIED_SESSION_KEY, request.session)
+        cache.set.assert_called_once_with(
+            "two_factor_pending_login:42",
+            "pending-session",
+            timeout=TWO_FACTOR_PENDING_LOGIN_TTL_SECONDS,
+        )
+
+    @patch("userauth.two_factor.cache")
+    def test_current_pending_login_requires_matching_cached_session_key(self, cache: MagicMock) -> None:
+        request = self._request("current-session")
+        user = self._user()
+
+        cache.get.return_value = "current-session"
+        self.assertTrue(TwoFactorSessionState.is_current_pending_login(request, user))
+
+        cache.get.return_value = "different-session"
+        self.assertFalse(TwoFactorSessionState.is_current_pending_login(request, user))
+
+    @patch("userauth.two_factor.cache")
+    def test_clear_removes_pending_cache_only_for_current_session(self, cache: MagicMock) -> None:
+        request = self._request("current-session")
+        request.session[TWO_FACTOR_PENDING_SESSION_KEY] = 42
+        user = self._user()
+
+        cache.get.return_value = "current-session"
+        TwoFactorSessionState.clear(request, user)
+
+        cache.delete.assert_called_once_with("two_factor_pending_login:42")
+        self.assertNotIn(TWO_FACTOR_PENDING_SESSION_KEY, request.session)
+
+    @patch("userauth.two_factor.cache")
+    def test_clear_does_not_remove_newer_pending_cache_marker(self, cache: MagicMock) -> None:
+        request = self._request("old-session")
+        user = self._user()
+
+        cache.get.return_value = "new-session"
+        TwoFactorSessionState.clear(request, user)
+
+        cache.delete.assert_not_called()
+
+    @patch("userauth.two_factor.cache.add", return_value=True)
+    def test_verify_token_accepts_current_totp_and_rejects_invalid_token(self, cache_add: MagicMock) -> None:
         secret = TwoFactor.generate_secret_key("user@example.com", "artur")
         valid_token = pyotp.TOTP(secret).now()
 
         self.assertTrue(TwoFactor.verify_token("user@example.com", "artur", valid_token))
         self.assertFalse(TwoFactor.verify_token("user@example.com", "artur", "000000"))
+        cache_add.assert_called_once()
+
+    @patch("userauth.two_factor.cache.add", side_effect=[True, False])
+    def test_verify_token_rejects_replayed_valid_totp(self, cache_add: MagicMock) -> None:
+        secret = TwoFactor.generate_secret_key("user@example.com", "artur")
+        valid_token = pyotp.TOTP(secret).now()
+
+        self.assertTrue(TwoFactor.verify_token("user@example.com", "artur", valid_token))
+        self.assertFalse(TwoFactor.verify_token("user@example.com", "artur", valid_token))
+
+        self.assertEqual(cache_add.call_count, 2)
+        cache_key = cache_add.call_args.args[0]
+        self.assertTrue(cache_key.startswith("two_factor_used_totp:"))
+        self.assertNotIn(valid_token, cache_key)
+        self.assertEqual(cache_add.call_args.kwargs["timeout"], TWO_FACTOR_USED_TOKEN_TTL_SECONDS)
 
     def test_provisioning_uri_and_qr_code_are_machine_readable(self) -> None:
         secret = TwoFactor.generate_secret_key("user@example.com", "artur")

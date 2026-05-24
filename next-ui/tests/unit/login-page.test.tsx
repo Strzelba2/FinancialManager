@@ -86,4 +86,18 @@ describe('Login page', () => {
 
     expect(location.href).toBe('/wallet')
   })
+
+  it('redirects to two-factor verification when login requires 2FA', async () => {
+    await nextUiUnitStory('Login page redirects to two-factor verification after password success', {
+      severity: 'blocker',
+      tags: ['auth', 'next-ui', '2fa', 'routing'],
+    })
+    const location = { href: 'http://next.localhost/login' }
+    vi.stubGlobal('window', { ...window, location })
+    reactMocks.useActionState.mockReturnValue([{ requiresTwoFactor: true }, vi.fn(), false])
+
+    render(<LoginPage />)
+
+    expect(location.href).toBe('/two-factor')
+  })
 })

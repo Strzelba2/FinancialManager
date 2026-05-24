@@ -178,7 +178,7 @@ services:
       - "traefik.http.routers.next-ui-devtools-sourcemap.rule=Host(`next.localhost`) && PathPrefix(`/__nextjs_source-map`)"
       - "traefik.http.routers.next-ui-devtools-sourcemap.entrypoints=web"
       - "traefik.http.routers.next-ui-devtools-sourcemap.service=next-ui-service"
-      - "traefik.http.routers.next-ui-login.rule=Host(`next.localhost`) && (PathPrefix(`/login`) || PathPrefix(`/register`) || PathPrefix(`/logout`))"
+      - "traefik.http.routers.next-ui-login.rule=Host(`next.localhost`) && (PathPrefix(`/login`) || PathPrefix(`/register`) || PathPrefix(`/logout`) || PathPrefix(`/two-factor`))"
       - "traefik.http.routers.next-ui-login.entrypoints=web"
       - "traefik.http.routers.next-ui-login.service=next-ui-service"
       - "traefik.http.services.next-ui-service.loadbalancer.server.port=3000"

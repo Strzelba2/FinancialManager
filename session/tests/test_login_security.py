@@ -8,13 +8,34 @@ import pytest
 from django.conf import settings
 from django.test import RequestFactory, SimpleTestCase, override_settings
 from rest_framework import serializers
+from rest_framework.response import Response
 
 from userauth.serializers import LoginSerializer
 from userauth.backends import UsernameOrEmailBackend
-from userauth.views import LoginView, LogoutView, VerifySessionView, _clear_active_login, _store_active_login
+from userauth.throttles import TwoFactorVerifyThrottle
+from userauth.two_factor import (
+    TWO_FACTOR_ATTEMPTS_SESSION_KEY,
+    TWO_FACTOR_PENDING_SESSION_KEY,
+    TWO_FACTOR_VERIFIED_SESSION_KEY,
+)
+from userauth.views import (
+    LoginView,
+    LogoutView,
+    TwoFactorEnableView,
+    TwoFactorDisableView,
+    TwoFactorSetupView,
+    TwoFactorVerifyView,
+    VerifySessionView,
+    _clear_active_login,
+    _store_active_login,
+)
 from utils.utils import get_client_ip
 
 pytestmark = pytest.mark.unit
+
+
+class MutableSession(dict):
+    session_key = "fresh-session-key"
 
 
 @allure.epic("Unit Tests")
@@ -402,7 +423,8 @@ class LoginViewPostSecurityFlowTests(SimpleTestCase):
         serializer_class.return_value = serializer
         cache.get.side_effect = [0, 0, None]
 
-        response = LoginView().post(request)
+        with patch("userauth.two_factor.cache"):
+            response = LoginView().post(request)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, {"message": "Login successful"})
@@ -435,7 +457,8 @@ class LoginViewPostSecurityFlowTests(SimpleTestCase):
         serializer_class.return_value = serializer
         cache.get.side_effect = [0, 0, {"fingerprint_hash": "other-fingerprint"}]
 
-        response = LoginView().post(request)
+        with patch("userauth.two_factor.cache"):
+            response = LoginView().post(request)
 
         self.assertEqual(response.status_code, 409)
         self.assertFalse(response.data["blocked_permanently"])
@@ -460,7 +483,8 @@ class LoginViewPostSecurityFlowTests(SimpleTestCase):
         serializer_class.return_value = serializer
         cache.get.side_effect = [0, 0]
 
-        response = LoginView().post(request)
+        with patch("userauth.two_factor.cache"):
+            response = LoginView().post(request)
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.data, {"error": {"email": ["Invalid login."]}})
@@ -469,6 +493,292 @@ class LoginViewPostSecurityFlowTests(SimpleTestCase):
             1,
             timeout=settings.USER_TEMPORARY_BLOCK_TIME,
         )
+
+    @patch("userauth.views.HmacToken.calculate_token")
+    @patch("userauth.views.login")
+    @patch("userauth.views.cache")
+    @patch.object(LoginView, "serializer_class")
+    def test_two_factor_login_returns_json_challenge_without_hmac_cookie(
+        self,
+        serializer_class: MagicMock,
+        cache: MagicMock,
+        _login: MagicMock,
+        calculate_token: MagicMock,
+    ) -> None:
+        user = self._user()
+        user.is_two_factor = True
+        user.is_verified = True
+        request = self._request(user.email)
+        request.session = MutableSession()
+        serializer = MagicMock()
+        serializer.is_valid.return_value = True
+        serializer.validated_data = {"user": user}
+        serializer_class.return_value = serializer
+        cache.get.side_effect = [0, 0, None]
+
+        with patch("userauth.two_factor.cache"):
+            response = LoginView().post(request)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data, {"requires_two_factor": True})
+        self.assertNotIn("hmac_token", response.cookies)
+        self.assertEqual(request.session[TWO_FACTOR_PENDING_SESSION_KEY], 42)
+        self.assertNotIn(TWO_FACTOR_VERIFIED_SESSION_KEY, request.session)
+        calculate_token.assert_not_called()
+
+
+@allure.epic("Unit Tests")
+@allure.feature("Session")
+@allure.story("Two-factor JSON API gates login completion and profile activation")
+@allure.severity(allure.severity_level.BLOCKER)
+@allure.tag("auth", "security", "2fa", "api-contract")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+class TwoFactorJsonApiTests(SimpleTestCase):
+    def setUp(self) -> None:
+        self.factory = RequestFactory()
+
+    def test_verify_view_uses_dedicated_two_factor_throttle(self) -> None:
+        self.assertEqual(TwoFactorVerifyView.throttle_classes, [TwoFactorVerifyThrottle])
+
+    def _user(self, is_two_factor: bool = True):
+        user = SimpleNamespace(
+            pk=42,
+            username="unit-user",
+            first_name="Unit",
+            email="user@example.com",
+            is_two_factor=is_two_factor,
+            is_verified=False,
+            is_authenticated=True,
+            save=MagicMock(),
+        )
+        return user
+
+    def _request(self, path: str, token: str = "123456"):
+        request = self.factory.post(
+            path,
+            REMOTE_ADDR="10.0.0.5",
+            HTTP_X_ORIGINAL_CLIENT_IP="203.0.113.44",
+            HTTP_USER_AGENT="Unit Browser",
+            HTTP_SEC_CH_UA_PLATFORM='"Linux"',
+        )
+        request.data = {"token": token}
+        request.session = MutableSession({TWO_FACTOR_PENDING_SESSION_KEY: 42})
+        return request
+
+    @patch("userauth.views.HmacToken.calculate_token")
+    @patch("userauth.views.TwoFactor.verify_token")
+    def test_verify_rejects_non_two_factor_user_without_auth_cookie(
+        self,
+        verify_token: MagicMock,
+        calculate_token: MagicMock,
+    ) -> None:
+        request = self._request("/two-factor/verify/")
+        request.user = self._user(is_two_factor=False)
+
+        with patch("userauth.views.TwoFactorSessionState.clear_current_pending_login"):
+            response = TwoFactorVerifyView().post(request)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.data,
+            {"error": "Two-factor authentication is not enabled for this user."},
+        )
+        self.assertNotIn("hmac_token", response.cookies)
+        self.assertNotIn(TWO_FACTOR_PENDING_SESSION_KEY, request.session)
+        verify_token.assert_not_called()
+        calculate_token.assert_not_called()
+
+    @patch("userauth.views.time.time", return_value=1_000)
+    @patch("userauth.views.HmacToken.calculate_token", return_value="fresh-hmac")
+    @patch("userauth.views.TwoFactor.verify_token", return_value=True)
+    @patch("userauth.views.cache")
+    def test_verify_accepts_valid_totp_and_issues_hmac_cookie(
+        self,
+        cache: MagicMock,
+        verify_token: MagicMock,
+        _calculate_token: MagicMock,
+        _time: MagicMock,
+    ) -> None:
+        request = self._request("/two-factor/verify/")
+        request.user = self._user()
+
+        with (
+            patch("userauth.views.TwoFactorSessionState.is_current_pending_login", return_value=True),
+            patch("userauth.views.TwoFactorSessionState.clear_current_pending_login"),
+        ):
+            response = TwoFactorVerifyView().post(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"message": "Two-factor verification successful"})
+        self.assertEqual(response.cookies["hmac_token"].value, "1000:fresh-hmac")
+        self.assertEqual(request.session[TWO_FACTOR_VERIFIED_SESSION_KEY], 42)
+        self.assertNotIn(TWO_FACTOR_PENDING_SESSION_KEY, request.session)
+        verify_token.assert_called_once_with("user@example.com", "unit-user", "123456")
+        self.assertTrue(any(call.args[0] == "active_login:42" for call in cache.set.call_args_list))
+
+    @patch("userauth.views.TwoFactor.verify_token")
+    def test_verify_rejects_already_verified_session_without_auth_cookie(self, verify_token: MagicMock) -> None:
+        request = self._request("/two-factor/verify/")
+        request.user = self._user()
+        request.session = MutableSession({TWO_FACTOR_VERIFIED_SESSION_KEY: 42})
+
+        response = TwoFactorVerifyView().post(request)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.data,
+            {"error": "Two-factor verification is already complete for this session."},
+        )
+        self.assertNotIn("hmac_token", response.cookies)
+        verify_token.assert_not_called()
+
+    @patch("userauth.views.TwoFactor.verify_token")
+    def test_verify_rejects_session_without_pending_challenge(self, verify_token: MagicMock) -> None:
+        request = self._request("/two-factor/verify/")
+        request.user = self._user()
+        request.session = MutableSession()
+
+        response = TwoFactorVerifyView().post(request)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.data,
+            {"error": "Two-factor verification is not pending for this session."},
+        )
+        self.assertNotIn("hmac_token", response.cookies)
+        verify_token.assert_not_called()
+
+    @patch("userauth.views.logout")
+    @patch("userauth.views.TwoFactor.verify_token")
+    def test_verify_rejects_stale_pending_session_without_auth_cookie(
+        self,
+        verify_token: MagicMock,
+        django_logout: MagicMock,
+    ) -> None:
+        request = self._request("/two-factor/verify/")
+        request.user = self._user()
+
+        with (
+            patch("userauth.views.TwoFactorSessionState.is_current_pending_login", return_value=False),
+            patch("userauth.views.TwoFactorSessionState.clear_current_pending_login"),
+        ):
+            response = TwoFactorVerifyView().post(request)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.data,
+            {"error": "Two-factor verification expired. Please log in again."},
+        )
+        self.assertNotIn("hmac_token", response.cookies)
+        self.assertNotIn(TWO_FACTOR_PENDING_SESSION_KEY, request.session)
+        verify_token.assert_not_called()
+        django_logout.assert_called_once_with(request)
+
+    @patch("userauth.views.TwoFactor.verify_token", return_value=False)
+    def test_verify_rejects_invalid_totp_without_auth_cookie(self, verify_token: MagicMock) -> None:
+        request = self._request("/two-factor/verify/")
+        request.user = self._user()
+
+        with (
+            patch("userauth.views.TwoFactorSessionState.is_current_pending_login", return_value=True),
+            patch("userauth.views.TwoFactorSessionState.clear_current_pending_login"),
+        ):
+            response = TwoFactorVerifyView().post(request)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data, {"error": "Invalid 2FA code."})
+        self.assertNotIn("hmac_token", response.cookies)
+        self.assertEqual(request.session[TWO_FACTOR_ATTEMPTS_SESSION_KEY], 1)
+        verify_token.assert_called_once()
+
+    @patch("userauth.views.logout")
+    @patch("userauth.views.TwoFactor.verify_token", return_value=False)
+    def test_verify_logs_out_after_too_many_invalid_totp_attempts(
+        self,
+        _verify_token: MagicMock,
+        django_logout: MagicMock,
+    ) -> None:
+        request = self._request("/two-factor/verify/")
+        request.user = self._user()
+        request.session[TWO_FACTOR_ATTEMPTS_SESSION_KEY] = 2
+
+        with (
+            patch("userauth.views.TwoFactorSessionState.is_current_pending_login", return_value=True),
+            patch("userauth.views.TwoFactorSessionState.clear_current_pending_login"),
+        ):
+            response = TwoFactorVerifyView().post(request)
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data, {"error": "Too many failed 2FA attempts. Please log in again."})
+        self.assertNotIn("hmac_token", response.cookies)
+        django_logout.assert_called_once_with(request)
+
+    @patch("userauth.views.TwoFactor.generate_secret_key", return_value="secret")
+    @patch("userauth.views.TwoFactor.generate_provisioning_uri", return_value="otpauth://totp/unit")
+    @patch("userauth.views.TwoFactor.generate_qr_code", return_value="svg-base64")
+    def test_setup_generates_qr_without_enabling_two_factor(
+        self,
+        _qr_code: MagicMock,
+        _uri: MagicMock,
+        _secret: MagicMock,
+    ) -> None:
+        request = self._request("/two-factor/setup/")
+        user = self._user(is_two_factor=False)
+        request.user = user
+
+        response = TwoFactorSetupView().post(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"image": "svg-base64", "is_two_factor_enabled": False})
+        self.assertFalse(user.is_two_factor)
+        user.save.assert_not_called()
+
+    @patch("userauth.views.TwoFactor.generate_secret_key")
+    def test_setup_rejects_pending_two_factor_session(
+        self,
+        generate_secret_key: MagicMock,
+    ) -> None:
+        request = self._request("/two-factor/setup/")
+        request.user = self._user(is_two_factor=True)
+
+        response = TwoFactorSetupView().post(request)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data, {"error": "Two-factor authentication is required."})
+        self.assertNotIn("hmac_token", response.cookies)
+        generate_secret_key.assert_not_called()
+
+    @patch("userauth.views.TwoFactor.verify_token", return_value=True)
+    def test_enable_requires_valid_totp_before_persisting_two_factor(self, verify_token: MagicMock) -> None:
+        request = self._request("/two-factor/enable/")
+        user = self._user(is_two_factor=False)
+        request.user = user
+        request.session = MutableSession()
+
+        response = TwoFactorEnableView().post(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"is_two_factor_enabled": True})
+        self.assertTrue(user.is_two_factor)
+        user.save.assert_called_once_with(update_fields=["is_two_factor"])
+        self.assertEqual(request.session[TWO_FACTOR_VERIFIED_SESSION_KEY], 42)
+        verify_token.assert_called_once_with("user@example.com", "unit-user", "123456")
+
+    @patch("userauth.views.TwoFactor.verify_token", return_value=False)
+    def test_disable_rejects_invalid_token_when_two_factor_is_already_disabled(
+        self,
+        verify_token: MagicMock,
+    ) -> None:
+        request = self._request("/two-factor/disable/")
+        user = self._user(is_two_factor=False)
+        request.user = user
+
+        response = TwoFactorDisableView().post(request)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data, {"error": "Invalid 2FA code."})
+        user.save.assert_not_called()
+        verify_token.assert_called_once_with("user@example.com", "unit-user", "123456")
 
 
 @allure.epic("Unit Tests")
@@ -531,6 +841,23 @@ class SessionLifecycleViewTests(SimpleTestCase):
         response = VerifySessionView().get(request)
 
         self.assertEqual(response.status_code, 400)
+
+    @patch.object(VerifySessionView, "get", return_value=Response({"ok": True}))
+    def test_verify_session_accepts_next_server_action_forwardauth_request(
+        self,
+        _get: MagicMock,
+    ) -> None:
+        request = self.factory.get(
+            "/verifySession/",
+            HTTP_ACCEPT="text/x-component",
+            HTTP_USER_AGENT="Unit Browser",
+        )
+
+        with patch.object(VerifySessionView, "throttle_classes", []):
+            response = VerifySessionView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        _get.assert_called_once()
 
     @patch("userauth.views.logout")
     @patch("userauth.views.HmacToken.is_valid_hmac", return_value=False)

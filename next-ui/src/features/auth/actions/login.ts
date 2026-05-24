@@ -1,9 +1,11 @@
 'use server'
 
-import { cookies, headers } from 'next/headers'
+import { headers } from 'next/headers'
 import { z } from 'zod'
 import { logger } from '@/lib/logger'
-import { sessionAuthReferer, shouldUseSecureAuthCookies } from './cookie-options'
+import { storeAuthCookiesFromResponse } from './auth-cookies'
+import { sessionAuthReferer } from './cookie-options'
+import { readSessionAuthMessage } from './session-auth-message'
 
 const LoginSchema = z.object({
   email: z.email({ error: 'Podaj poprawny adres email' }).trim(),
@@ -17,40 +19,10 @@ export type LoginState =
         password?: string[]
       }
       message?: string
+      requiresTwoFactor?: boolean
       success?: boolean
     }
   | undefined
-
-function extractSessionAuthMessage(value: unknown): string | undefined {
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    return trimmed.length > 0 ? trimmed : undefined
-  }
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const message = extractSessionAuthMessage(item)
-      if (message) return message
-    }
-    return undefined
-  }
-
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-
-    for (const key of ['error', 'detail', 'message', 'non_field_errors']) {
-      const message = extractSessionAuthMessage(record[key])
-      if (message) return message
-    }
-
-    for (const nested of Object.values(record)) {
-      const message = extractSessionAuthMessage(nested)
-      if (message) return message
-    }
-  }
-
-  return undefined
-}
 
 function loginFallbackMessage(status: number): string {
   switch (status) {
@@ -118,57 +90,44 @@ export async function loginAction(
     return { message: 'Błąd połączenia z serwerem autoryzacji' }
   }
 
-  if (!response.ok) {
-    const rawBody = await response.text().catch(() => '')
-    let message = loginFallbackMessage(response.status)
-
-    if (rawBody) {
-      try {
-        const parsed = JSON.parse(rawBody) as unknown
-        message = extractSessionAuthMessage(parsed) ?? message
-      } catch {
-        const plainText = rawBody.trim()
-        if (plainText && !plainText.startsWith('<')) {
-          message = plainText
-        }
-      }
+  if (response.status === 202) {
+    let requiresTwoFactor = false
+    try {
+      const body = await response.json() as { requires_two_factor?: unknown }
+      requiresTwoFactor = body.requires_two_factor === true
+    } catch {
+      requiresTwoFactor = false
     }
+
+    if (!requiresTwoFactor) {
+      logger.warn({ status: response.status }, 'login challenge missing 2FA marker')
+      return { message: 'Nieprawidłowa odpowiedź serwera autoryzacji' }
+    }
+
+    const { missing } = await storeAuthCookiesFromResponse(response, { sessionid: true })
+    if (missing.length > 0) {
+      logger.warn('2FA login challenge did not include a session cookie')
+      return { message: 'Brak danych sesji w odpowiedzi serwera autoryzacji' }
+    }
+
+    logger.info('login requires two-factor verification')
+    return { requiresTwoFactor: true }
+  }
+
+  if (!response.ok) {
+    const message = await readSessionAuthMessage(response, loginFallbackMessage(response.status))
 
     logger.warn({ status: response.status }, 'login rejected by session-auth')
     return { message }
   }
 
-  const cookieStore = await cookies()
-  const rawSetCookie = response.headers.getSetCookie?.() ?? []
-  const secure = shouldUseSecureAuthCookies()
-  const authCookies: Array<{ name: 'sessionid' | 'hmac'; value: string }> = []
-
-  for (const raw of rawSetCookie) {
-    const [nameValue] = raw.split(';')
-    const eqIdx = nameValue?.indexOf('=') ?? -1
-    if (eqIdx === -1 || !nameValue) continue
-
-    const name = nameValue.slice(0, eqIdx).trim()
-    const value = nameValue.slice(eqIdx + 1).trim()
-
-    if (name === 'sessionid' || name === 'hmac_token' || name === 'hmac') {
-      authCookies.push({ name: name === 'sessionid' ? 'sessionid' : 'hmac', value })
-    }
-  }
-
-  const authCookieNames = new Set(authCookies.map((cookie) => cookie.name))
-  if (!authCookieNames.has('sessionid') || !authCookieNames.has('hmac')) {
+  const { missing } = await storeAuthCookiesFromResponse(response, {
+    sessionid: true,
+    hmac: true,
+  })
+  if (missing.length > 0) {
     logger.warn('login succeeded without required auth cookies')
     return { message: 'Brak danych sesji w odpowiedzi serwera autoryzacji' }
-  }
-
-  for (const cookie of authCookies) {
-    cookieStore.set(cookie.name, cookie.value, {
-      httpOnly: true,
-      sameSite: 'lax',
-      path: '/',
-      secure,
-    })
   }
 
   logger.info('login successful')
