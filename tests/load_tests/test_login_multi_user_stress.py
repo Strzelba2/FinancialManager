@@ -23,7 +23,7 @@ BROWSER_USER_AGENT = (
 MOBILE_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
 
 
-def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     raw_value = os.getenv(name)
     if raw_value is None:
         return default
@@ -57,7 +57,7 @@ def _p95(durations: list[float]) -> float:
     return quantiles(durations, n=20, method="inclusive")[18]
 
 
-def _create_active_users(session_url: str, count: int, *, prefix: str) -> list[dict[str, str]]:
+def _create_active_users(session_url: str, count: int, prefix: str) -> list[dict[str, str]]:
     suffix = uuid4().hex[:10]
     register_ip_second_octet = {
         "stress": 244,

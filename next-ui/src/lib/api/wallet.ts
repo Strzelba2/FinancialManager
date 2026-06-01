@@ -297,9 +297,6 @@ export async function batchUpdateTransactions(
     description?: string
     category?: string | null
     status?: string | null
-    amount?: string
-    balance_before?: string
-    balance_after?: string
   }>,
 ): Promise<ApiResult<{ updated: number; failed: unknown[] }>> {
   return request<{ updated: number; failed: unknown[] }>(

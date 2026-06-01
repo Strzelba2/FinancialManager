@@ -11,6 +11,8 @@ and protected dashboard pages, then acts as the server-side call boundary toward
 - Render public pages such as home, login, register, logout, and the 2FA challenge.
 - Render protected dashboard areas for wallets, transactions, brokerage, stock views,
   favorites, reports, and settings.
+- Render manual transaction entry, bank-file import preview, transaction filtering,
+  classification editing, pagination, sorting, and deletion.
 - Use server actions for auth and selected form workflows.
 - Use server-side API helpers and App Router route handlers to call backend APIs.
 - Read ForwardAuth headers supplied by Traefik for protected requests.
@@ -57,6 +59,8 @@ keeps the public auth paths on a separate router.
 - Receives `X-User`, `X-First-Name`, `X-Email`, and `X-User-Id` headers from Traefik
   after `session` ForwardAuth success.
 - Calls wallet and stock APIs from server-side code; backend services remain data owners.
+- Proxies the current bank parser API through `src/app/api/wallet/import/`. The parser
+  implementation still runs in the existing `ui` service while NiceGUI is being retired.
 
 ## Key Flows
 
@@ -122,6 +126,27 @@ sequenceDiagram
     Next-->>Browser: Rendered page
 ```
 
+### Transaction import handoff
+
+```mermaid
+sequenceDiagram
+    actor Browser
+    participant Next as next-ui import route
+    participant Parser as ui parser API
+    participant Wallet as wallet API
+
+    Browser->>Next: Select parser and upload CSV or PDF
+    Next->>Parser: POST /api/import/parse with parser_name, mode, and file
+    Parser-->>Next: Normalized transaction rows
+    Next-->>Browser: Preview every normalized row
+    Browser->>Next: Confirm account import
+    Next->>Wallet: POST /wallet/transactions/create/rebalance
+    Wallet-->>Next: Created count, final balance, and transaction IDs
+```
+
+Changing the parser selector resets parsed preview state but keeps the selected file.
+The user can choose a file before or after choosing a bank format.
+
 ## Cookie and Identity Handoff
 
 `src/features/auth/actions/auth-cookies.ts` and related auth actions copy the cookies
@@ -138,3 +163,6 @@ through the session service for later ForwardAuth responses.
 4. `next-ui/src/lib/api/session.ts`, `wallet.ts`, and `stock.ts` for backend call
    helpers.
 5. The relevant page under `src/app/(dashboard)/` before changing a dashboard workflow.
+
+For transaction import, classification, and dashboard-flow behavior, also read
+[Wallet Transaction Lifecycle](../../design/wallet-transaction-lifecycle.md).

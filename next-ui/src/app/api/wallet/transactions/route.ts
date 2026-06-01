@@ -75,10 +75,7 @@ const PatchItemSchema = z.object({
   description: z.string().max(255).trim().optional(),
   category: z.string().nullable().optional(),
   status: z.string().nullable().optional(),
-  amount: z.string().optional(),
-  balance_before: z.string().optional(),
-  balance_after: z.string().optional(),
-})
+}).strict()
 
 const PatchSchema = z.object({
   items: z.array(PatchItemSchema).min(1),

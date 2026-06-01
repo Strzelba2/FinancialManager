@@ -1,5 +1,4 @@
 from __future__ import annotations
-from fastapi import HTTPException, status
 import uuid
 from datetime import datetime, date, timezone
 from decimal import Decimal
@@ -21,6 +20,8 @@ from app.schemas.schemas import (
 from app.schemas.response import (
     BatchUpdateTransactionsRequest, BatchUpdateTransactionsResponse, Currency
 )
+from app.core.exceptions import ImportMismatchError
+from app.utils.money import account_type_allows_negative_balance
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,12 @@ async def delete_transaction_for_user_rebalance(
     acc_id = uuid.UUID(str(tx.account_id))
     tx_dt = tx.date_transaction
     tx_id = uuid.UUID(str(tx.id))
+    account_type = await session.scalar(
+        select(DepositAccount.account_type)
+        .where(DepositAccount.id == acc_id)
+        .with_for_update()
+    )
+    allows_negative_balance = account_type_allows_negative_balance(account_type)
 
     bal = await session.scalar(
         select(DepositAccountBalance)
@@ -323,12 +330,10 @@ async def delete_transaction_for_user_rebalance(
         t.balance_before = running
         t.balance_after = running + amt
         running = Decimal(str(t.balance_after))
-
-    if running < 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Deleting this transaction would make account balance negative.",
-        )
+        if running < 0 and not allows_negative_balance:
+            raise ImportMismatchError(
+                "Deleting this transaction would make account balance negative."
+            )
 
     bal.available = running
 
@@ -382,6 +387,9 @@ async def batch_update_transactions(
             continue
 
         data = patch.model_dump(exclude_unset=True, exclude_none=True)
+        for nullable_text_field in ("category", "status"):
+            if nullable_text_field in patch.model_fields_set and getattr(patch, nullable_text_field) is None:
+                data[nullable_text_field] = None
         data.pop("id", None)
 
         for k, v in data.items():
@@ -453,7 +461,7 @@ async def sum_income_expense_for_wallet_month_range(
             DepositAccount.wallet_id == wallet_id,
             Transaction.date_transaction >= start_dt,
             Transaction.date_transaction < end_dt,
-            Transaction.status.in_(["INCOME", "EXPENSE"]),
+            Transaction.status.in_(["INCOME", "EXPENSE", "TAXES"]),
         )
         .group_by(month, Transaction.status, DepositAccount.currency)
         .order_by(month.asc())

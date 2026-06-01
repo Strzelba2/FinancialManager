@@ -217,7 +217,7 @@ class WalletClient:
         
     async def create_transaction(self, user_id: uuid.UUID,  payload: dict) -> bool:
         """
-        POST /wallet/transactions/create
+        POST /wallet/transactions/create/rebalance
 
         Create a new transaction for the user.
 
@@ -245,7 +245,7 @@ class WalletClient:
                 detail = resp.json().get("detail")
             except Exception:
                 detail = None
-            logger.error(f"Validation error 422 for /transactions/create: {detail}")
+            logger.error(f"Validation error 422 for /transactions/create/rebalance: {detail}")
             return detail, 'negative'
 
         if resp.status_code == 404:
@@ -366,7 +366,7 @@ class WalletClient:
                 detail = resp.json().get("detail")
             except Exception:
                 detail = None
-            logger.error(f"Validation error 422 for /transactions/create: {detail}")
+            logger.error(f"Validation error 422 for /real-estates/create: {detail}")
             return None
         
         if resp.status_code == 404:

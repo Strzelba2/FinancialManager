@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import List, Optional, Dict, Any
 from .schemas import (
     AccountType, TransactionRead, HoldingRead,
-    BrokerageEventRead, BrokerageEventUpdate, TransactionUpdate, YearGoalRead,
+    BrokerageEventRead, BrokerageEventUpdate, TransactionBatchUpdate, YearGoalRead,
     )
 from app.models.enums import BrokerageEventKind, Currency, PropertyType, MetalType
 import uuid
@@ -98,6 +98,7 @@ class DashFlowMonthItem(BaseModel):
     month: str  
     income_by_currency: Dict[Currency, Decimal] = Field(default_factory=dict)
     expense_by_currency: Dict[Currency, Decimal] = Field(default_factory=dict)
+    tax_by_currency: Dict[Currency, Decimal] = Field(default_factory=dict)
     capital_by_currency: Dict[Currency, Decimal] = Field(default_factory=dict)
     
 
@@ -223,7 +224,7 @@ class TransactionPageOut(BaseModel):
     sum_by_ccy: dict[str, Decimal] = {}
 
 
-class TransactionPatchIn(TransactionUpdate):
+class TransactionPatchIn(TransactionBatchUpdate):
     id: uuid.UUID
 
 

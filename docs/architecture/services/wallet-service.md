@@ -11,6 +11,8 @@ holdings, gains, and related personal finance records.
 - Own wallet-side user rows and all financial ownership checks rooted in wallet UUIDs.
 - Manage wallets, deposit accounts, brokerage accounts, balances, and banks.
 - Create, list, patch, delete, and rebalance cash transactions.
+- Validate imported transaction ordering against the account balance chain before
+  persisting cash effects.
 - Create and import brokerage events, maintain holdings, record linked cash effects, and
   track realized capital gains.
 - Own debts, recurring expenses, goals, notes, favorites, alerts, real estate, real
@@ -24,6 +26,8 @@ holdings, gains, and related personal finance records.
 - It does not own password, 2FA, HMAC, or activation state.
 - It does not own stock market ingestion, stock reports, or external market-source
   parsers.
+- It does not parse uploaded bank files. The current import parser API remains in the
+  existing `ui` service and sends normalized rows through `next-ui` to `wallet`.
 - It does not store authoritative stock quotes or report snapshots.
 
 ## Internal Structure
@@ -55,6 +59,15 @@ The FastAPI health surface is `/healthz`.
 - PostgreSQL `wallet-db` owns financial models.
 - Route dependencies parse `X-User-Id` as a UUID and service/CRUD layers keep financial
   queries user-scoped.
+- Negative available and transaction balances are allowed only for `CREDIT` deposit
+  accounts. PostgreSQL triggers preserve this rule for direct database writes and block
+  changing a credit account to another type while negative balances still exist.
+- Batch transaction PATCH updates are classification-only: description, category, and
+  status can change without rewriting the financial balance chain.
+- Transaction import uses `amount_after` as a financial invariant. Same-timestamp rows
+  are ordered by balance linkage before create or rebalance processing.
+- Dashboard flow aggregation keeps `TAXES` separate from `EXPENSE`; the frontend
+  presents taxes as a separate burden when calculating visible profit.
 - `StockClient` calls `stock` for quotes, instrument resolution, and candle sync support.
 - `AuthCryptoClient` calls `session` `/crypto/batch` for user-scoped crypto operations.
 - Wallet has Redis and Celery config modules, but current Compose does not run a wallet
@@ -93,12 +106,39 @@ sequenceDiagram
 
     Next->>Route: Request with X-User-Id
     Route->>Route: Parse internal user UUID
-    Route->>Service: Create or rebalance transactions
-    Service->>Crud: Validate account and duplicate/mismatch rules
+    Route->>Service: Create or rebalance normalized transactions
+    Service->>Service: Order same-timestamp rows by balance chain
+    Service->>Crud: Validate account, duplicate, mismatch, and balance rules
     Crud->>Db: Persist transactions and balance effects
+    Db->>Db: Enforce CREDIT-only negative balances
     Db-->>Route: Transaction summary
     Route-->>Next: User-scoped response
 ```
+
+### Credit balance database policy
+
+```mermaid
+flowchart LR
+    Write[Balance or transaction write]
+    Account[Resolve deposit account type]
+    Credit{Account type is CREDIT?}
+    Persist[Persist negative or non-negative balance]
+    Reject[Reject negative balance]
+    ChangeType[Change CREDIT account type]
+    NegativeRows{Negative balance rows exist?}
+
+    Write --> Account --> Credit
+    Credit -->|yes| Persist
+    Credit -->|no, balance is non-negative| Persist
+    Credit -->|no, balance is negative| Reject
+    ChangeType --> NegativeRows
+    NegativeRows -->|yes| Reject
+    NegativeRows -->|no| Persist
+```
+
+The Alembic migration under `wallet/migrations/versions/` installs cross-table
+PostgreSQL triggers because the policy depends on both a balance row and its owning
+deposit account type. Downgrade is blocked while negative rows still exist.
 
 ### Brokerage and holding flow
 
@@ -120,6 +160,10 @@ flowchart LR
 `wallet/app/api/services/brokerage_event.py` is the central read for this flow. It shows
 how one brokerage event can affect a holding, cash transaction, and realized gain while
 remaining inside wallet-owned state.
+
+The detailed transaction rules, parser boundary, API contract, migration policy, and
+test expectations are described in
+[Wallet Transaction Lifecycle](../../design/wallet-transaction-lifecycle.md).
 
 ## Where to Start Reading
 

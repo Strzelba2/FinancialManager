@@ -286,6 +286,57 @@ class TestNextUiForwardAuthBypass:
 @pytest.mark.db
 @allure.epic("System Tests")
 @allure.feature("Component")
+@allure.story("Next UI protected transaction pages refresh HMAC through ForwardAuth")
+@allure.severity(allure.severity_level.BLOCKER)
+@allure.tag("next-ui", "transactions", "auth", "security", "hmac", "forwardauth")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+class TestNextUiForwardAuthHmacRefresh:
+    def test_transactions_page_returns_refreshed_hmac_cookie(
+        self,
+        session_url: str,
+        traefik_url: str,
+    ) -> None:
+        user = _create_active_user(session_url)
+        client_ip = "10.226.7.20"
+        login_response = _login(session_url, user, client_ip=client_ip)
+        sessionid = login_response.cookies.get("sessionid")
+        hmac_token = login_response.cookies.get("hmac_token")
+        assert sessionid
+        assert hmac_token
+
+        deadline = time.monotonic() + 8
+        refreshed_hmac = hmac_token
+        routed_response = None
+        while time.monotonic() < deadline and refreshed_hmac == hmac_token:
+            routed_response = httpx.get(
+                f"{traefik_url}/transactions",
+                headers={
+                    "Host": "next.localhost",
+                    "Accept": "text/html",
+                    "User-Agent": BROWSER_USER_AGENT,
+                    "Sec-CH-UA-Platform": '"Linux"',
+                    "X-Original-Client-IP": client_ip,
+                },
+                cookies={"sessionid": sessionid, "hmac": hmac_token},
+                follow_redirects=False,
+                timeout=10.0,
+            )
+            refreshed_hmac = routed_response.cookies.get("hmac") or hmac_token
+
+        assert routed_response is not None
+        assert routed_response.status_code == 200, routed_response.text[:500]
+        assert refreshed_hmac != hmac_token
+        set_cookie_headers = "\n".join(_set_cookie_headers(routed_response)).lower()
+        assert "hmac=" in set_cookie_headers
+        assert "httponly" in set_cookie_headers
+        assert "secure" in set_cookie_headers
+        assert "samesite=lax" in set_cookie_headers
+
+
+@pytest.mark.component
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Component")
 @allure.story("Session verification rejects partial, malformed, and unauthenticated cookies")
 @allure.severity(allure.severity_level.BLOCKER)
 @allure.tag("session", "auth", "security", "hmac")

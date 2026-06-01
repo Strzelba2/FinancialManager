@@ -3,8 +3,11 @@ from __future__ import annotations
 import ast
 import os
 import re
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import allure
 import psycopg
@@ -74,6 +77,108 @@ def _database_alembic_versions(host: str, database: str) -> set[str]:
         with connection.cursor() as cursor:
             cursor.execute("select version_num from alembic_version")
             return {row[0] for row in cursor.fetchall()}
+
+
+def _wallet_db_connection():
+    return psycopg.connect(
+        host="wallet-db",
+        port=int(os.environ.get("TEST_POSTGRES_PORT", "5432")),
+        dbname="Wallet_test",
+        user=os.environ.get("TEST_POSTGRES_USER", "myuser"),
+        password=os.environ.get("TEST_POSTGRES_PASSWORD", "mypassword"),
+        connect_timeout=5,
+    )
+
+
+def _seed_wallet_account(cursor, account_type: str, opening_balance: str = "0.00") -> str:
+    suffix = uuid4().hex[:8]
+    user_id = uuid4()
+    wallet_id = uuid4()
+    account_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    cursor.execute("SELECT id FROM banks ORDER BY name LIMIT 1")
+    bank_row = cursor.fetchone()
+    assert bank_row is not None
+
+    cursor.execute(
+        """
+        INSERT INTO users (id, created_at, updated_at, username, email, first_name)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (user_id, now, now, f"db{suffix}"[:12], f"db.{suffix}@example.com", "Integration"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO wallets (id, created_at, updated_at, user_id, name, currency)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (wallet_id, now, now, user_id, f"db-wallet-{suffix}", "PLN"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO deposit_accounts (
+            id, created_at, updated_at, name, account_type,
+            account_number_nonce, account_number_ct, account_number_fp,
+            iban_nonce, iban_ct, iban_fp,
+            currency, wallet_id, bank_id
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, %s, %s, %s)
+        """,
+        (
+            account_id,
+            now,
+            now,
+            f"db-account-{suffix}",
+            account_type,
+            psycopg.Binary(b"1" * 12),
+            psycopg.Binary(f"cipher-{suffix}".encode("utf-8")),
+            psycopg.Binary(uuid4().bytes + uuid4().bytes),
+            "PLN",
+            wallet_id,
+            bank_row[0],
+        ),
+    )
+    cursor.execute(
+        """
+        INSERT INTO deposit_account_balances (
+            account_id, created_at, updated_at, available, blocked
+        )
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (account_id, now, now, Decimal(opening_balance), Decimal("0.00")),
+    )
+    return str(account_id)
+
+
+def _insert_transaction(
+    cursor,
+    account_id: str,
+    amount: str,
+    balance_before: str,
+    balance_after: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    cursor.execute(
+        """
+        INSERT INTO transactions (
+            id, created_at, updated_at, amount, description, category, status,
+            balance_before, balance_after, date_transaction, account_id
+        )
+        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s)
+        """,
+        (
+            uuid4(),
+            now,
+            now,
+            Decimal(amount),
+            "Integration balance policy",
+            Decimal(balance_before),
+            Decimal(balance_after),
+            now,
+            account_id,
+        ),
+    )
 
 
 def _database_tables(host: str, database: str) -> set[str]:
@@ -484,3 +589,103 @@ def test_service_database_has_required_foreign_keys(
         actual_edges = _database_foreign_key_edges(host, database)
 
     assert expected_edges <= actual_edges
+
+
+@pytest.mark.integration
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Integration")
+@allure.story("Wallet database allows negative balances only for credit accounts")
+@allure.severity(allure.severity_level.BLOCKER)
+@allure.tag("database", "migration", "wallet", "money", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@pytest.mark.parametrize("account_type", ["CURRENT", "SAVINGS"])
+def test_wallet_database_rejects_negative_balances_for_non_credit_accounts(account_type: str) -> None:
+    connection = _wallet_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            account_id = _seed_wallet_account(cursor, account_type)
+
+            with pytest.raises(psycopg.errors.CheckViolation, match="only for CREDIT accounts"):
+                with connection.transaction():
+                    cursor.execute(
+                        "UPDATE deposit_account_balances SET available = %s WHERE account_id = %s",
+                        (Decimal("-1.00"), account_id),
+                    )
+
+            with pytest.raises(psycopg.errors.CheckViolation, match="only for CREDIT accounts"):
+                with connection.transaction():
+                    _insert_transaction(
+                        cursor,
+                        account_id,
+                        amount="-1.00",
+                        balance_before="0.00",
+                        balance_after="-1.00",
+                    )
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+@pytest.mark.integration
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Integration")
+@allure.story("Wallet database preserves legitimate negative credit balances")
+@allure.severity(allure.severity_level.BLOCKER)
+@allure.tag("database", "migration", "wallet", "money", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+def test_wallet_database_accepts_negative_credit_balances_and_blocks_account_type_change() -> None:
+    connection = _wallet_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            account_id = _seed_wallet_account(cursor, "CREDIT", opening_balance="-100.00")
+            _insert_transaction(
+                cursor,
+                account_id,
+                amount="-100.00",
+                balance_before="0.00",
+                balance_after="-100.00",
+            )
+            cursor.execute(
+                "SELECT available FROM deposit_account_balances WHERE account_id = %s",
+                (account_id,),
+            )
+            assert cursor.fetchone() == (Decimal("-100.00"),)
+
+            with pytest.raises(psycopg.errors.CheckViolation, match="CREDIT-only negative balances exist"):
+                with connection.transaction():
+                    cursor.execute(
+                        "UPDATE deposit_accounts SET account_type = %s WHERE id = %s",
+                        ("CURRENT", account_id),
+                    )
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+@pytest.mark.integration
+@allure.epic("System Tests")
+@allure.feature("Integration")
+@allure.story("Wallet negative credit migration downgrade fails clearly when financial remediation is required")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("database", "migration", "wallet", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+def test_wallet_negative_credit_migration_guards_downgrade_before_restoring_constraints() -> None:
+    migration = (
+        _repo_root()
+        / "wallet"
+        / "migrations"
+        / "versions"
+        / "d4f61a2b9c7e_allow_negative_credit_balances.py"
+    ).read_text(encoding="utf-8")
+
+    downgrade = migration[migration.index("def downgrade() -> None:"):]
+    preflight = downgrade.index("Cannot downgrade: CREDIT-only negative balances exist.")
+    first_trigger_drop = downgrade.index(
+        "DROP TRIGGER IF EXISTS trg_depacc_account_type_credit_only ON deposit_accounts"
+    )
+
+    assert "WHERE available < 0" in downgrade
+    assert "WHERE balance_before < 0 OR balance_after < 0" in downgrade
+    assert preflight < first_trigger_drop

@@ -2,7 +2,9 @@
 
 This document shows how browser requests and backend calls cross service boundaries.
 It intentionally stops before detailed endpoint payloads; the current auth contract is
-described in [Session Login Security](../design/session-login-security.md).
+described in [Session Login Security](../design/session-login-security.md), and the
+transaction import and mutation contract is described in
+[Wallet Transaction Lifecycle](../design/wallet-transaction-lifecycle.md).
 
 ## Communication Shape
 
@@ -14,6 +16,7 @@ flowchart LR
     Session[session]
     Wallet[wallet]
     Stock[stock]
+    Parser[ui parser API]
 
     Browser -->|page request| Traefik
     Traefik -->|public or protected page| Next
@@ -21,6 +24,7 @@ flowchart LR
     Next -->|auth server actions| Session
     Next -->|wallet server-side calls| Wallet
     Next -->|stock server-side calls| Stock
+    Next -->|bank-file parser proxy| Parser
     Wallet -->|crypto batch| Session
     Wallet -->|quote and instrument lookups| Stock
 ```
@@ -145,6 +149,18 @@ instrument resolution, and daily candle sync support. This keeps market-data ret
 
 `wallet` uses `AuthCryptoClient` to call `session` `/crypto/batch` for user-scoped crypto
 operations. The HTTP boundary keeps user key material under `session` ownership.
+
+### Next UI to bank parser API
+
+`next-ui` exposes `/api/wallet/import/parsers` and `/api/wallet/import/parse` as
+browser-facing proxy routes. They call the existing `ui` service parser API over
+`UI_API_URL`. This is a compatibility boundary during NiceGUI retirement: parsing is not
+owned by `wallet`, and the browser does not call the parser service directly.
+
+The proxy validates the selected parser and uploaded file, preserves JSON parser
+responses, and replaces HTML or unavailable-service responses with controlled errors.
+After preview confirmation, normalized cash rows are sent to `wallet` through
+`POST /wallet/transactions/create/rebalance`.
 
 ## Related Service Documents
 

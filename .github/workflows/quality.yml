@@ -136,6 +136,7 @@ jobs:
           WALLET_API_URL=http://wallet:8001
           STOCK_API_URL=http://stock:8001
           SESSION_AUTH_URL=http://session-auth:8000
+          UI_API_URL=http://nice-ui:8501
           NEXT_PUBLIC_APP_URL=http://next.localhost:8081
           NEXT_UI_DOMAIN=next.localhost:8081
           APP_PROTOCOL=http
@@ -163,6 +164,13 @@ jobs:
       - name: Run static quality checks
         id: quality
         run: make quality-test
+
+      - name: Reclaim CI Docker build cache
+        if: always()
+        run: |
+          docker buildx prune --all --force
+          df -h /
+          docker system df
 
       - name: Run test pyramid and reports
         id: tests

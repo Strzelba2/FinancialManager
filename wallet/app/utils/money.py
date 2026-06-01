@@ -1,6 +1,6 @@
 from decimal import Decimal
 from typing import Optional, Any
-from app.models.enums import BrokerageEventKind
+from app.models.enums import AccountType, BrokerageEventKind
 from app.validators.validators import Q2
 
 
@@ -74,3 +74,9 @@ def safe_ccy(x: Any, fallback: str) -> str:
     if x is None:
         return fallback
     return getattr(x, "value", None) or str(x)
+
+
+def account_type_allows_negative_balance(account_type: AccountType | str | None) -> bool:
+    """Credit accounts represent debt and may carry a negative cash balance."""
+    value = getattr(account_type, "value", account_type)
+    return value == AccountType.CREDIT.value

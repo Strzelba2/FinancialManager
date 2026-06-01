@@ -28,9 +28,10 @@ Architecture stays at the level of service boundaries, code navigation, and impo
 request or data flows. Detailed payloads, status code contracts, token state machines,
 and auth security edge cases live in detailed design documents.
 
-Current detailed design entrypoint:
+Current detailed design entrypoints:
 
 - [Session Login Security](../design/session-login-security.md)
+- [Wallet Transaction Lifecycle](../design/wallet-transaction-lifecycle.md)
 
 ## System at a Glance
 

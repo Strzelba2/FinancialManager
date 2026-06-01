@@ -7,8 +7,14 @@ import unittest
 import allure
 import pytest
 
-from app.models.enums import BrokerageEventKind
-from app.utils.money import compute_cash_effect, dec, fx_convert, safe_ccy
+from app.models.enums import AccountType, BrokerageEventKind
+from app.utils.money import (
+    account_type_allows_negative_balance,
+    compute_cash_effect,
+    dec,
+    fx_convert,
+    safe_ccy,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -22,7 +28,8 @@ pytestmark = pytest.mark.unit
 @allure.description(
     "Core money calculation helpers used in every brokerage and transaction flow. "
     "Verifies cash effect sign for buy/sell, FX conversion with missing and available "
-    "rates, currency enum extraction, and None-to-zero coercion for Decimal fields."
+    "rates, currency enum extraction, account balance policy, and None-to-zero "
+    "coercion for Decimal fields."
 )
 class MoneyUtilsTests(unittest.TestCase):
     def test_compute_cash_effect_for_buy_is_negative(self) -> None:
@@ -70,3 +77,10 @@ class MoneyUtilsTests(unittest.TestCase):
 
     def test_dec_turns_none_into_zero(self) -> None:
         self.assertEqual(dec(None), Decimal("0"))
+
+    def test_account_type_allows_negative_balance_only_for_credit(self) -> None:
+        self.assertTrue(account_type_allows_negative_balance(AccountType.CREDIT))
+        self.assertTrue(account_type_allows_negative_balance("CREDIT"))
+        self.assertFalse(account_type_allows_negative_balance(AccountType.CURRENT))
+        self.assertFalse(account_type_allows_negative_balance(AccountType.SAVINGS))
+        self.assertFalse(account_type_allows_negative_balance(None))

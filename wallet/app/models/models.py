@@ -172,8 +172,8 @@ class DepositAccountBalance(DepositAccountBalanceBase, TimestampMixin, table=Tru
 
     account: Optional[DepositAccount] = Relationship(back_populates="balance")
     
+    # Alembic installs a cross-table trigger: negative available balance is CREDIT-only.
     __table_args__ = (
-        sa.CheckConstraint("available >= 0", name="ck_depaccbal_available_nonneg"),
         sa.CheckConstraint("blocked >= 0",  name="ck_depaccbal_blocked_nonneg"),
     )
     
@@ -229,11 +229,8 @@ class Transaction(UUIDMixin, TransactionBase, TimestampMixin, table=True):
     )
 
     account: Optional[DepositAccount] = Relationship(back_populates="transactions")
-    
-    __table_args__ = (
-        sa.CheckConstraint("balance_before >= 0", name="ck_tx_balance_before_nonneg"),
-        sa.CheckConstraint("balance_after  >= 0", name="ck_tx_balance_after_nonneg"),
-    )
+
+    # Alembic installs a cross-table trigger: negative transaction balances are CREDIT-only.
      
  
 class CapitalGain(CapitalGainBase, UUIDMixin, table=True):

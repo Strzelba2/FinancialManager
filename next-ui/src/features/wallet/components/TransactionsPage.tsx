@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
-import { ChevronLeft, ChevronRight, Loader2, Plus, Save, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ChevronsRight, Loader2, Minus, Plus, Save, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
@@ -32,9 +32,12 @@ const CATEGORY_MAP: Record<string, string> = {
   CHILDREN: 'Dzieci',
   SPORT: 'Sport',
   INVESTMENTS: 'Inwestycje',
+  ZUS_TAXES: 'ZUS i podatki',
   MEDICINES: 'Lekarstwa',
   PHONE: 'Telefony',
   BEAUTY: 'Uroda',
+  INTEREST: 'Odsetki',
+  ANIMALS: 'Zwierzęta',
   OTHER: 'Inne',
 }
 
@@ -42,12 +45,14 @@ const STATUS_MAP: Record<string, string> = {
   INCOME: 'Przychód',
   EXPENSE: 'Wydatek',
   INTERNAL: 'Wewnętrzny',
+  TAXES: 'Podatki',
 }
 
 const STATUS_BADGE: Record<string, string> = {
   INCOME: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
   EXPENSE: 'bg-red-500/20 text-red-300 border-red-500/30',
   INTERNAL: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
+  TAXES: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
 }
 
 const CATEGORY_BADGE: Record<string, string> = {
@@ -66,6 +71,7 @@ const CATEGORY_BADGE: Record<string, string> = {
   CHILDREN: 'bg-sky-500/20 text-sky-300',
   SPORT: 'bg-green-500/20 text-green-300',
   INVESTMENTS: 'bg-lime-500/20 text-lime-300',
+  ZUS_TAXES: 'bg-amber-500/20 text-amber-300',
   MEDICINES: 'bg-red-500/20 text-red-300',
   PHONE: 'bg-violet-500/20 text-violet-300',
   BEAUTY: 'bg-pink-500/20 text-pink-300',
@@ -74,9 +80,13 @@ const CATEGORY_BADGE: Record<string, string> = {
 
 type DateRange = 'ALL' | '1M' | '3M' | '1Y' | 'CUSTOM'
 
-type TxRow = {
+export type SortField = 'date' | 'account' | 'category' | 'status'
+export type SortDir = 'asc' | 'desc'
+
+export type TxRow = {
   id: string
   dateFmt: string
+  dateRaw: string
   description: string
   accountName: string
   accountId: string
@@ -88,14 +98,56 @@ type TxRow = {
   ccy: string
 }
 
+export function sortRows(rows: TxRow[], field: SortField, dir: SortDir): TxRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string, bv: string
+    switch (field) {
+      case 'date': av = a.dateRaw; bv = b.dateRaw; break
+      case 'account': av = a.accountName; bv = b.accountName; break
+      case 'category':
+        av = CATEGORY_MAP[a.category ?? ''] ?? a.category ?? ''
+        bv = CATEGORY_MAP[b.category ?? ''] ?? b.category ?? ''
+        break
+      case 'status':
+        av = STATUS_MAP[a.status ?? ''] ?? a.status ?? ''
+        bv = STATUS_MAP[b.status ?? ''] ?? b.status ?? ''
+        break
+    }
+    const cmp = av.localeCompare(bv, 'pl')
+    return dir === 'asc' ? cmp : -cmp
+  })
+}
+
+function SortIcon({ field, current, dir }: { field: SortField; current: SortField | null; dir: SortDir }) {
+  if (field !== current) return <Minus className="w-3 h-3 text-white/20" />
+  return dir === 'asc'
+    ? <ChevronUp className="w-3 h-3 text-blue-400" />
+    : <ChevronDown className="w-3 h-3 text-blue-400" />
+}
+
+function ThSortButton({ label, field, sort, dir, onSort }: {
+  label: string; field: SortField; sort: SortField | null; dir: SortDir; onSort: (f: SortField) => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(field)}
+      aria-label={`Sortuj po: ${label}`}
+      className="flex items-center gap-1 text-xs text-white/40 font-medium hover:text-white/70 transition-colors whitespace-nowrap"
+    >
+      {label}
+      <SortIcon field={field} current={sort} dir={dir} />
+    </button>
+  )
+}
+
 type TxPatch = {
   description?: string
   category?: string | null
   status?: string | null
-  amount?: string
-  balance_before?: string
-  balance_after?: string
 }
+
+type EditableTxField = keyof TxPatch
 
 function fmtAmount(value: number | string): string {
   const n = typeof value === 'string' ? parseFloat(value) : value
@@ -112,6 +164,7 @@ function itemToRow(item: TransactionItemOut): TxRow {
   return {
     id: item.id,
     dateFmt,
+    dateRaw: item.date_transaction,
     description: item.description,
     accountName: item.account_name,
     accountId: item.account_id,
@@ -269,7 +322,10 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
 
   const [dialogOpen, setDialogOpen] = useState(false)
 
-  const [editCell, setEditCell] = useState<{ id: string; field: string } | null>(null)
+  const [sortField, setSortField] = useState<SortField | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
+  const [editCell, setEditCell] = useState<{ id: string; field: EditableTxField } | null>(null)
   const [dirty, setDirty] = useState<Map<string, TxPatch>>(new Map())
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [isSaving, startSave] = useTransition()
@@ -278,6 +334,20 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
   const allAccountIds = useMemo(() => accounts.map((a) => a.id), [accounts])
   const allCategoryKeys = Object.keys(CATEGORY_MAP) as string[]
   const allStatusKeys = Object.keys(STATUS_MAP) as string[]
+
+  const sortedRows = useMemo(() => {
+    if (!sortField) return rows
+    return sortRows(rows, sortField, sortDir)
+  }, [rows, sortField, sortDir])
+
+  function handleSort(field: SortField) {
+    if (sortField === field) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortField(field)
+      setSortDir('asc')
+    }
+  }
 
   const load = useCallback(async () => {
     setIsLoading(true)
@@ -333,16 +403,13 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
     return () => window.clearTimeout(timer)
   }, [load])
 
-  function patchRow(id: string, field: keyof TxRow, value: string | null) {
+  function patchRow(id: string, field: EditableTxField, value: string | null) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, [field]: value } : r))
 
     const orig = originals.get(id)
     if (!orig) return
 
-    const backendField: keyof TxPatch =
-      field === 'balanceBefore' ? 'balance_before'
-      : field === 'balanceAfter' ? 'balance_after'
-      : field as keyof TxPatch
+    const backendField = field
 
     const isOriginalValue = value === (orig[field] as string | null)
 
@@ -360,7 +427,7 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
     })
   }
 
-  function openEdit(id: string, field: string) {
+  function openEdit(id: string, field: EditableTxField) {
     setEditCell({ id, field })
   }
 
@@ -582,11 +649,19 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
           <table className="w-full text-sm min-w-[860px]">
             <thead>
               <tr className="border-b border-white/10 bg-slate-800/60">
-                <th className="text-left px-3 py-2 text-xs text-white/40 font-medium whitespace-nowrap w-[130px]">Data</th>
+                <th className="text-left px-3 py-2 whitespace-nowrap w-[130px]">
+                  <ThSortButton label="Data" field="date" sort={sortField} dir={sortDir} onSort={handleSort} />
+                </th>
                 <th className="text-left px-3 py-2 text-xs text-white/40 font-medium">Opis</th>
-                <th className="text-left px-3 py-2 text-xs text-white/40 font-medium whitespace-nowrap w-[150px]">Konto</th>
-                <th className="text-center px-2 py-2 text-xs text-white/40 font-medium whitespace-nowrap w-[130px]">Kategoria</th>
-                <th className="text-center px-2 py-2 text-xs text-white/40 font-medium whitespace-nowrap w-[100px]">Status</th>
+                <th className="text-left px-3 py-2 whitespace-nowrap w-[150px]">
+                  <ThSortButton label="Konto" field="account" sort={sortField} dir={sortDir} onSort={handleSort} />
+                </th>
+                <th className="text-center px-2 py-2 whitespace-nowrap w-[130px]">
+                  <ThSortButton label="Kategoria" field="category" sort={sortField} dir={sortDir} onSort={handleSort} />
+                </th>
+                <th className="text-center px-2 py-2 whitespace-nowrap w-[100px]">
+                  <ThSortButton label="Status" field="status" sort={sortField} dir={sortDir} onSort={handleSort} />
+                </th>
                 <th className="text-right px-3 py-2 text-xs text-white/40 font-medium whitespace-nowrap w-[110px]">Kwota</th>
                 <th className="text-right px-3 py-2 text-xs text-white/40 font-medium whitespace-nowrap w-[110px]">Saldo przed</th>
                 <th className="text-right px-3 py-2 text-xs text-white/40 font-medium whitespace-nowrap w-[110px]">Saldo po</th>
@@ -594,7 +669,7 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, i) => {
+              {sortedRows.map((row, i) => {
                 const isDirty = dirty.has(row.id)
                 const isDeleting_ = deletingId === row.id
                 const amt = parseFloat(row.amount)
@@ -715,73 +790,25 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
                       )}
                     </td>
 
-                    {/* Amount — click to edit */}
+                    {/* Amount */}
                     <td className="px-3 py-1.5 text-right align-middle">
-                      {editCell?.id === row.id && editCell.field === 'amount' ? (
-                        <input
-                          autoFocus
-                          type="text"
-                          inputMode="decimal"
-                          value={row.amount}
-                          onChange={(e) => patchRow(row.id, 'amount', e.target.value)}
-                          onBlur={closeEdit}
-                          onKeyDown={(e) => { if (e.key === 'Enter') closeEdit() }}
-                          className="w-[90px] bg-slate-700/60 border border-white/20 rounded px-2 py-0.5 text-sm text-right text-white outline-none"
-                        />
-                      ) : (
-                        <span
-                          onClick={() => openEdit(row.id, 'amount')}
-                          className={`cursor-text font-mono text-xs ${amtColor} hover:brightness-110 transition-all`}
-                        >
-                          {fmtAmount(row.amount)} <span className="text-white/30">{row.ccy}</span>
-                        </span>
-                      )}
+                      <span className={`font-mono text-xs ${amtColor}`}>
+                        {fmtAmount(row.amount)} <span className="text-white/30">{row.ccy}</span>
+                      </span>
                     </td>
 
-                    {/* Balance before — click to edit */}
+                    {/* Balance before */}
                     <td className="px-3 py-1.5 text-right align-middle">
-                      {editCell?.id === row.id && editCell.field === 'balanceBefore' ? (
-                        <input
-                          autoFocus
-                          type="text"
-                          inputMode="decimal"
-                          value={row.balanceBefore}
-                          onChange={(e) => patchRow(row.id, 'balanceBefore', e.target.value)}
-                          onBlur={closeEdit}
-                          onKeyDown={(e) => { if (e.key === 'Enter') closeEdit() }}
-                          className="w-[90px] bg-slate-700/60 border border-white/20 rounded px-2 py-0.5 text-sm text-right text-white outline-none"
-                        />
-                      ) : (
-                        <span
-                          onClick={() => openEdit(row.id, 'balanceBefore')}
-                          className="cursor-text font-mono text-xs text-white/50 hover:text-white/80 transition-colors"
-                        >
-                          {fmtAmount(row.balanceBefore)}
-                        </span>
-                      )}
+                      <span className="font-mono text-xs text-white/50">
+                        {fmtAmount(row.balanceBefore)}
+                      </span>
                     </td>
 
-                    {/* Balance after — click to edit */}
+                    {/* Balance after */}
                     <td className="px-3 py-1.5 text-right align-middle">
-                      {editCell?.id === row.id && editCell.field === 'balanceAfter' ? (
-                        <input
-                          autoFocus
-                          type="text"
-                          inputMode="decimal"
-                          value={row.balanceAfter}
-                          onChange={(e) => patchRow(row.id, 'balanceAfter', e.target.value)}
-                          onBlur={closeEdit}
-                          onKeyDown={(e) => { if (e.key === 'Enter') closeEdit() }}
-                          className="w-[90px] bg-slate-700/60 border border-white/20 rounded px-2 py-0.5 text-sm text-right text-white outline-none"
-                        />
-                      ) : (
-                        <span
-                          onClick={() => openEdit(row.id, 'balanceAfter')}
-                          className="cursor-text font-mono text-xs text-white/50 hover:text-white/80 transition-colors"
-                        >
-                          {fmtAmount(row.balanceAfter)}
-                        </span>
-                      )}
+                      <span className="font-mono text-xs text-white/50">
+                        {fmtAmount(row.balanceAfter)}
+                      </span>
                     </td>
 
                     {/* Actions */}
@@ -841,23 +868,57 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
 
           <div className="flex items-center gap-2">
             <span className="text-xs text-white/40">
-              Strona {page} / {totalPages} · {totalRows} wierszy
+              {totalRows} wierszy
             </span>
             <button
               type="button"
               onClick={() => goPage(page - 1)}
               disabled={page <= 1}
+              aria-label="Poprzednia strona"
               className="h-7 w-7 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
+            <div className="flex items-center gap-1 text-xs text-white/40">
+              <span>Strona</span>
+              <input
+                key={page}
+                type="text"
+                inputMode="numeric"
+                defaultValue={page}
+                onFocus={(e) => e.target.select()}
+                onBlur={(e) => {
+                  const n = parseInt(e.target.value, 10)
+                  goPage(!Number.isNaN(n) ? n : page)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const n = parseInt((e.target as HTMLInputElement).value, 10)
+                    goPage(!Number.isNaN(n) ? n : page)
+                  }
+                }}
+                aria-label="Numer strony"
+                className="w-10 text-center bg-slate-800/60 border border-white/10 rounded px-1 py-0.5 text-xs text-white outline-none focus:border-white/30"
+              />
+              <span>/ {totalPages}</span>
+            </div>
             <button
               type="button"
               onClick={() => goPage(page + 1)}
               disabled={page >= totalPages}
+              aria-label="Następna strona"
               className="h-7 w-7 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronRight className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => goPage(totalPages)}
+              disabled={page >= totalPages}
+              aria-label="Ostatnia strona"
+              className="h-7 w-7 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronsRight className="w-4 h-4" />
             </button>
           </div>
         </div>

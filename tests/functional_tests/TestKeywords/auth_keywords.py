@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import socket
 import sys
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -210,6 +212,107 @@ def start_functional_backend_session(user: dict[str, str]) -> int:
         raise AssertionError("Could not start backend session: login request was not sent")
 
     return response.status_code
+
+
+@keyword("Seed Functional Wallet Account")
+def seed_functional_wallet_account(user: dict[str, str], opening_balance: str = "0.00") -> dict[str, str]:
+    suffix = uuid4().hex[:8]
+    wallet_user_id = str(uuid4())
+    wallet_id = str(uuid4())
+    account_id = str(uuid4())
+    wallet_name = f"Functional Wallet {suffix}"
+    account_name = f"Functional Account {suffix}"
+    now = datetime.now(timezone.utc)
+    fingerprint = uuid4().bytes + uuid4().bytes
+
+    with psycopg.connect(
+        host=_env("FUNCTIONAL_WALLET_DB_HOST", "wallet-db"),
+        port=int(_env("FUNCTIONAL_WALLET_DB_PORT", "5432")),
+        dbname=_env("FUNCTIONAL_WALLET_DB_NAME", "Wallet_test"),
+        user=_env("FUNCTIONAL_WALLET_DB_USER", "myuser"),
+        password=_env("FUNCTIONAL_WALLET_DB_PASSWORD", "mypassword"),
+    ) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM banks ORDER BY name LIMIT 1")
+            bank_row = cursor.fetchone()
+            if bank_row is None:
+                bank_id = str(uuid4())
+                cursor.execute(
+                    "INSERT INTO banks (id, name, shortname, bic) VALUES (%s, %s, %s, %s)",
+                    (bank_id, f"Functional Bank {suffix}", f"F{suffix[:4]}".upper(), None),
+                )
+            else:
+                bank_id = str(bank_row[0])
+
+            cursor.execute(
+                """
+                INSERT INTO users (id, created_at, updated_at, username, email, first_name)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (username) DO UPDATE
+                    SET email = EXCLUDED.email,
+                        first_name = EXCLUDED.first_name
+                RETURNING id
+                """,
+                (
+                    wallet_user_id,
+                    now,
+                    now,
+                    user["username"],
+                    user["email"],
+                    user.get("first_name", "Functional"),
+                ),
+            )
+            wallet_user_id = str(cursor.fetchone()[0])
+
+            cursor.execute(
+                """
+                INSERT INTO wallets (id, created_at, updated_at, user_id, name, currency)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (wallet_id, now, now, wallet_user_id, wallet_name, "PLN"),
+            )
+            cursor.execute(
+                """
+                INSERT INTO deposit_accounts (
+                    id, created_at, updated_at, name, account_type,
+                    account_number_nonce, account_number_ct, account_number_fp,
+                    iban_nonce, iban_ct, iban_fp,
+                    currency, wallet_id, bank_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, %s, %s, %s)
+                """,
+                (
+                    account_id,
+                    now,
+                    now,
+                    account_name,
+                    "CURRENT",
+                    psycopg.Binary(b"1" * 12),
+                    psycopg.Binary(f"functional-cipher-{suffix}".encode("utf-8")),
+                    psycopg.Binary(fingerprint),
+                    "PLN",
+                    wallet_id,
+                    bank_id,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO deposit_account_balances (
+                    account_id, created_at, updated_at, available, blocked
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (account_id, now, now, Decimal(opening_balance), Decimal("0.00")),
+            )
+
+    return {
+        "user_id": wallet_user_id,
+        "wallet_id": wallet_id,
+        "account_id": account_id,
+        "wallet_name": wallet_name,
+        "account_name": account_name,
+        "currency": "PLN",
+    }
 
 
 def _activate_user(email: str) -> None:

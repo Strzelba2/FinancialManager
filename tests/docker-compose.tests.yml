@@ -1,4 +1,7 @@
 services:
+  traefik:
+    ports: !reset []
+
   next-ui:
     volumes:
       - next_ui_test_build:/app/.next
@@ -122,7 +125,7 @@ services:
       stock:
         condition: service_healthy
       nice-ui:
-        condition: service_started
+        condition: service_healthy
       next-ui:
         condition: service_started
     networks:

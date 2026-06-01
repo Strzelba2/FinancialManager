@@ -1,0 +1,49 @@
+"Lista transakcji";;;;;"ING Bank �l�ski S.A."
+"Dokument testowy";
+
+"Data transakcji";"Data ksi�gowania";"Dane kontrahenta";"Tytu�";"Kwota transakcji (waluta rachunku)";"Saldo po transakcji"
+2026-05-13;2026-05-15;"Sklep Testowy";"P�atno�� BLIK";-219,05;2336,37
+2026-05-12;2026-05-12;"Kontrahent 02";"Transakcja testowa 02";-2,00;2334,37
+2026-05-11;2026-05-11;"Kontrahent 03";"Transakcja testowa 03";-3,00;2331,37
+2026-05-10;2026-05-10;"Kontrahent 04";"Transakcja testowa 04";-4,00;2327,37
+2026-05-09;2026-05-09;"Kontrahent 05";"Transakcja testowa 05";-5,00;2322,37
+2026-05-08;2026-05-08;"Kontrahent 06";"Transakcja testowa 06";-6,00;2316,37
+2026-05-07;2026-05-07;"Kontrahent 07";"Transakcja testowa 07";-7,00;2309,37
+2026-05-06;2026-05-06;"Kontrahent 08";"Transakcja testowa 08";-8,00;2301,37
+2026-05-05;2026-05-05;"Kontrahent 09";"Transakcja testowa 09";-9,00;2292,37
+2026-05-04;2026-05-04;"Kontrahent 10";"Transakcja testowa 10";-10,00;2282,37
+2026-05-03;2026-05-03;"Kontrahent 11";"Transakcja testowa 11";-11,00;2271,37
+2026-05-02;2026-05-02;"Kontrahent 12";"Transakcja testowa 12";-12,00;2259,37
+2026-05-01;2026-05-01;"Kontrahent 13";"Transakcja testowa 13";-13,00;2246,37
+2026-04-30;2026-04-30;"Kontrahent 14";"Transakcja testowa 14";-14,00;2232,37
+2026-04-29;2026-04-29;"Kontrahent 15";"Transakcja testowa 15";-15,00;2217,37
+2026-04-28;2026-04-28;"Kontrahent 16";"Transakcja testowa 16";-16,00;2201,37
+2026-04-27;2026-04-27;"Kontrahent 17";"Transakcja testowa 17";-17,00;2184,37
+2026-04-26;2026-04-26;"Kontrahent 18";"Transakcja testowa 18";-18,00;2166,37
+2026-04-25;2026-04-25;"Kontrahent 19";"Transakcja testowa 19";-19,00;2147,37
+2026-04-24;2026-04-24;"Kontrahent 20";"Transakcja testowa 20";-20,00;2127,37
+2026-04-23;2026-04-23;"Kontrahent 21";"Transakcja testowa 21";-21,00;2106,37
+2026-04-22;2026-04-22;"Kontrahent 22";"Transakcja testowa 22";-22,00;2084,37
+2026-04-21;2026-04-21;"Kontrahent 23";"Transakcja testowa 23";-23,00;2061,37
+2026-04-20;2026-04-20;"Kontrahent 24";"Transakcja testowa 24";-24,00;2037,37
+2026-04-19;2026-04-19;"Kontrahent 25";"Transakcja testowa 25";-25,00;2012,37
+2026-04-18;2026-04-18;"Kontrahent 26";"Transakcja testowa 26";-26,00;1986,37
+2026-04-17;2026-04-17;"Kontrahent 27";"Transakcja testowa 27";-27,00;1959,37
+2026-04-16;2026-04-16;"Kontrahent 28";"Transakcja testowa 28";-28,00;1931,37
+2026-04-15;2026-04-15;"Kontrahent 29";"Transakcja testowa 29";-29,00;1902,37
+2026-04-14;2026-04-14;"Kontrahent 30";"Transakcja testowa 30";-30,00;1872,37
+2026-04-13;2026-04-13;"Kontrahent 31";"Transakcja testowa 31";-31,00;1841,37
+2026-04-12;2026-04-12;"Kontrahent 32";"Transakcja testowa 32";-32,00;1809,37
+2026-04-11;2026-04-11;"Kontrahent 33";"Transakcja testowa 33";-33,00;1776,37
+2026-04-10;2026-04-10;"Kontrahent 34";"Transakcja testowa 34";-34,00;1742,37
+2026-04-09;2026-04-09;"Kontrahent 35";"Transakcja testowa 35";-35,00;1707,37
+2026-04-08;2026-04-08;"Kontrahent 36";"Transakcja testowa 36";-36,00;1671,37
+2026-04-07;2026-04-07;"Kontrahent 37";"Transakcja testowa 37";-37,00;1634,37
+2026-04-06;2026-04-06;"Kontrahent 38";"Transakcja testowa 38";-38,00;1596,37
+2026-04-05;2026-04-05;"Duzy przelew";"Przelew �rodk�w";-143630,00;0,42
+2026-04-04;2026-04-04;"Kontrahent 40";"Transakcja po duzym przelewie 40";-40,00;143590,42
+2026-04-03;2026-04-03;"Kontrahent 41";"Transakcja po duzym przelewie 41";-41,00;143549,42
+2026-04-02;2026-04-02;"Kontrahent 42";"Transakcja po duzym przelewie 42";-42,00;143507,42
+2026-04-01;2026-04-01;"Kontrahent 43";"Transakcja po duzym przelewie 43";-43,00;143464,42
+2026-03-31;2026-03-31;"Kontrahent 44";"Transakcja po duzym przelewie 44";-44,00;143420,42
+2026-03-30;2026-03-30;"Kontrahent 45";"Transakcja po duzym przelewie 45";-45,00;143375,42

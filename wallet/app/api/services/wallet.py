@@ -87,6 +87,7 @@ async def dash_flow_8m(
 
     This aggregates:
       - INCOME / EXPENSE transactions by month and currency
+      - TAXES transactions by month and currency as a separate burden
       - CAPITAL gains by month and currency
 
     Time window:
@@ -133,8 +134,10 @@ async def dash_flow_8m(
         total_dec = total or Decimal("0")
         if status_s == "INCOME":
             flow[ms].income_by_currency[ccy] = flow[ms].income_by_currency.get(ccy, Decimal("0")) + total_dec
-        else:
+        elif status_s == "EXPENSE":
             flow[ms].expense_by_currency[ccy] = flow[ms].expense_by_currency.get(ccy, Decimal("0")) + total_dec
+        elif status_s == "TAXES":
+            flow[ms].tax_by_currency[ccy] = flow[ms].tax_by_currency.get(ccy, Decimal("0")) + total_dec
 
     for m_dt, ccy, total in cg_rows:
         ms = m_dt.strftime("%Y-%m")

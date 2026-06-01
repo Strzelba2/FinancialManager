@@ -147,6 +147,11 @@ function toDecimalNumber(value: string | number | null | undefined): number | nu
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function toCents(value: string | number | null | undefined): number | null {
+  const parsed = toDecimalNumber(value)
+  return parsed === null ? null : Math.round(parsed * 100)
+}
+
 function formatMoneyLabel(value: string | number): string {
   const parsed = toDecimalNumber(value)
   if (parsed === null) return String(value)
@@ -156,7 +161,102 @@ function formatMoneyLabel(value: string | number): string {
   })
 }
 
-function normalizeImportedTransactionRows(rows: ParsedTransactionRow[]): ParsedTransactionRow[] {
+function groupConsecutiveRowsByTime(rows: ParsedTransactionRow[]): ParsedTransactionRow[][] {
+  const groups: ParsedTransactionRow[][] = []
+  for (const row of rows) {
+    const time = new Date(row.date).getTime()
+    const lastGroup = groups.at(-1)
+    if (!lastGroup || new Date(lastGroup[0]!.date).getTime() !== time) {
+      groups.push([row])
+    } else {
+      lastGroup.push(row)
+    }
+  }
+  return groups
+}
+
+function orderSameTimeRowsByBalanceChain(
+  rows: ParsedTransactionRow[],
+  openingBalance: number | null,
+  preferReversedSourceOrder = false,
+): ParsedTransactionRow[] {
+  if (rows.length <= 1) return rows
+
+  const nodes = rows.map((row, index) => {
+    const amount = toCents(row.amount)
+    const after = toCents(row.amount_after)
+    if (amount === null || after === null) return null
+    return { index, before: after - amount, after }
+  })
+
+  const validNodes = nodes.filter((node): node is { index: number; before: number; after: number } => node !== null)
+  if (validNodes.length !== nodes.length) return rows
+  const afterValues = new Set(validNodes.map((node) => node.after))
+  const startNodes = openingBalance === null
+    ? validNodes.filter((node) => !afterValues.has(node.before))
+    : validNodes.filter((node) => node.before === openingBalance)
+
+  const beforeByIndex = new Map(validNodes.map((node) => [node.index, node.before]))
+  const afterByIndex = new Map(validNodes.map((node) => [node.index, node.after]))
+  const preferredIndexes = preferReversedSourceOrder
+    ? [...rows.keys()].reverse()
+    : [...rows.keys()]
+  const preferredPosition = new Map(preferredIndexes.map((index, position) => [index, position]))
+  const orderedStartNodes = [...startNodes].sort(
+    (a, b) => (preferredPosition.get(a.index) ?? a.index) - (preferredPosition.get(b.index) ?? b.index),
+  )
+  const walk = (currentIndex: number, used: Set<number>, ordered: number[]): number[] | null => {
+    if (ordered.length === rows.length) {
+      return [...ordered]
+    }
+
+    const currentAfter = afterByIndex.get(currentIndex)
+    const candidates = validNodes.filter(
+      (node) => !used.has(node.index) && beforeByIndex.get(node.index) === currentAfter,
+    ).sort(
+      (a, b) => (preferredPosition.get(a.index) ?? a.index) - (preferredPosition.get(b.index) ?? b.index),
+    )
+
+    for (const candidate of candidates) {
+      used.add(candidate.index)
+      ordered.push(candidate.index)
+      const solution = walk(candidate.index, used, ordered)
+      ordered.pop()
+      used.delete(candidate.index)
+      if (solution) return solution
+    }
+
+    return null
+  }
+
+  for (const startNode of orderedStartNodes) {
+    const solution = walk(startNode.index, new Set([startNode.index]), [startNode.index])
+    if (solution) {
+      return solution.map((index) => rows[index]!)
+    }
+  }
+
+  return rows
+}
+
+function flattenOrderedTimeGroups(
+  groups: ParsedTransactionRow[][],
+  preferReversedSourceOrder = false,
+): ParsedTransactionRow[] {
+  const orderedRows: ParsedTransactionRow[] = []
+  let openingBalance: number | null = null
+
+  for (const group of groups) {
+    const orderedGroup = orderSameTimeRowsByBalanceChain(group, openingBalance, preferReversedSourceOrder)
+    orderedRows.push(...orderedGroup)
+    const lastRow = orderedGroup.at(-1)
+    openingBalance = lastRow ? toCents(lastRow.amount_after) : null
+  }
+
+  return orderedRows
+}
+
+export function normalizeImportedTransactionRows(rows: ParsedTransactionRow[]): ParsedTransactionRow[] {
   if (rows.length <= 1) return rows
 
   const withTime = rows.map((row) => ({
@@ -168,12 +268,15 @@ function normalizeImportedTransactionRows(rows: ParsedTransactionRow[]): ParsedT
   if (!valid) return rows
 
   const isAscending = withTime.every((item, index) => index === 0 || withTime[index - 1]!.time <= item.time)
-  if (isAscending) return rows
+  if (isAscending) return flattenOrderedTimeGroups(groupConsecutiveRowsByTime(rows))
 
   const isDescending = withTime.every((item, index) => index === 0 || withTime[index - 1]!.time >= item.time)
-  if (isDescending) return [...rows].reverse()
+  if (isDescending) {
+    return flattenOrderedTimeGroups(groupConsecutiveRowsByTime(rows).reverse(), true)
+  }
 
-  return [...rows].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+  const sortedRows = [...rows].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+  return flattenOrderedTimeGroups(groupConsecutiveRowsByTime(sortedRows))
 }
 
 function TabButton({
@@ -615,7 +718,6 @@ function ImportTab({
               const nextParser = parsers.find((parser) => parser.name === value) ?? null
               setSelectedParserName(value)
               setImportMode(nextParser?.supports_brokerage_events ? importMode : 'transactions')
-              setSelectedFile(null)
               resetParsedState()
             }}
           >
@@ -783,7 +885,7 @@ function ImportTab({
                 </tr>
               </thead>
               <tbody>
-                {txRows.slice(0, 20).map((row, index) => (
+                {normalizedTxRows.map((row, index) => (
                   <tr key={`${row.date}-${index}`} className="border-b border-white/5 last:border-0">
                     <td className="px-3 py-2 text-white/75">{row.date}</td>
                     <td className="px-3 py-2 text-white/75">{row.description}</td>
@@ -815,7 +917,7 @@ function ImportTab({
                 </tr>
               </thead>
               <tbody>
-                {brokerRows.slice(0, 20).map((row, index) => (
+                {brokerRows.map((row, index) => (
                   <tr key={`${row.trade_at}-${row.instrument_symbol}-${index}`} className="border-b border-white/5 last:border-0">
                     <td className="px-3 py-2 text-white/75">{formatDateLabel(row.trade_at)}</td>
                     <td className="px-3 py-2 text-white/75">{row.instrument_symbol} · {row.instrument_name ?? row.instrument_mic}</td>

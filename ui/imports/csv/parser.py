@@ -1,6 +1,7 @@
 import io
 import re
 import csv
+from decimal import Decimal
 from typing import Iterable, Tuple
 from schemas.wallet import (
     TransactionCreationRow, CapitalGainKind, BrokerageEventImportRow, BrokerageEventKind,
@@ -13,6 +14,32 @@ from exceptions import MissingRequiredColumnsError
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+ING_INTEREST_AMOUNT_RE = re.compile(
+    r'\bodsetk\w*[^\d+-]{0,80}([+-]?\d[\d\s\u00A0.]*(?:,\d{2}|\.\d{2}))\s*(?:z[łl�]|pln)?',
+    re.IGNORECASE,
+)
+
+
+def _join_non_empty(*parts: str | None) -> str:
+    return ' '.join(part.strip() for part in parts if part and part.strip())
+
+
+def _extract_interest_amount(description: str) -> Decimal | None:
+    match = ING_INTEREST_AMOUNT_RE.search(description)
+    if not match:
+        return None
+    parsed = parse_amount(match.group(1))
+    if parsed is None:
+        return None
+    return dec2(parsed)
+
+
+def _description_without_interest_amount(description: str) -> str:
+    cleaned = ING_INTEREST_AMOUNT_RE.sub('', description, count=1)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip(' -:;')
+    return cleaned or description
 
 
 class BaseBankParser:
@@ -38,11 +65,11 @@ class BaseBankParser:
         self.header_variants = [
             r'Data\s+transakcji',
             r'Data\s+operacji',
-            r'Data\s+ksi(?:ę|e)gowania',
+            r'Data\s+ksi(?:ę|e|.)gowania',
             r'ID\s+klienta',
         ]
         self.header_start_pattern = re.compile(
-            r'^\s*#?\s*(?:' + r'|'.join(self.header_variants) + r')\b',
+            r'^\s*#?\s*["\']?(?:' + r'|'.join(self.header_variants) + r')\b',
             re.IGNORECASE,
         )
 
@@ -246,6 +273,7 @@ class IngBankParser(BaseBankParser):
     Parser for ING Bank CSV statements.
 
     Expected columns include:
+        - "Data transakcji"
         - "Data księgowania"
         - "Kwota transakcji (waluta rachunku)"
         - "Saldo po transakcji"
@@ -279,13 +307,39 @@ class IngBankParser(BaseBankParser):
         """
         parsed: list[TransactionCreationRow] = []
         for r in rows:
-            date = parse_date(r.get("Data księgowania"))
+            date = parse_date(
+                r.get("Data transakcji")
+                or r.get("Data operacji")
+                or r.get("Data księgowania")
+                or r.get("Data ksi�gowania")
+            )
             if not date:
                 continue
             amount = dec(parse_amount(r.get('Kwota transakcji (waluta rachunku)', '0')))
             amount_after = dec(parse_amount(r.get('Saldo po transakcji', '0')))
-            desc = ' '.join([r.get('Dane kontrahenta'), r.get('Tytuł')])
-            
+            desc = _join_non_empty(
+                r.get('Dane kontrahenta'),
+                r.get('Tytuł') or r.get('Tytu�'),
+            )
+
+            interest_amount = _extract_interest_amount(desc)
+            if interest_amount and amount > 0 and Decimal("0") < interest_amount < amount:
+                principal_amount = dec2(amount - interest_amount)
+                parsed.append(TransactionCreationRow(
+                    date=date,
+                    amount=principal_amount,
+                    description=_description_without_interest_amount(desc),
+                    amount_after=dec2(amount_after - interest_amount),
+                ))
+                parsed.append(TransactionCreationRow(
+                    date=date,
+                    amount=interest_amount,
+                    description=desc,
+                    amount_after=amount_after,
+                    capital_gain_kind=CapitalGainKind.DEPOSIT_INTEREST.name,
+                ))
+                continue
+
             cg_kind = None
             if 'odsetki' in desc.lower():
                 cg_kind = CapitalGainKind.DEPOSIT_INTEREST.name

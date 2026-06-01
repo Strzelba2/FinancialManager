@@ -16,6 +16,7 @@ from app.crud.capital_gain_crud import create_capital_gain
 from app.core.exceptions import (
     ImportMismatchError, UnknownAccountError, UnknownUserError, DuplicateTransactionError
 )
+from app.utils.money import account_type_allows_negative_balance
 from app.crud.transaction_crud import (
     create_transaction_uow, account_has_transactions, find_duplicate_transaction,
     sum_income_expense_for_wallet_year, list_chain_from_dt_for_update, tx_datetime_exists,
@@ -25,14 +26,118 @@ from app.crud.transaction_crud import (
 logger = logging.getLogger(__name__)
 
 
+def _money_key(value: Decimal) -> Decimal:
+    return Decimal(value).quantize(Decimal("0.01"))
+
+
+def _order_same_datetime_group_by_balance_chain(
+    rows: list[TransactionIn],
+    opening_balance: Decimal | None = None,
+    prefer_reversed_source_order: bool = False,
+) -> list[TransactionIn]:
+    if len(rows) <= 1 or any(row.amount_after is None for row in rows):
+        return list(rows)
+
+    nodes: list[tuple[int, Decimal, Decimal]] = []
+    for idx, row in enumerate(rows):
+        after = _money_key(Decimal(row.amount_after))
+        before = _money_key(after - Decimal(row.amount))
+        nodes.append((idx, before, after))
+
+    before_by_idx = {idx: before for idx, before, _ in nodes}
+    after_by_idx = {idx: after for idx, _, after in nodes}
+
+    if opening_balance is not None:
+        opening = _money_key(opening_balance)
+        start_nodes = [node for node in nodes if node[1] == opening]
+    else:
+        after_values = {after for _, _, after in nodes}
+        start_nodes = [node for node in nodes if node[1] not in after_values]
+
+    preferred_indexes = (
+        list(reversed(range(len(rows))))
+        if prefer_reversed_source_order
+        else list(range(len(rows)))
+    )
+    preferred_position = {idx: position for position, idx in enumerate(preferred_indexes)}
+    start_nodes = sorted(start_nodes, key=lambda node: preferred_position[node[0]])
+    solution: list[int] | None = None
+
+    def walk(current_idx: int, used: set[int], ordered: list[int]) -> None:
+        nonlocal solution
+        if solution is not None:
+            return
+        if len(ordered) == len(rows):
+            solution = list(ordered)
+            return
+
+        current_after = after_by_idx[current_idx]
+        candidates = sorted(
+            [
+                idx
+                for idx in range(len(rows))
+                if idx not in used and before_by_idx[idx] == current_after
+            ],
+            key=lambda idx: preferred_position[idx],
+        )
+
+        for candidate_idx in candidates:
+            used.add(candidate_idx)
+            ordered.append(candidate_idx)
+            walk(candidate_idx, used, ordered)
+            ordered.pop()
+            used.remove(candidate_idx)
+
+    for start_idx, _, _ in start_nodes:
+        walk(start_idx, {start_idx}, [start_idx])
+        if solution is not None:
+            return [rows[idx] for idx in solution]
+
+    return list(rows)
+
+
+def _group_consecutive_rows_by_datetime(rows: list[TransactionIn]) -> list[list[TransactionIn]]:
+    groups: list[list[TransactionIn]] = []
+    for row in rows:
+        if not groups or groups[-1][0].date != row.date:
+            groups.append([row])
+        else:
+            groups[-1].append(row)
+    return groups
+
+
+def _flatten_ordered_datetime_groups(
+    groups: list[list[TransactionIn]],
+    prefer_reversed_source_order: bool = False,
+) -> list[TransactionIn]:
+    ordered_rows: list[TransactionIn] = []
+    opening_balance: Decimal | None = None
+
+    for group in groups:
+        ordered_group = _order_same_datetime_group_by_balance_chain(
+            group,
+            opening_balance,
+            prefer_reversed_source_order,
+        )
+        ordered_rows.extend(ordered_group)
+        if ordered_group and ordered_group[-1].amount_after is not None:
+            opening_balance = _money_key(Decimal(ordered_group[-1].amount_after))
+        else:
+            opening_balance = None
+
+    return ordered_rows
+
+
 def normalize_transaction_rows_order(rows: list[TransactionIn]) -> list[TransactionIn]:
     """
     Normalize imported transaction order without destroying same-day sequencing.
 
-    Some bank exports, such as Velo PDF statements, arrive in reverse chronological
-    order (newest -> oldest). A plain `sorted(..., key=date)` breaks transactions
-    that share the same day because it preserves the parser's same-day order while
-    reordering only by date.
+    Some bank exports arrive in reverse chronological order (newest -> oldest).
+    Rows that share the same timestamp can also be reversed relative to their
+    balance chain, so same-timestamp groups are ordered by amount_after linkage.
+    When the balance chain contains a same-day loop and more than one valid path
+    exists, the source order breaks the tie: ascending imports prefer top-to-bottom
+    order, descending imports prefer bottom-to-top order inside the day.
 
     We therefore:
     - keep already-ascending rows as-is
@@ -44,14 +149,19 @@ def normalize_transaction_rows_order(rows: list[TransactionIn]) -> list[Transact
 
     is_ascending = all(rows[i].date <= rows[i + 1].date for i in range(len(rows) - 1))
     if is_ascending:
-        return list(rows)
+        return _flatten_ordered_datetime_groups(_group_consecutive_rows_by_datetime(rows))
 
     is_descending = all(rows[i].date >= rows[i + 1].date for i in range(len(rows) - 1))
     if is_descending:
-        return list(reversed(rows))
+        groups = _group_consecutive_rows_by_datetime(rows)
+        return _flatten_ordered_datetime_groups(
+            list(reversed(groups)),
+            prefer_reversed_source_order=True,
+        )
 
     logger.warning("normalize_transaction_rows_order: mixed import order detected; applying stable date sort")
-    return sorted(rows, key=lambda r: r.date)
+    sorted_rows = sorted(rows, key=lambda r: r.date)
+    return _flatten_ordered_datetime_groups(_group_consecutive_rows_by_datetime(sorted_rows))
 
 
 async def create_transactions_service(
@@ -119,6 +229,10 @@ async def create_transactions_service(
             after = provided_after
         else:
             after = computed_after
+
+        if after < 0 and not account_type_allows_negative_balance(account.account_type):
+            logger.info("create_transactions_service would go negative")
+            raise ImportMismatchError("This insert would make the account balance negative.")
 
         tx_data = TransactionCreate(
             account_id=payload.account_id,
@@ -257,7 +371,7 @@ async def create_transactions_rebalance_service(
         logger.info(
             f"create_transactions_rebalance_service account not found account_id={payload.account_id} user_id={user_id}"
         )
-        raise UnknownUserError("Unknown user_id")
+        raise UnknownAccountError("Unknown account_id")
 
     acc_id = uuid.UUID(str(payload.account_id))
 
@@ -273,6 +387,7 @@ async def create_transactions_rebalance_service(
         return {"created": 0, "final_balance": Decimal(str(bal.available or 0)), "account_id": str(acc_id)}
 
     rows = normalize_transaction_rows_order(list(payload.transactions))
+    allows_negative_balance = account_type_allows_negative_balance(account.account_type)
 
     dt_start = rows[0].date
 
@@ -305,16 +420,18 @@ async def create_transactions_rebalance_service(
         else:
             after = computed_after
 
-        dt_base = r.date + timedelta(microseconds=idx)
-        dt_unique = await ensure_unique_dt(session, account_id=acc_id, dt=dt_base)
+        if after < 0 and not allows_negative_balance:
+            logger.info(f"create_transactions_rebalance_service would go negative")
+            raise ImportMismatchError("This insert would make the account balance negative.")
 
+        dt_base = r.date + timedelta(microseconds=idx)
         tx_data = TransactionCreate(
             account_id=acc_id,
             amount=amount,
             description=r.description or "",
             balance_before=before,
             balance_after=after,
-            date_transaction=dt_unique,
+            date_transaction=dt_base,
         )
 
         dup = await find_duplicate_transaction(session, tx_data)
@@ -323,6 +440,9 @@ async def create_transactions_rebalance_service(
             raise DuplicateTransactionError(
                 f"Duplicate transaction detected for account={acc_id}, date={dt_base}, amount={amount}, description={tx_data.description!r}"
             )
+
+        dt_unique = await ensure_unique_dt(session, account_id=acc_id, dt=dt_base)
+        tx_data = tx_data.model_copy(update={"date_transaction": dt_unique})
 
         tx = await create_transaction_uow(session, tx_data)
         inserted_ids.append(uuid.UUID(str(tx.id)))
@@ -354,10 +474,9 @@ async def create_transactions_rebalance_service(
         t.balance_before = running
         t.balance_after = running + amt
         running = Decimal(str(t.balance_after))
-
-    if running < 0:
-        logger.info(f"create_transactions_rebalance_service would go negative")
-        raise ImportMismatchError("This insert would make the account balance negative.")
+        if running < 0 and not allows_negative_balance:
+            logger.info(f"create_transactions_rebalance_service would go negative")
+            raise ImportMismatchError("This insert would make the account balance negative.")
 
     bal.available = running
     await session.flush()

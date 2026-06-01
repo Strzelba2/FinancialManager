@@ -3,6 +3,7 @@
 logs/*
 session/config/.env
 ui/.env
+ui/.pdfbox.cache
 stock/app/core/.envs/.env.local
 stock/celerybeat-schedule
 session/static/admin/*

@@ -108,6 +108,7 @@ export type DashFlowMonthItem = {
   month: string
   income_by_currency: Record<string, string>
   expense_by_currency: Record<string, string>
+  tax_by_currency?: Record<string, string>
   capital_by_currency: Record<string, string>
 }
 

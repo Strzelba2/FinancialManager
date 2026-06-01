@@ -114,6 +114,29 @@ for cache/result-oriented runtime roles.
 | Market read | Next or wallet calls `stock` for quotes, instruments, candles, or reports |
 | Crypto batch | Wallet sends user-scoped crypto work to `session` rather than reading key material |
 
+## Wallet Transaction Integrity
+
+Transaction rows form an ordered cash-balance chain inside each deposit account:
+
+```text
+balance_after = balance_before + amount
+```
+
+Imported rows may arrive newest-first or contain multiple operations with the same
+timestamp. `wallet` normalizes chronological groups and uses reported `amount_after`
+values to recover same-timestamp ordering before persistence. Create and delete flows
+rebalance later rows so the stored chain remains consistent.
+
+Negative balances are valid only for `CREDIT` deposit accounts. This rule is enforced in
+service logic and by PostgreSQL triggers installed through Alembic. A credit account
+cannot be changed to another type while its balance or transaction chain contains
+negative values. The downgrade path restores global non-negative constraints only after
+confirming that no negative rows remain.
+
+Transaction category and status are classification metadata. Batch PATCH operations can
+change description, category, and status, including clearing category or status, but
+cannot rewrite amount or stored balance-chain fields.
+
 ## Storage Reading Path
 
 - Start in `session/userauth/models.py` for auth persistence.

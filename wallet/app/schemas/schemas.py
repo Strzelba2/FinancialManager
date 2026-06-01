@@ -290,6 +290,16 @@ class TransactionUpdate(PartialUpdateMixin):
                               "category",
                               "status"
                               }
+
+
+class TransactionBatchUpdate(PartialUpdateMixin):
+    model_config = ConfigDict(from_attributes=False, extra="forbid")
+
+    description: NoneIfEmpty = None
+    category: NoneIfEmpty = None
+    status: NoneIfEmpty = None
+
+    __update_require_any__ = {"description", "category", "status"}
     
     
 class MetalHoldingCreate(MetalHoldingBase):

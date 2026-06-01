@@ -1,0 +1,4 @@
+Data księgowania;Data operacji;Kwota transakcji (waluta rachunku);Saldo po transakcji;Dane kontrahenta;Tytuł
+2026-05-10;2026-05-10;-45,67;954,33;Sklep Testowy;Zakupy spożywcze
+2026-05-11;2026-05-11;1,23;955,56;ING Bank;Odsetki od salda
+2026-05-12;2026-05-12;11741,26;12696,82;ING Bank;Rozliczenie OKO Bonus Max - odsetki netto 1741,26 z�

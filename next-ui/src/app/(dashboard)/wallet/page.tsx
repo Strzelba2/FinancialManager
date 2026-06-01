@@ -108,12 +108,14 @@ function computeDebts(wallets: WalletListItem[], ccy: Currency, rates: NullableF
   new Decimal(0))
 }
 
-function computeExpensesYtd(wallets: WalletListItem[], ccy: Currency, rates: NullableFxRates): Decimal {
-  return wallets.reduce((total, w) =>
-    Object.entries(w.expense_ytd_by_currency).reduce((sum, [fromCcy, amount]) =>
-      sum.plus(conv(dec(amount), fromCcy, ccy, rates)),
-    total),
+export function computeExpensesYtd(wallets: WalletListItem[], ccy: Currency, rates: NullableFxRates): Decimal {
+  const total = wallets.reduce((walletSum, w) =>
+    Object.entries(w.expense_ytd_by_currency).reduce((currencySum, [fromCcy, amount]) =>
+      currencySum.plus(conv(dec(amount), fromCcy, ccy, rates)),
+    walletSum),
   new Decimal(0))
+
+  return total.abs()
 }
 
 function computeCapitalGains(wallets: WalletListItem[], ccy: Currency, rates: NullableFxRates): Decimal {
@@ -400,7 +402,7 @@ function computeAssetsChartData(
   return { months, nominal, real, inflacja, mom, currency }
 }
 
-function computeDashFlowData(wallets: WalletListItem[], ccy: Currency, rates: NullableFxRates): DashFlowData {
+export function computeDashFlowData(wallets: WalletListItem[], ccy: Currency, rates: NullableFxRates): DashFlowData {
   // Derive month labels from the first wallet that has dash_flow_8m data
   let months: string[] = []
   for (const w of wallets) {
@@ -420,11 +422,13 @@ function computeDashFlowData(wallets: WalletListItem[], ccy: Currency, rates: Nu
 
   const inc: number[] = []
   const exp: number[] = []
+  const tax: number[] = []
   const cap: number[] = []
 
   for (const ms of months) {
     let incomeView = new Decimal(0)
     let expenseView = new Decimal(0)
+    let taxView = new Decimal(0)
     let capView = new Decimal(0)
 
     for (const w of wallets) {
@@ -434,16 +438,19 @@ function computeDashFlowData(wallets: WalletListItem[], ccy: Currency, rates: Nu
         incomeView = incomeView.plus(conv(dec(a), c, ccy, rates))
       for (const [c, a] of Object.entries(it.expense_by_currency))
         expenseView = expenseView.plus(conv(dec(a), c, ccy, rates))
+      for (const [c, a] of Object.entries(it.tax_by_currency ?? {}))
+        taxView = taxView.plus(conv(dec(a), c, ccy, rates))
       for (const [c, a] of Object.entries(it.capital_by_currency))
         capView = capView.plus(conv(dec(a), c, ccy, rates))
     }
 
     inc.push(incomeView.minus(capView).toNumber())
     exp.push(expenseView.toNumber())
+    tax.push(taxView.toNumber())
     cap.push(capView.toNumber())
   }
 
-  return { months, inc, exp, cap, currency: ccy }
+  return { months, inc, exp, tax, cap, currency: ccy }
 }
 
 export default async function WalletPage({

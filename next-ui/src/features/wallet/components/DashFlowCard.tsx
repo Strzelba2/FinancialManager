@@ -6,6 +6,7 @@ export type DashFlowData = {
   months: string[]
   inc: number[]    
   exp: number[]    
+  tax: number[]
   cap: number[]   
   currency: string
 }
@@ -43,14 +44,11 @@ export function DashFlowCard({ data }: Props) {
   const hasData = data.months.length > 0
 
   const expNeg = data.exp.map((v) => (v === 0 ? null : -Math.abs(v)))
-  const profit = data.inc.map((inc, i) => {
-    const e = data.exp[i] ?? 0
-    const c = data.cap[i] ?? 0
-    return inc - e + c
-  })
+  const taxNeg = data.tax.map((v) => (v === 0 ? null : -Math.abs(v)))
+  const profit = computeDashFlowProfit(data)
 
   const ccy = data.currency
-  const legendData = ['Przychody', 'Wydatki', 'Kapitał', 'Zysk']
+  const legendData = ['Przychody', 'Wydatki', 'Podatki', 'Kapitał', 'Zysk']
 
   const option = {
     backgroundColor: 'transparent',
@@ -122,6 +120,13 @@ export function DashFlowCard({ data }: Props) {
         emphasis: { focus: 'series' },
       },
       {
+        name: 'Podatki',
+        type: 'bar',
+        data: taxNeg,
+        itemStyle: { color: '#f59e0b' },
+        emphasis: { focus: 'series' },
+      },
+      {
         name: 'Kapitał',
         type: 'bar',
         data: data.cap,
@@ -152,4 +157,13 @@ export function DashFlowCard({ data }: Props) {
       )}
     </div>
   )
+}
+
+export function computeDashFlowProfit(data: DashFlowData): number[] {
+  return data.inc.map((inc, i) => {
+    const e = data.exp[i] ?? 0
+    const t = data.tax[i] ?? 0
+    const c = data.cap[i] ?? 0
+    return inc - Math.abs(e) - Math.abs(t) + c
+  })
 }
