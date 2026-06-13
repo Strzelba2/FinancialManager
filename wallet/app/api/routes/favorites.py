@@ -10,6 +10,7 @@ from app.schemas.schemas import (
     FavoriteListCreate, FavoriteListRead, FavoriteItemCreate,
     FavoriteItemRead, Currency
 )
+from app.models.enums import InstrumentCurrency
 from app.crud.favorites import (
     list_favorite_lists,
     create_favorite_list,
@@ -179,7 +180,7 @@ async def api_add_item(
             mic=stock_inst.mic,
             symbol=stock_inst.symbol,
             name=instrument_name,
-            currency=Currency(stock_inst.currency),
+            currency=InstrumentCurrency(str(stock_inst.currency).upper()),
         )
         
         return await add_favorite_item(session, user_id, list_id, inst.id)

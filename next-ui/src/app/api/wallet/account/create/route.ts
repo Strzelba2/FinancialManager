@@ -10,7 +10,18 @@ const Schema = z.object({
   currency: z.enum(['PLN', 'USD', 'EUR']),
   account_number: z.string().min(1, { message: 'Podaj numer konta' }).max(32).trim(),
   bank_id: z.string().uuid({ message: 'Wybierz bank' }),
+  brokerage_cash_accounts: z.array(z.object({
+    currency: z.enum(['USD', 'EUR']),
+    account_number: z.string().min(1).max(32).trim(),
+    name: z.string().max(64).trim().optional(),
+    iban: z.string().max(34).trim().optional(),
+  })).optional(),
 })
+
+function derivePolishIban(accountNumber: string): string | undefined {
+  const normalized = accountNumber.replace(/\s+/g, '')
+  return /^\d{26}$/.test(normalized) ? `PL${normalized}` : undefined
+}
 
 export async function POST(request: Request) {
   const userId = await resolveWalletUserId()
@@ -33,14 +44,16 @@ export async function POST(request: Request) {
     )
   }
 
-  const { walletId, name, account_type, currency, account_number, bank_id } = validated.data
+  const { walletId, name, account_type, currency, account_number, bank_id, brokerage_cash_accounts } = validated.data
+  const iban = derivePolishIban(account_number)
   const result = await createAccount(userId, walletId, {
     name,
     account_type,
     currency,
     account_number,
     bank_id,
-    iban: `PL${account_number}`,
+    ...(iban ? { iban } : {}),
+    brokerage_cash_accounts,
   })
 
   if (!result.ok) {

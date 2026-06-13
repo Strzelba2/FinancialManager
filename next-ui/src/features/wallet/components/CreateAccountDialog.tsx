@@ -63,11 +63,18 @@ export function CreateAccountDialog({ open, onOpenChange, wallets, banks }: Prop
     ? selectedWalletId
     : (wallets[0]?.id ?? '')
 
+  function handleAccountTypeChange(value: string) {
+    setAccountType(value)
+    if (value === 'BROKERAGE') setCurrency('PLN')
+  }
+
   function handleSubmit(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault()
     const fd = new FormData(e.currentTarget)
     const name = (fd.get('name') as string | null)?.trim() ?? ''
     const account_number = (fd.get('account_number') as string | null)?.trim() ?? ''
+    const usdAccountNumber = (fd.get('brokerage_usd_account_number') as string | null)?.trim() ?? ''
+    const eurAccountNumber = (fd.get('brokerage_eur_account_number') as string | null)?.trim() ?? ''
 
     if (!name) { setError('Podaj nazwę konta'); return }
     if (!account_number) { setError('Podaj numer konta'); return }
@@ -76,10 +83,26 @@ export function CreateAccountDialog({ open, onOpenChange, wallets, banks }: Prop
     setError(undefined)
 
     startTransition(async () => {
+      const brokerage_cash_accounts =
+        accountType === 'BROKERAGE'
+          ? [
+              usdAccountNumber ? { currency: 'USD', account_number: usdAccountNumber, name: `${name} · USD` } : null,
+              eurAccountNumber ? { currency: 'EUR', account_number: eurAccountNumber, name: `${name} · EUR` } : null,
+            ].filter(Boolean)
+          : undefined
+
       const res = await fetch('/api/wallet/account/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ walletId, name, account_type: accountType, currency, account_number, bank_id: bankId }),
+        body: JSON.stringify({
+          walletId,
+          name,
+          account_type: accountType,
+          currency: accountType === 'BROKERAGE' ? 'PLN' : currency,
+          account_number,
+          bank_id: bankId,
+          brokerage_cash_accounts,
+        }),
       })
       let data: { error?: string; success?: boolean; accountName?: string } = {}
       try {
@@ -137,7 +160,7 @@ export function CreateAccountDialog({ open, onOpenChange, wallets, banks }: Prop
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-white/70 text-sm">Typ *</Label>
-              <Select value={accountType} onValueChange={setAccountType}>
+              <Select value={accountType} onValueChange={handleAccountTypeChange}>
                 <SelectTrigger className="bg-white/5 border-white/10 text-white">
                   <SelectValue />
                 </SelectTrigger>
@@ -151,7 +174,7 @@ export function CreateAccountDialog({ open, onOpenChange, wallets, banks }: Prop
 
             <div className="space-y-1.5">
               <Label className="text-white/70 text-sm">Waluta *</Label>
-              <Select value={currency} onValueChange={setCurrency}>
+              <Select value={currency} onValueChange={setCurrency} disabled={accountType === 'BROKERAGE'}>
                 <SelectTrigger className="bg-white/5 border-white/10 text-white">
                   <SelectValue />
                 </SelectTrigger>
@@ -165,7 +188,7 @@ export function CreateAccountDialog({ open, onOpenChange, wallets, banks }: Prop
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-white/70 text-sm">Portfel *</Label>
               <Select value={walletId} onValueChange={setSelectedWalletId} disabled={wallets.length === 0}>
                 <SelectTrigger className="bg-white/5 border-white/10 text-white">
@@ -182,7 +205,7 @@ export function CreateAccountDialog({ open, onOpenChange, wallets, banks }: Prop
               )}
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-white/70 text-sm">Bank *</Label>
               <Select value={bankId} onValueChange={setBankId}>
                 <SelectTrigger className="bg-white/5 border-white/10 text-white">
@@ -190,7 +213,7 @@ export function CreateAccountDialog({ open, onOpenChange, wallets, banks }: Prop
                 </SelectTrigger>
                 <SelectContent className="bg-emerald-950 border-emerald-800/50 text-white">
                   {banks.map(b => (
-                    <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                    <SelectItem key={b.id} value={b.id}>{b.shortname}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -207,6 +230,36 @@ export function CreateAccountDialog({ open, onOpenChange, wallets, banks }: Prop
               className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-emerald-500/50"
             />
           </div>
+
+          {accountType === 'BROKERAGE' && (
+            <div className="space-y-2 rounded-md border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-white/65 text-sm">
+                PLN jest głównym subkontem gotówkowym. USD/EUR dodaj opcjonalnie, wpisując numer albo techniczny identyfikator.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="brokerage-usd-number" className="text-white/70 text-sm">Subkonto USD</Label>
+                  <Input
+                    id="brokerage-usd-number"
+                    name="brokerage_usd_account_number"
+                    placeholder="np. BOSSA-IKE-USD"
+                    maxLength={32}
+                    className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-emerald-500/50"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="brokerage-eur-number" className="text-white/70 text-sm">Subkonto EUR</Label>
+                  <Input
+                    id="brokerage-eur-number"
+                    name="brokerage_eur_account_number"
+                    placeholder="np. BOSSA-IKE-EUR"
+                    maxLength={32}
+                    className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-emerald-500/50"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {error && <p className="text-red-400 text-sm">{error}</p>}
 

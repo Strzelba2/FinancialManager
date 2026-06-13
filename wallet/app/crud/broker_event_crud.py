@@ -6,15 +6,17 @@ from datetime import date, datetime
 from decimal import Decimal
 import uuid
 
-from app.models.models import BrokerageEvent, Instrument, BrokerageAccount, Wallet
+from app.models.models import BrokerageEvent, Instrument, BrokerageAccount, Holding, Wallet
+from app.models.enums import BrokerageEventKind
 from app.schemas.schemas import BrokerageEventCreate
-from app.crud.holding_crud import apply_event_to_holding, get_or_create_holding
+from app.crud.holding_crud import apply_conversion_to_holding_pair, apply_event_to_holding
 
 
 async def create_brokerage_event(
     session: AsyncSession, 
     data: BrokerageEventCreate, 
-    instrument_id: uuid.UUID 
+    instrument_id: uuid.UUID,
+    target_instrument_id: uuid.UUID | None = None,
 ) -> BrokerageEvent:
     """
     Create a BrokerageEvent row.
@@ -40,6 +42,8 @@ async def create_brokerage_event(
         price=data.price,
         currency=data.currency,
         split_ratio=data.split_ratio,
+        note=data.note,
+        target_instrument_id=target_instrument_id,
         trade_at=data.trade_at,
     )
     session.add(obj)
@@ -56,6 +60,7 @@ async def find_duplicate_brokerage_event(
     session: AsyncSession,
     data: BrokerageEventCreate,
     instrument_id: uuid.UUID,
+    target_instrument_id: uuid.UUID | None = None,
 ) -> Optional[BrokerageEvent]:
     """
     Find a potential duplicate BrokerageEvent matching all identifying fields.
@@ -78,6 +83,8 @@ async def find_duplicate_brokerage_event(
             BrokerageEvent.quantity == data.quantity,
             BrokerageEvent.price == data.price,
             BrokerageEvent.currency == data.currency,
+            BrokerageEvent.split_ratio == data.split_ratio,
+            BrokerageEvent.target_instrument_id == target_instrument_id,
         )
         .limit(1)
     )
@@ -255,45 +262,54 @@ async def list_brokerage_events_page(
     return rows, total, page, size, sum_by_ccy
 
 
-async def rebuild_holding_from_events(
+async def rebuild_account_holdings_from_events(
     session: AsyncSession,
     account_id: uuid.UUID,
-    instrument_id: uuid.UUID,
 ) -> None:
     """
-    Rebuild a Holding row by replaying all BrokerageEvents for (account_id, instrument_id)
-    in chronological order.
+    Rebuild all holdings for a brokerage account from its event history.
 
-    If resulting quantity == 0, the holding is deleted.
-
-    Args:
-        session: SQLAlchemy async session.
-        account_id: Brokerage account UUID.
-        instrument_id: Instrument UUID.
+    Account-level replay is required for CONVERSION events because one event touches
+    both a source instrument and a target instrument.
     """
-    res = await session.execute(
+    event_rows = await session.execute(
         select(BrokerageEvent)
-        .where(
-            BrokerageEvent.brokerage_account_id == account_id,
-            BrokerageEvent.instrument_id == instrument_id,
-        )
+        .where(BrokerageEvent.brokerage_account_id == account_id)
         .order_by(BrokerageEvent.trade_at.asc(), BrokerageEvent.id.asc())
     )
-    events = list(res.scalars().all())
+    events = list(event_rows.scalars().all())
 
-    holding = await get_or_create_holding(session, account_id=account_id, instrument_id=instrument_id)
+    current_rows = await session.execute(select(Holding).where(Holding.account_id == account_id))
+    for holding in current_rows.scalars().all():
+        await session.delete(holding)
+    await session.flush()
 
-    holding.quantity = Decimal("0")
-    holding.avg_cost = Decimal("0")
+    states: dict[uuid.UUID, Holding] = {}
+
+    def state_for(instrument_id: uuid.UUID) -> Holding:
+        return states.setdefault(
+            instrument_id,
+            Holding(
+                account_id=account_id,
+                instrument_id=instrument_id,
+                quantity=Decimal("0"),
+                avg_cost=Decimal("0"),
+            ),
+        )
 
     for ev in events:
-        apply_event_to_holding(holding, ev)  
+        source = state_for(ev.instrument_id)
+        if ev.kind == BrokerageEventKind.CONVERSION and ev.target_instrument_id is not None:
+            target = state_for(ev.target_instrument_id)
+            apply_conversion_to_holding_pair(source, target, ev)
+        else:
+            apply_event_to_holding(source, ev)
 
-    if holding.quantity == 0:
-        await session.delete(holding)
-    else:
+    for holding in states.values():
+        if holding.quantity == 0:
+            continue
         session.add(holding)
-        await session.flush()
+    await session.flush()
 
 
 async def batch_patch_brokerage_events(
@@ -315,7 +331,7 @@ async def batch_patch_brokerage_events(
     """
 
     updated = 0
-    affected_pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+    affected_accounts: set[uuid.UUID] = set()
 
     for patch in items:
         ev_id = patch.get("id")
@@ -339,17 +355,18 @@ async def batch_patch_brokerage_events(
             ev.price = Decimal(str(patch["price"]))
         if "split_ratio" in patch and patch["split_ratio"] is not None:
             ev.split_ratio = Decimal(str(patch["split_ratio"]))
+        if "note" in patch:
+            ev.note = patch["note"]
 
         updated += 1
-        affected_pairs.add((ev.brokerage_account_id, ev.instrument_id))
+        affected_accounts.add(ev.brokerage_account_id)
         
     await session.flush()
 
-    for account_id, instrument_id in affected_pairs:
-        await rebuild_holding_from_events(
+    for account_id in affected_accounts:
+        await rebuild_account_holdings_from_events(
             session=session,
             account_id=account_id,
-            instrument_id=instrument_id,
         )
 
     return updated
@@ -383,15 +400,12 @@ async def delete_brokerage_event_and_rebuild_holding(
         return False
 
     account_id = ev.brokerage_account_id
-    instrument_id = ev.instrument_id
-
     await session.delete(ev)
     await session.flush()
 
-    await rebuild_holding_from_events(
+    await rebuild_account_holdings_from_events(
         session=session,
         account_id=account_id,
-        instrument_id=instrument_id,
     )
     return True
 

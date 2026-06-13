@@ -5,6 +5,8 @@ class Currency(str, Enum):
     PLN = "PLN"
     USD = "USD" 
     EUR = "EUR"
+    GBP = "GBP"
+    CHF = "CHF"
     
     
 class InstrumentType(str, Enum):

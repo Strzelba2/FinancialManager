@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import allure
 import pyotp
 import pytest
+from django.core.cache import cache
 from django.test import RequestFactory, SimpleTestCase, override_settings
 from rest_framework.exceptions import Throttled
 
@@ -21,7 +22,8 @@ from userauth.crypto import (
     wrap_dek,
 )
 from userauth.hmac_token import HmacToken
-from userauth.throttles import RegisterIPThrottle
+from userauth.throttles import CryptoBatchThrottle, RegisterIPThrottle
+from userauth.views import CryptoBatchView
 from userauth.two_factor import (
     TWO_FACTOR_ATTEMPTS_SESSION_KEY,
     TWO_FACTOR_PENDING_LOGIN_TTL_SECONDS,
@@ -381,6 +383,71 @@ class RegisterIPThrottleTests(SimpleTestCase):
             RegisterIPThrottle().allow_request(request, view=None)
 
         blocked_ip.objects.create.assert_called_once()
+
+
+@allure.epic("Unit Tests")
+@allure.feature("Session")
+@allure.story("Crypto batch endpoint uses a dedicated service throttle without blocking normal wallet bursts")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("auth", "security", "crypto", "throttle")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Protects the service-to-service crypto endpoint with a loose IP throttle. "
+    "The test verifies the normal burst needed for brokerage account setup and "
+    "ensures the endpoint is not left completely unthrottled."
+)
+@override_settings(
+    CACHES={
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "crypto-batch-throttle-tests",
+        }
+    }
+)
+class CryptoBatchThrottleTests(SimpleTestCase):
+    def setUp(self) -> None:
+        self.factory = RequestFactory()
+        cache.clear()
+
+    def tearDown(self) -> None:
+        cache.clear()
+
+    def _throttle(self, rate: str = "3/minute") -> CryptoBatchThrottle:
+        throttle = CryptoBatchThrottle()
+        throttle.rate = rate
+        throttle.num_requests, throttle.duration = throttle.parse_rate(rate)
+        return throttle
+
+    def test_crypto_batch_view_uses_dedicated_throttle(self) -> None:
+        self.assertEqual(CryptoBatchView.throttle_classes, [CryptoBatchThrottle])
+
+    def test_cache_key_is_scoped_to_wallet_service_ip(self) -> None:
+        request = self.factory.post(
+            "/crypto/batch",
+            REMOTE_ADDR="10.20.0.10",
+            HTTP_X_ORIGINAL_CLIENT_IP="10.20.0.11",
+        )
+
+        cache_key = self._throttle().get_cache_key(request, view=None)
+
+        self.assertIn("crypto_batch", cache_key)
+        self.assertIn("10.20.0.11", cache_key)
+
+    def test_allows_brokerage_setup_burst_and_limits_next_request(self) -> None:
+        view = CryptoBatchView()
+
+        allowed = []
+        for _ in range(3):
+            request = self.factory.post("/crypto/batch", REMOTE_ADDR="10.20.0.12")
+            allowed.append(self._throttle().allow_request(request, view))
+
+        denied = self._throttle().allow_request(
+            self.factory.post("/crypto/batch", REMOTE_ADDR="10.20.0.12"),
+            view,
+        )
+
+        self.assertEqual(allowed, [True, True, True])
+        self.assertFalse(denied)
 
     @patch("userauth.throttles.BlockedIP")
     @patch("rest_framework.throttling.AnonRateThrottle.throttle_request", side_effect=Throttled(detail="limit"), create=True)

@@ -1,14 +1,18 @@
 import pino from 'pino'
+import type { Logger } from 'pino'
 
-const isDev = process.env.NODE_ENV !== 'production'
+const isDevelopment = process.env.NODE_ENV === 'development'
+const loggerStore = globalThis as typeof globalThis & {
+  __financialManagerNextLogger?: Logger
+}
 
-export const logger = pino({
-  level: process.env.LOG_LEVEL ?? (isDev ? 'debug' : 'info'),
+export const logger = loggerStore.__financialManagerNextLogger ?? pino({
+  level: process.env.LOG_LEVEL ?? (isDevelopment ? 'debug' : 'info'),
   base: {
     service: 'frontend-next',
     env: process.env.NODE_ENV,
   },
-  ...(isDev
+  ...(isDevelopment
     ? {
         transport: {
           target: 'pino-pretty',
@@ -20,3 +24,5 @@ export const logger = pino({
       }
     : {}),
 })
+
+loggerStore.__financialManagerNextLogger = logger

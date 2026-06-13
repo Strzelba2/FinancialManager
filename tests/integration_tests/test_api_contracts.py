@@ -12,10 +12,34 @@ from tests.helpers.http import wait_for_response
 @allure.feature("Integration")
 @allure.story("FastAPI services publish expected OpenAPI route contracts")
 @pytest.mark.parametrize(
-    ("service_name", "base_url", "expected_paths"),
-    [
-        ("wallet", "wallet_url", ["/wallet/create/wallet", "/wallet/accounts", "/users/favorites/lists"]),
-        ("stock", "stock_url", ["/stock/markets", "/stock/instruments/options", "/stock/quotes/latest/bulk"]),
+        ("service_name", "base_url", "expected_paths"),
+        [
+        (
+            "wallet",
+            "wallet_url",
+            [
+                "/wallet/create/wallet",
+                "/wallet/accounts",
+                "/wallet/brokerage/event",
+                "/wallet/brokerage/events/import",
+                "/wallet/brokerage/history/import",
+                "/wallet/brokerage/{brokerage_account_id}/cash-links/ensure",
+                "/users/favorites/lists",
+            ],
+        ),
+        (
+            "stock",
+            "stock_url",
+            [
+                "/stock/markets",
+                "/stock/instruments",
+                "/stock/instruments/resolve",
+                "/stock/instruments/options",
+                "/stock/quotes/latest/bulk",
+                "/stock/ingest/start_manual",
+                "/stock/ingest/status",
+            ],
+        ),
     ],
 )
 def test_fastapi_services_publish_expected_openapi_paths(

@@ -7,6 +7,36 @@ export type ApiResult<T> =
   | { ok: true; data: T; status: number }
   | { ok: false; error: string; status: number }
 
+export type BrokerageImportRowStatus = 'created' | 'skipped_duplicate' | 'failed' | 'needs_review'
+
+export type BrokerageImportRowResult = {
+  row: number
+  status: BrokerageImportRowStatus
+  message?: string | null
+  brokerage_event_id?: string | null
+  transaction_id?: string | null
+  instrument_symbol?: string | null
+  instrument_name?: string | null
+  kind?: string | null
+  trade_at?: string | null
+  currency?: string | null
+  quantity?: string | number | null
+  held_quantity?: string | number | null
+  missing_quantity?: string | number | null
+  reason_code?: string | null
+}
+
+export type BrokerageImportSummary = {
+  total: number
+  created: number
+  cash_transactions_created: number
+  skipped_duplicates: number
+  needs_review: number
+  failed: number
+  errors: string[]
+  rows: BrokerageImportRowResult[]
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -77,7 +107,13 @@ export async function createAccount(
     currency: string
     account_number: string
     bank_id: string
-    iban: string
+    iban?: string
+    brokerage_cash_accounts?: Array<{
+      currency: string
+      account_number: string
+      name?: string
+      iban?: string
+    }>
   },
 ): Promise<ApiResult<AccountCreationResponse>> {
   return request<AccountCreationResponse>(`POST`, `/wallet/${walletId}/account/create`, payload, {
@@ -129,10 +165,35 @@ export async function createBrokerageEvent(
 export async function importBrokerageEvents(
   userId: string,
   payload: Record<string, unknown>,
-): Promise<ApiResult<{ created: number; failed: number; errors: string[] }>> {
-  return request<{ created: number; failed: number; errors: string[] }>(
+): Promise<ApiResult<BrokerageImportSummary>> {
+  return request<BrokerageImportSummary>(
     'POST',
     '/wallet/brokerage/events/import',
+    payload,
+    { 'X-User-Id': userId },
+  )
+}
+
+export async function importBrokerageHistory(
+  userId: string,
+  payload: Record<string, unknown>,
+): Promise<ApiResult<BrokerageImportSummary>> {
+  return request<BrokerageImportSummary>(
+    'POST',
+    '/wallet/brokerage/history/import',
+    payload,
+    { 'X-User-Id': userId },
+  )
+}
+
+export async function ensureBrokerageCashLinks(
+  userId: string,
+  brokerageAccountId: string,
+  payload: Record<string, unknown>,
+): Promise<ApiResult<unknown>> {
+  return request<unknown>(
+    'POST',
+    `/wallet/brokerage/${brokerageAccountId}/cash-links/ensure`,
     payload,
     { 'X-User-Id': userId },
   )
@@ -276,6 +337,8 @@ export async function listTransactions(
     date_from?: string
     date_to?: string
     q?: string
+    sort_by?: string
+    sort_dir?: string
   },
 ): Promise<ApiResult<TransactionPageOut>> {
   const qs = new URLSearchParams()
@@ -287,6 +350,8 @@ export async function listTransactions(
   if (params.date_from) qs.set('date_from', params.date_from)
   if (params.date_to) qs.set('date_to', params.date_to)
   if (params.q) qs.set('q', params.q)
+  if (params.sort_by) qs.set('sort_by', params.sort_by)
+  if (params.sort_dir) qs.set('sort_dir', params.sort_dir)
   return request<TransactionPageOut>('GET', `/wallet/transactions?${qs}`, undefined, { 'X-User-Id': userId })
 }
 
@@ -317,6 +382,7 @@ export type HoldingRowOut = {
   account_name: string
   instrument_id: string
   instrument_symbol: string
+  instrument_mic: string
   instrument_name: string
   instrument_currency: string
   quantity: string | number
@@ -376,10 +442,12 @@ export type ManagerBrokeragePosition = {
   mic?: string | null
   currency?: string
   value?: string | number
+  value_default_ccy?: string | number
   pnl_pct?: string | number
 }
 
 export type ManagerBrokerageCashAccount = {
+  deposit_account_id?: string
   name?: string
   ccy?: string
   available?: string | number
@@ -390,6 +458,7 @@ export type ManagerBrokerageAccount = {
   name: string
   ccy?: string
   sum_cash_accounts?: string | number
+  positions_count?: number
   positions_value?: string | number
   events_per_month?: number
   cash_accounts?: ManagerBrokerageCashAccount[]
@@ -577,6 +646,7 @@ export type BrokerageEventRowOut = {
   id: string
   brokerage_account_id: string
   instrument_id: string
+  target_instrument_id?: string | null
   brokerage_account_name: string
   instrument_symbol: string
   instrument_name: string | null
@@ -585,6 +655,7 @@ export type BrokerageEventRowOut = {
   price: string | number
   currency: string
   split_ratio: string | number
+  note?: string | null
   trade_at: string
 }
 
@@ -637,6 +708,16 @@ export async function deleteBrokerageEvent(userId: string, eventId: string): Pro
   const result = await request<unknown>(
     'DELETE',
     `/wallet/brokerage/events/${eventId}`,
+    undefined,
+    { 'X-User-Id': userId },
+  )
+  return result.ok
+}
+
+export async function deleteBrokerageAccount(userId: string, brokerageAccountId: string): Promise<boolean> {
+  const result = await request<unknown>(
+    'DELETE',
+    `/wallet/brokerage/${brokerageAccountId}`,
     undefined,
     { 'X-User-Id': userId },
   )

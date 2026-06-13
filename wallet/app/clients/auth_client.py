@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 from typing import Dict, Any, List
 import logging
@@ -47,13 +48,20 @@ class AuthCryptoClient:
             dict | None: The parsed JSON response if successful, or None if an error occurred.
         """
         logger.info(f"Sending crypto batch request for user: {username} with {len(data)} items")
-        resp = await self.client.post(
-            "/crypto/batch",
-            json={"username": username, "data": data},
-        )
-        
+        for attempt in range(3):
+            resp = await self.client.post(
+                "/crypto/batch",
+                json={"username": username, "data": data},
+            )
+            if resp.status_code == 429 and attempt < 2:
+                wait = (attempt + 1) * 0.4
+                logger.warning(f"Crypto server rate limited (429), retrying in {wait}s")
+                await asyncio.sleep(wait)
+                continue
+            break
+
         if not resp.is_success:
             logger.warning(f"Crypto server got response -> {resp.status_code}")
             return None
-        
+
         return resp.json()

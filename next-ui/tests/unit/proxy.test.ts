@@ -80,20 +80,20 @@ describe('next-ui proxy', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Forbidden' })
   })
 
-  it('redirects authenticated users away from login and register routes', async () => {
-    await nextUiUnitStory('Proxy redirects authenticated users away from auth forms', {
-      severity: 'critical',
-      tags: ['next-ui', 'auth', 'routing'],
+  it('does not trust spoofed identity headers on public auth routes', async () => {
+    await nextUiUnitStory('Proxy ignores spoofed identity headers on auth forms', {
+      severity: 'blocker',
+      tags: ['next-ui', 'auth', 'security', 'routing'],
     })
 
     const proxy = await loadProxy()
     const loginResponse = proxy(request('/login', 'next.localhost', { 'x-user': 'artur' }))
     const registerResponse = proxy(request('/register', 'next.localhost', { 'x-user': 'artur' }))
 
-    expect(loginResponse.status).toBe(307)
-    expect(loginResponse.headers.get('location')).toBe('http://next.localhost/home')
-    expect(registerResponse.status).toBe(307)
-    expect(registerResponse.headers.get('location')).toBe('http://next.localhost/home')
+    expect(loginResponse.status).toBe(200)
+    expect(loginResponse.headers.get('x-middleware-next')).toBe('1')
+    expect(registerResponse.status).toBe(200)
+    expect(registerResponse.headers.get('x-middleware-next')).toBe('1')
   })
 
   it('keeps the two-factor route public even if an identity header is present', async () => {

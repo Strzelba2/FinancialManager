@@ -1,10 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { http } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 
-import { sortRows, TransactionsPage } from '@/features/wallet/components/TransactionsPage'
-import type { SortDir, SortField, TxRow } from '@/features/wallet/components/TransactionsPage'
+import { TransactionsPage } from '@/features/wallet/components/TransactionsPage'
 import { nextUiUnitStory } from '../allure'
 
 vi.mock('next/navigation', () => ({
@@ -15,24 +14,15 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }))
 
-function makeRow(overrides: Partial<TxRow> & { id: string }): TxRow {
-  return {
-    dateFmt: '01.01.2024, 12:00',
-    dateRaw: '2024-01-01T12:00:00',
-    description: 'Test',
-    accountName: 'Konto',
-    accountId: 'acc-1',
-    category: null,
-    status: null,
-    amount: '100',
-    balanceBefore: '1000',
-    balanceAfter: '1100',
-    ccy: 'PLN',
-    ...overrides,
-  }
+type RowInput = {
+  id: string
+  date: string
+  accountName: string
+  category: string | null
+  status: string | null
 }
 
-function pageWithRows(items: { id: string; date: string; accountName: string; category: string | null; status: string | null }[]) {
+function pageWithRows(items: RowInput[], page = 1, total = items.length) {
   return new Response(
     JSON.stringify({
       items: items.map((it) => ({
@@ -48,8 +38,8 @@ function pageWithRows(items: { id: string; date: string; accountName: string; ca
         status: it.status,
         ccy: 'PLN',
       })),
-      total: items.length,
-      page: 1,
+      total,
+      page,
       size: 40,
       sum_by_ccy: { PLN: 100 * items.length },
     }),
@@ -57,70 +47,26 @@ function pageWithRows(items: { id: string; date: string; accountName: string; ca
   )
 }
 
-// ── Pure sort logic ─────────────────────────────────────────────────────────
+const unsortedRows: RowInput[] = [
+  { id: 'b', date: '2024-03-01T00:00:00', accountName: 'mBank', category: null, status: null },
+  { id: 'a', date: '2024-01-01T00:00:00', accountName: 'Alior', category: null, status: null },
+]
 
-describe('sortRows – pure function', () => {
-  const rows: TxRow[] = [
-    makeRow({ id: '1', dateRaw: '2024-03-01T00:00:00', accountName: 'Żabka', category: 'FOOD', status: 'EXPENSE' }),
-    makeRow({ id: '2', dateRaw: '2024-01-15T00:00:00', accountName: 'Alior', category: 'FUEL', status: 'INCOME' }),
-    makeRow({ id: '3', dateRaw: '2024-06-10T00:00:00', accountName: 'mBank', category: null, status: null }),
-  ]
+const dateAscRows: RowInput[] = [
+  { id: 'a', date: '2024-01-01T00:00:00', accountName: 'Alior', category: null, status: null },
+  { id: 'b', date: '2024-03-01T00:00:00', accountName: 'mBank', category: null, status: null },
+]
 
-  // FOOD → 'Żywność', FUEL → 'Paliwo', null → ''
-  // STATUS: EXPENSE → 'Wydatek', INCOME → 'Przychód', null → ''
-  const cases: Array<{ field: SortField; dir: SortDir; expectedIds: string[] }> = [
-    { field: 'date',     dir: 'asc',  expectedIds: ['2', '1', '3'] },
-    { field: 'date',     dir: 'desc', expectedIds: ['3', '1', '2'] },
-    { field: 'account',  dir: 'asc',  expectedIds: ['2', '3', '1'] },
-    { field: 'account',  dir: 'desc', expectedIds: ['1', '3', '2'] },
-    { field: 'category', dir: 'asc',  expectedIds: ['3', '2', '1'] }, // '' < 'Paliwo' < 'Żywność'
-    { field: 'category', dir: 'desc', expectedIds: ['1', '2', '3'] },
-    { field: 'status',   dir: 'asc',  expectedIds: ['3', '2', '1'] }, // '' < 'Przychód' < 'Wydatek'
-    { field: 'status',   dir: 'desc', expectedIds: ['1', '2', '3'] },
-  ]
+const dateDescRows: RowInput[] = [
+  { id: 'b', date: '2024-03-01T00:00:00', accountName: 'mBank', category: null, status: null },
+  { id: 'a', date: '2024-01-01T00:00:00', accountName: 'Alior', category: null, status: null },
+]
 
-  for (const { field, dir, expectedIds } of cases) {
-    it(`sorts by "${field}" ${dir}`, async () => {
-      await nextUiUnitStory(`Wallet transactions sortRows sorts by ${field} ${dir}`, {
-        severity: 'normal',
-        tags: ['wallet', 'transactions', 'sorting', 'next-ui'],
-      })
-
-      const result = sortRows(rows, field, dir)
-      expect(result.map((r) => r.id)).toEqual(expectedIds)
-    })
-  }
-
-  it('does not mutate the source array', async () => {
-    await nextUiUnitStory('Wallet transactions sortRows does not mutate the source array', {
-      severity: 'normal',
-      tags: ['wallet', 'transactions', 'sorting', 'next-ui'],
-    })
-
-    const original = [...rows]
-    sortRows(rows, 'date', 'asc')
-    expect(rows.map((r) => r.id)).toEqual(original.map((r) => r.id))
-  })
-})
-
-// ── Component: header click behavior ────────────────────────────────────────
-
-const server = setupServer()
-
-describe('TransactionsPage – sort header clicks', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
+describe('TransactionsPage – server-side sort header clicks', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     server.resetHandlers()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('sort headers are visible when the table has rows', async () => {
     await nextUiUnitStory('Wallet transactions sortable column headers are present when rows exist', {
       severity: 'critical',
@@ -144,111 +90,138 @@ describe('TransactionsPage – sort header clicks', () => {
     expect(screen.getByRole('button', { name: /Sortuj po: Status/i })).toBeDefined()
   })
 
-  it('first click on a column header sorts rows ascending', async () => {
-    await nextUiUnitStory('Wallet transactions first click on a column header sorts rows ascending', {
+  it('first click on a column header requests ascending server-side sorting', async () => {
+    await nextUiUnitStory('Wallet transactions first sort click requests ascending server-side order', {
       severity: 'critical',
-      tags: ['wallet', 'transactions', 'sorting', 'next-ui'],
+      tags: ['wallet', 'transactions', 'sorting', 'next-ui', 'api-contract'],
     })
 
+    const requests: URL[] = []
     server.use(
-      http.get('*/api/wallet/transactions', () =>
-        pageWithRows([
-          { id: 'b', date: '2024-03-01T00:00:00', accountName: 'mBank', category: null, status: null },
-          { id: 'a', date: '2024-01-01T00:00:00', accountName: 'Alior', category: null, status: null },
-        ]),
-      ),
+      http.get('*/api/wallet/transactions', ({ request }) => {
+        const url = new URL(request.url)
+        requests.push(url)
+        if (url.searchParams.get('sort_by') === 'date' && url.searchParams.get('sort_dir') === 'asc') {
+          return pageWithRows(dateAscRows)
+        }
+        return pageWithRows(unsortedRows)
+      }),
     )
 
     render(<TransactionsPage accounts={[]} brokerageAccounts={[]} />)
-    await waitFor(() => screen.getByText('Opis a'))
+    await waitFor(() => screen.getByText('Opis b'))
 
     fireEvent.click(screen.getByRole('button', { name: /Sortuj po: Data/i }))
+
+    await waitFor(() => {
+      expect(requests.at(-1)?.searchParams.get('sort_by')).toBe('date')
+      expect(requests.at(-1)?.searchParams.get('sort_dir')).toBe('asc')
+    })
 
     const cells = screen.getAllByText(/^Opis /)
     expect(cells.at(0)?.textContent).toBe('Opis a')
     expect(cells.at(1)?.textContent).toBe('Opis b')
   })
 
-  it('second click on the same header reverses the sort direction to descending', async () => {
-    await nextUiUnitStory('Wallet transactions second click on a column header reverses the sort direction', {
+  it('second click on the same header requests descending server-side sorting', async () => {
+    await nextUiUnitStory('Wallet transactions second sort click requests descending server-side order', {
       severity: 'normal',
-      tags: ['wallet', 'transactions', 'sorting', 'next-ui'],
+      tags: ['wallet', 'transactions', 'sorting', 'next-ui', 'api-contract'],
     })
 
+    const requests: URL[] = []
     server.use(
-      http.get('*/api/wallet/transactions', () =>
-        pageWithRows([
-          { id: 'b', date: '2024-03-01T00:00:00', accountName: 'mBank', category: null, status: null },
-          { id: 'a', date: '2024-01-01T00:00:00', accountName: 'Alior', category: null, status: null },
-        ]),
-      ),
+      http.get('*/api/wallet/transactions', ({ request }) => {
+        const url = new URL(request.url)
+        requests.push(url)
+        if (url.searchParams.get('sort_by') === 'date' && url.searchParams.get('sort_dir') === 'asc') {
+          return pageWithRows(dateAscRows)
+        }
+        if (url.searchParams.get('sort_by') === 'date' && url.searchParams.get('sort_dir') === 'desc') {
+          return pageWithRows(dateDescRows)
+        }
+        return pageWithRows(unsortedRows)
+      }),
     )
 
     render(<TransactionsPage accounts={[]} brokerageAccounts={[]} />)
-    await waitFor(() => screen.getByText('Opis a'))
+    await waitFor(() => screen.getByText('Opis b'))
 
     const btn = screen.getByRole('button', { name: /Sortuj po: Data/i })
     fireEvent.click(btn)
+    await waitFor(() => expect(requests.at(-1)?.searchParams.get('sort_dir')).toBe('asc'))
     fireEvent.click(btn)
+
+    await waitFor(() => {
+      expect(requests.at(-1)?.searchParams.get('sort_by')).toBe('date')
+      expect(requests.at(-1)?.searchParams.get('sort_dir')).toBe('desc')
+    })
 
     const cells = screen.getAllByText(/^Opis /)
     expect(cells.at(0)?.textContent).toBe('Opis b')
     expect(cells.at(1)?.textContent).toBe('Opis a')
   })
 
-  it('clicking a different header resets the sort direction to ascending', async () => {
-    await nextUiUnitStory('Wallet transactions switching sort column resets direction to ascending', {
+  it('clicking a different header resets the requested sort direction to ascending', async () => {
+    await nextUiUnitStory('Wallet transactions switching sort column requests ascending direction', {
       severity: 'normal',
-      tags: ['wallet', 'transactions', 'sorting', 'next-ui'],
+      tags: ['wallet', 'transactions', 'sorting', 'next-ui', 'api-contract'],
     })
 
+    const requests: URL[] = []
     server.use(
-      http.get('*/api/wallet/transactions', () =>
-        pageWithRows([
-          { id: 'b', date: '2024-03-01T00:00:00', accountName: 'mBank', category: null, status: null },
-          { id: 'a', date: '2024-01-01T00:00:00', accountName: 'Alior', category: null, status: null },
-        ]),
-      ),
+      http.get('*/api/wallet/transactions', ({ request }) => {
+        const url = new URL(request.url)
+        requests.push(url)
+        return pageWithRows(unsortedRows)
+      }),
     )
 
     render(<TransactionsPage accounts={[]} brokerageAccounts={[]} />)
-    await waitFor(() => screen.getByText('Opis a'))
+    await waitFor(() => screen.getByText('Opis b'))
 
     const dateBtn = screen.getByRole('button', { name: /Sortuj po: Data/i })
     fireEvent.click(dateBtn)
+    await waitFor(() => expect(requests.at(-1)?.searchParams.get('sort_dir')).toBe('asc'))
     fireEvent.click(dateBtn)
+    await waitFor(() => expect(requests.at(-1)?.searchParams.get('sort_dir')).toBe('desc'))
 
     fireEvent.click(screen.getByRole('button', { name: /Sortuj po: Konto/i }))
 
-    const cells = screen.getAllByText(/^Opis /)
-    expect(cells.at(0)?.textContent).toBe('Opis a')
-    expect(cells.at(1)?.textContent).toBe('Opis b')
+    await waitFor(() => {
+      expect(requests.at(-1)?.searchParams.get('sort_by')).toBe('account')
+      expect(requests.at(-1)?.searchParams.get('sort_dir')).toBe('asc')
+    })
   })
 
-  it('sorts by account name alphabetically', async () => {
-    await nextUiUnitStory('Wallet transactions sorting by account column orders rows alphabetically', {
-      severity: 'normal',
-      tags: ['wallet', 'transactions', 'sorting', 'next-ui'],
+  it('server-side sorting resets pagination to the first page', async () => {
+    await nextUiUnitStory('Wallet transactions sort change resets pagination before requesting rows', {
+      severity: 'critical',
+      tags: ['wallet', 'transactions', 'sorting', 'pagination', 'next-ui', 'api-contract'],
     })
 
+    const requests: URL[] = []
     server.use(
-      http.get('*/api/wallet/transactions', () =>
-        pageWithRows([
-          { id: 'z', date: '2024-01-01T00:00:00', accountName: 'Żabka', category: null, status: null },
-          { id: 'a', date: '2024-01-02T00:00:00', accountName: 'Alior', category: null, status: null },
-          { id: 'm', date: '2024-01-03T00:00:00', accountName: 'mBank', category: null, status: null },
-        ]),
-      ),
+      http.get('*/api/wallet/transactions', ({ request }) => {
+        const url = new URL(request.url)
+        requests.push(url)
+        return pageWithRows(unsortedRows, Number(url.searchParams.get('page') ?? '1'), 120)
+      }),
     )
 
     render(<TransactionsPage accounts={[]} brokerageAccounts={[]} />)
-    await waitFor(() => screen.getByText('Opis a'))
+    await waitFor(() => screen.getByText('Opis b'))
 
-    fireEvent.click(screen.getByRole('button', { name: /Sortuj po: Konto/i }))
+    fireEvent.change(screen.getByLabelText(/Numer strony/i), { target: { value: '3' } })
+    fireEvent.blur(screen.getByLabelText(/Numer strony/i))
+    await waitFor(() => expect(requests.at(-1)?.searchParams.get('page')).toBe('3'))
 
-    const cells = screen.getAllByText(/^Opis /)
-    expect(cells.at(0)?.textContent).toBe('Opis a')
-    expect(cells.at(1)?.textContent).toBe('Opis m')
-    expect(cells.at(2)?.textContent).toBe('Opis z')
+    fireEvent.click(screen.getByRole('button', { name: /Sortuj po: Data/i }))
+
+    await waitFor(() => {
+      expect(requests.at(-1)?.searchParams.get('page')).toBe('1')
+      expect(requests.at(-1)?.searchParams.get('sort_by')).toBe('date')
+      expect(requests.at(-1)?.searchParams.get('sort_dir')).toBe('asc')
+    })
   })
 })

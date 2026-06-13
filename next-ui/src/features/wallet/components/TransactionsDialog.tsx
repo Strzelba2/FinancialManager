@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useTransition } from 'react'
-import { Landmark, LoaderCircle, Save, Upload, WalletCards } from 'lucide-react'
+import { Info, Landmark, LoaderCircle, Save, Upload, WalletCards } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import type { BrokerageImportSummary } from '@/lib/api/wallet'
 
 export type TransactionAccountOpt = {
   id: string
@@ -57,7 +58,104 @@ type CapitalGainKind =
   | 'METAL_REALIZED_PNL'
   | 'REAL_ESTATE_REALIZED_PNL'
 
-type ImportMode = 'transactions' | 'brokerage_events'
+type ImportMode = 'transactions' | 'brokerage_events' | 'brokerage_history' | 'full'
+
+type ParserInstruction = {
+  title: string
+  steps: string[]
+  columns?: { label: string; name: string }[]
+}
+
+type ParserInstructionsByMode = {
+  transactions?: ParserInstruction
+  brokerage_events?: ParserInstruction
+  brokerage_history?: ParserInstruction
+  full?: ParserInstruction
+}
+
+const PARSER_INSTRUCTIONS: Record<string, ParserInstructionsByMode> = {
+  'IngMakler CSV': {
+    transactions: {
+      title: 'Jak przygotować plik CSV z ING Makler (transakcje)',
+      steps: [
+        'Usuń kolumnę z numeracją wierszy (pierwsza kolumna z liczbami porządkowymi).',
+        'Usuń pierwszy wiersz (nagłówek banku) oraz ostatni wiersz (podsumowanie).',
+        'Upewnij się, że pierwszy wiersz zawiera nagłówki kolumn zgodnie z listą poniżej.',
+        'Kolejność transakcji zostanie ułożona automatycznie według daty i salda po operacji.',
+        'Podziel plik według waluty — jeden plik = jedno konto / jedna waluta.',
+      ],
+      columns: [
+        { label: 'a)', name: 'Data transakcji' },
+        { label: 'b)', name: 'Typ transakcji' },
+        { label: 'c)', name: 'Opis transakcji' },
+        { label: 'd)', name: 'Kwota transakcji' },
+        { label: 'e)', name: 'Saldo po operacji' },
+        { label: 'f)', name: 'Waluta' },
+      ],
+    },
+    brokerage_events: {
+      title: 'Jak przygotować plik CSV z ING Makler (operacje maklerskie)',
+      steps: [
+        'Użyj eksportu historii operacji z rachunku maklerskiego ING (nie wyciągu konta gotówkowego).',
+        'Upewnij się, że pierwszy wiersz zawiera nagłówki kolumn zgodnie z listą poniżej — nazwy muszą być dokładne.',
+        'Parser rozpoznaje tylko operacje kupna i sprzedaży — inne typy (np. prowizje, dywidendy jako oddzielne wiersze) są pomijane.',
+        'Instrument w kolumnie "Instrument" musi być skrótem rozpoznawalnym przez serwis notowań (np. PKN, CDR).',
+      ],
+      columns: [
+        { label: 'a)', name: 'Data transakcji' },
+        { label: 'b)', name: 'Typ Transakcji' },
+        { label: 'c)', name: 'Instrument' },
+        { label: 'd)', name: 'Ilość' },
+        { label: 'e)', name: 'Kwota z Prowizją' },
+        { label: 'f)', name: 'Waluta' },
+      ],
+    },
+  },
+  'BossaMakler CSV': {
+    brokerage_history: {
+      title: 'Jak przygotować plik CSV z BoSSA',
+      steps: [
+        'Użyj jednego pliku historii finansowej z kolumnami gotówkowymi i maklerskimi.',
+        'Plik powinien obejmować pełną historię od najstarszych wierszy na dole do najnowszych u góry.',
+        'Kolumna "Saldo po operacji" może być pusta — parser wyliczy ją osobno dla PLN, USD i EUR.',
+        'Backend nadal waliduje łańcuch sald osobno dla PLN, USD i EUR przed zapisem.',
+        'Jeżeli plik zawiera USD lub EUR, konto maklerskie musi mieć podpięte subkonto gotówkowe w tej walucie.',
+      ],
+      columns: [
+        { label: 'a)', name: 'data' },
+        { label: 'b)', name: 'tytuł operacji' },
+        { label: 'c)', name: 'szczegóły' },
+        { label: 'd)', name: 'kwota' },
+        { label: 'e)', name: 'Saldo po operacji (opcjonalnie)' },
+        { label: 'f)', name: 'waluta' },
+      ],
+    },
+  },
+  'SaxoMakler CSV': {
+    full: {
+      title: 'Jak przygotować plik CSV z Saxo',
+      steps: [
+        'Wyeksportuj historię z Saxo i zapisz jako plik CSV.',
+        'Podziel transakcje na osobne pliki według waluty — np. osobno PLN i osobno EUR (jeden plik = jedno konto / jedna waluta).',
+        'Eksport zawiera już wymagane kolumny — nie zmieniaj nazw nagłówków.',
+        'Tryb „Pełny import" tworzy jednocześnie transakcje gotówkowe (w walucie pliku) oraz operacje maklerskie (pozycje w walucie instrumentu).',
+        'Wskaż konto gotówkowe w walucie pliku oraz pasujący rachunek maklerski.',
+        'Instrumenty muszą istnieć w serwisie notowań — w razie braku dodaj je przed importem.',
+      ],
+      columns: [
+        { label: 'a)', name: 'Data transakcji' },
+        { label: 'b)', name: 'Zdarzenie' },
+        { label: 'c)', name: 'Kwota' },
+        { label: 'd)', name: 'Saldo po operacji' },
+        { label: 'e)', name: 'Waluta' },
+        { label: 'f)', name: 'Instrument' },
+        { label: 'g)', name: 'Symbol instrumentu' },
+        { label: 'h)', name: 'Instrument ISIN' },
+        { label: 'i)', name: 'Waluta instrumentu' },
+      ],
+    },
+  },
+}
 
 type ParserMeta = {
   name: string
@@ -65,6 +163,16 @@ type ParserMeta = {
   accept: string
   upload_label: string
   supports_brokerage_events: boolean
+  supports_brokerage_history?: boolean
+  supports_full_import?: boolean
+}
+
+function getImportModeForParser(parser: ParserMeta | null, currentMode: ImportMode): ImportMode {
+  if (!parser) return 'transactions'
+  if (parser.supports_brokerage_history) return 'brokerage_history'
+  if (!parser.supports_brokerage_events) return 'transactions'
+  if (currentMode === 'full') return parser.supports_full_import ? 'full' : 'transactions'
+  return currentMode === 'brokerage_history' ? 'transactions' : currentMode
 }
 
 type ParsedTransactionRow = {
@@ -77,16 +185,49 @@ type ParsedTransactionRow = {
   capital_gain_kind?: string | null
 }
 
+// Response of POST /api/wallet/transactions (cash import): { success, summary }.
+type CashImportResult = {
+  summary?: { created?: number; skipped_duplicates?: number }
+}
+
+type BrokerageKind = 'BUY' | 'SELL' | 'DIV' | 'SPLIT' | 'ADJUSTMENT'
+
+// Instrument/quote (trade) currency — superset of the base reporting currency.
+type TradeCurrency = 'PLN' | 'USD' | 'EUR' | 'GBP' | 'CHF'
+
 type ParsedBrokerageRow = {
   trade_at: string
   instrument_symbol: string
   instrument_mic: string
   instrument_name?: string | null
-  kind: 'BUY' | 'SELL' | 'DIV' | 'SPLIT'
+  kind: BrokerageKind
   quantity: string
   price: string
-  currency: 'PLN' | 'USD' | 'EUR'
+  currency: TradeCurrency
   split_ratio: string
+  note?: string | null
+  // Account (base) settlement currency + FX rate (instrument -> settlement).
+  settlement_currency?: 'PLN' | 'USD' | 'EUR' | null
+  fx_rate?: string | null
+}
+
+type ParsedBrokerageHistoryRow = {
+  row_number: number
+  operation_type: string
+  trade_at: string
+  currency: 'PLN' | 'USD' | 'EUR'
+  amount: string
+  amount_after: string
+  description: string
+  capital_gain_kind?: string | null
+  instrument_symbol?: string | null
+  instrument_mic?: string | null
+  instrument_name?: string | null
+  event_kind?: BrokerageKind | 'CONVERSION' | null
+  quantity?: string | null
+  price?: string | null
+  split_ratio?: string | null
+  review_reason?: string | null
 }
 
 type MarketOpt = {
@@ -159,6 +300,32 @@ function formatMoneyLabel(value: string | number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })
+}
+
+function formatBrokerageImportRowError(row: BrokerageImportSummary['rows'][number]): string {
+  if (row.reason_code === 'holding_quantity_exceeded') {
+    const instrument = row.instrument_symbol ?? row.instrument_name ?? 'instrument'
+    const kind = row.kind ?? 'operacja'
+    const date = row.trade_at ? formatDateLabel(row.trade_at) : 'brak daty'
+    const quantity = row.quantity !== null && row.quantity !== undefined ? formatMoneyLabel(row.quantity) : '—'
+    const held = row.held_quantity !== null && row.held_quantity !== undefined ? formatMoneyLabel(row.held_quantity) : '—'
+    const missing = row.missing_quantity !== null && row.missing_quantity !== undefined ? formatMoneyLabel(row.missing_quantity) : '—'
+    return `Row ${row.row}: ${instrument}, ${kind} ${quantity}, ${date}, posiadane ${held}, brakuje ${missing}`
+  }
+
+  return row.message ?? `Row ${row.row}: operacja nie została zaimportowana`
+}
+
+function isHistoryTradeRow(row: ParsedBrokerageHistoryRow): boolean {
+  return ['BUY', 'SELL', 'FORCED_SELL'].includes(row.operation_type.toUpperCase())
+}
+
+function formatHistoryBlockingRow(row: ParsedBrokerageHistoryRow): string {
+  const instrument = row.instrument_symbol ?? row.instrument_name ?? row.description
+  if (row.operation_type.toUpperCase() === 'NEEDS_REVIEW') {
+    return `Row ${row.row_number}: ${instrument} — ${row.review_reason ?? 'wymaga ręcznego sprawdzenia'}`
+  }
+  return `Row ${row.row_number}: ${instrument} — brak symbolu lub rynku instrumentu`
 }
 
 function groupConsecutiveRowsByTime(rows: ParsedTransactionRow[]): ParsedTransactionRow[][] {
@@ -477,9 +644,11 @@ function ImportTab({
   const [parseError, setParseError] = useState<string>()
   const [txRows, setTxRows] = useState<ParsedTransactionRow[]>([])
   const [brokerRows, setBrokerRows] = useState<ParsedBrokerageRow[]>([])
+  const [historyRows, setHistoryRows] = useState<ParsedBrokerageHistoryRow[]>([])
   const [importSummary, setImportSummary] = useState<string>()
   const [isParsing, setIsParsing] = useState(false)
   const [isImporting, startImportTransition] = useTransition()
+  const [showInstructions, setShowInstructions] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -498,8 +667,13 @@ function ImportTab({
         return
       }
 
+      const defaultParser = data[0] ?? null
+
       setParsers(data)
-      setSelectedParserName((current) => current || data[0]?.name || '')
+      if (!selectedParserName && defaultParser) {
+        setSelectedParserName(defaultParser.name)
+        setImportMode(getImportModeForParser(defaultParser, importMode))
+      }
     }
 
     void loadParsers()
@@ -507,7 +681,7 @@ function ImportTab({
     return () => {
       cancelled = true
     }
-  }, [open, parsersLoaded])
+  }, [open, parsersLoaded, selectedParserName, importMode])
 
   const selectedParser = useMemo(
     () => parsers.find((parser) => parser.name === selectedParserName) ?? null,
@@ -525,7 +699,7 @@ function ImportTab({
   )
 
   const importBalanceWarning = useMemo(() => {
-    if (importMode !== 'transactions' || normalizedTxRows.length === 0 || !selectedAccount?.lastTransactionAt || !selectedAccount.lastBalanceAfter) {
+    if ((importMode !== 'transactions' && importMode !== 'full') || normalizedTxRows.length === 0 || !selectedAccount?.lastTransactionAt || !selectedAccount.lastBalanceAfter) {
       return null
     }
 
@@ -571,11 +745,37 @@ function ImportTab({
     }
   }, [importMode, normalizedTxRows, selectedAccount])
 
+  const historyBlockingRows = useMemo(() => {
+    if (importMode !== 'brokerage_history') return []
+    return historyRows.filter((row) => (
+      row.operation_type.toUpperCase() === 'NEEDS_REVIEW' ||
+      (isHistoryTradeRow(row) && (!row.instrument_symbol?.trim() || !row.instrument_mic?.trim()))
+    ))
+  }, [historyRows, importMode])
+
+  const importModeOptions = useMemo(() => {
+    if (selectedParser?.supports_brokerage_history) {
+      return [{ value: 'brokerage_history' as const, label: 'Pełna historia maklerska' }]
+    }
+    if (selectedParser?.supports_brokerage_events) {
+      const options: { value: ImportMode; label: string }[] = [
+        { value: 'transactions', label: 'Import jako transakcje gotówkowe' },
+        { value: 'brokerage_events', label: 'Import jako operacje maklerskie' },
+      ]
+      if (selectedParser.supports_full_import) {
+        options.push({ value: 'full', label: 'Pełny import (transakcje + operacje maklerskie)' })
+      }
+      return options
+    }
+    return []
+  }, [selectedParser])
+
   function resetParsedState() {
     setParseError(undefined)
     setImportSummary(undefined)
     setTxRows([])
     setBrokerRows([])
+    setHistoryRows([])
   }
 
   async function handleParse() {
@@ -591,15 +791,44 @@ function ImportTab({
     resetParsedState()
     setIsParsing(true)
 
-    const formData = new FormData()
-    formData.append('parser_name', selectedParserName)
-    formData.append('mode', importMode)
-    formData.append('file', selectedFile)
+    const file = selectedFile
+    const parserName = selectedParserName
 
-    const { ok, data, error } = await apiJson<{ rows: ParsedTransactionRow[] | ParsedBrokerageRow[] }>('/api/wallet/import/parse', {
-      method: 'POST',
-      body: formData,
-    })
+    const parseWithMode = (mode: ImportMode) => {
+      const formData = new FormData()
+      formData.append('parser_name', parserName)
+      formData.append('mode', mode)
+      formData.append('file', file)
+      return apiJson<{ rows: ParsedTransactionRow[] | ParsedBrokerageRow[] | ParsedBrokerageHistoryRow[] }>(
+        '/api/wallet/import/parse',
+        { method: 'POST', body: formData },
+      )
+    }
+
+    if (importMode === 'full') {
+      const cash = await parseWithMode('transactions')
+      const events = await parseWithMode('brokerage_events')
+
+      setIsParsing(false)
+
+      if (!cash.ok || !cash.data) {
+        setParseError(cash.error || 'Nie udało się sparsować transakcji gotówkowych')
+        return
+      }
+      if (!events.ok || !events.data) {
+        setParseError(events.error || 'Nie udało się sparsować operacji maklerskich')
+        return
+      }
+
+      const cashRows = cash.data.rows as ParsedTransactionRow[]
+      const eventRows = events.data.rows as ParsedBrokerageRow[]
+      setTxRows(cashRows)
+      setBrokerRows(eventRows)
+      toast.success(`Sparsowano ${cashRows.length} transakcji i ${eventRows.length} operacji maklerskich`)
+      return
+    }
+
+    const { ok, data, error } = await parseWithMode(importMode)
 
     setIsParsing(false)
 
@@ -614,6 +843,12 @@ function ImportTab({
       return
     }
 
+    if (importMode === 'brokerage_history') {
+      setHistoryRows(data.rows as ParsedBrokerageHistoryRow[])
+      toast.success(`Sparowano ${data.rows.length} wierszy historii BoSSA`)
+      return
+    }
+
     setBrokerRows(data.rows as ParsedBrokerageRow[])
     toast.success(`Sparowano ${data.rows.length} operacji maklerskich`)
   }
@@ -623,6 +858,84 @@ function ImportTab({
     setImportSummary(undefined)
 
     startImportTransition(async () => {
+      if (importMode === 'full') {
+        if (!accountId) {
+          setParseError('Wybierz konto dla transakcji gotówkowych')
+          return
+        }
+        if (!brokerageAccountId) {
+          setParseError('Wybierz rachunek maklerski dla operacji')
+          return
+        }
+        if (normalizedTxRows.length === 0 && brokerRows.length === 0) {
+          setParseError('Najpierw sparsuj plik')
+          return
+        }
+
+        const messages: string[] = []
+
+        if (normalizedTxRows.length > 0) {
+          const { ok, data, error } = await apiJson<CashImportResult>('/api/wallet/transactions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              account_id: accountId,
+              transactions: normalizedTxRows,
+              skip_duplicates: true,
+            }),
+          })
+
+          if (!ok) {
+            setParseError(error || 'Nie udało się zaimportować transakcji gotówkowych')
+            return
+          }
+          const createdCash = data?.summary?.created ?? normalizedTxRows.length
+          const skippedCash = data?.summary?.skipped_duplicates ?? 0
+          messages.push(`${createdCash} transakcji gotówkowych${skippedCash ? ` (pominięto ${skippedCash})` : ''}`)
+        }
+
+        if (brokerRows.length > 0) {
+          const { ok, data, error } = await apiJson<BrokerageImportSummary>('/api/wallet/brokerage/events/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              brokerage_account_id: brokerageAccountId,
+              events: brokerRows,
+            }),
+          })
+
+          if (!ok || !data) {
+            setParseError(
+              (error || 'Nie udało się zaimportować operacji maklerskich')
+              + (messages.length > 0 ? `\n(Transakcje gotówkowe zaimportowano: ${messages.join(', ')})` : ''),
+            )
+            return
+          }
+
+          const skipped = data.skipped_duplicates ?? 0
+          messages.push(`${data.created} operacji maklerskich (pominięto ${skipped}, błędów ${data.failed})`)
+
+          if (data.failed > 0) {
+            setImportSummary(`Zaimportowano: ${messages.join(' i ')}`)
+            const failedRows = data.rows.filter((row) => row.status === 'failed')
+            setParseError(
+              failedRows.length > 0
+                ? failedRows.map(formatBrokerageImportRowError).join('\n')
+                : data.errors.length > 0
+                  ? data.errors.join('\n')
+                  : 'Część operacji maklerskich nie została zaimportowana',
+            )
+            return
+          }
+        }
+
+        const summary = `Zaimportowano: ${messages.join(' i ')}`
+        setImportSummary(summary)
+        toast.success(summary)
+        onSuccess()
+        return
+      }
+
       if (importMode === 'transactions') {
         if (!accountId) {
           setParseError('Wybierz konto dla importowanych transakcji')
@@ -633,12 +946,13 @@ function ImportTab({
           return
         }
 
-        const { ok, error } = await apiJson('/api/wallet/transactions', {
+        const { ok, data, error } = await apiJson<CashImportResult>('/api/wallet/transactions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             account_id: accountId,
             transactions: normalizedTxRows,
+            skip_duplicates: true,
           }),
         })
 
@@ -647,7 +961,11 @@ function ImportTab({
           return
         }
 
-        toast.success(`Zaimportowano ${txRows.length} transakcji`)
+        const createdCash = data?.summary?.created ?? txRows.length
+        const skippedCash = data?.summary?.skipped_duplicates ?? 0
+        toast.success(
+          `Zaimportowano ${createdCash} transakcji${skippedCash ? `, pominięto ${skippedCash} duplikatów` : ''}`,
+        )
         onSuccess()
         return
       }
@@ -656,12 +974,59 @@ function ImportTab({
         setParseError('Wybierz rachunek maklerski dla importu')
         return
       }
+      if (importMode === 'brokerage_history') {
+        if (historyRows.length === 0) {
+          setParseError('Najpierw sparsuj plik')
+          return
+        }
+        if (historyBlockingRows.length > 0) {
+          setParseError(historyBlockingRows.map(formatHistoryBlockingRow).join('\n'))
+          return
+        }
+
+        const { ok, data, error } = await apiJson<BrokerageImportSummary>('/api/wallet/brokerage/history/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            brokerage_account_id: brokerageAccountId,
+            rows: historyRows,
+          }),
+        })
+
+        if (!ok || !data) {
+          setParseError(error || 'Nie udało się zaimportować historii BoSSA')
+          return
+        }
+
+        const skipped = data.skipped_duplicates ?? 0
+        const needsReview = data.needs_review ?? 0
+        const cashCreated = data.cash_transactions_created ?? 0
+        const total = data.total ?? (data.created + skipped + needsReview + data.failed)
+        const summary = `Razem: ${total}, utworzono: ${data.created}, cash: ${cashCreated}, pominięto duplikatów: ${skipped}, do sprawdzenia: ${needsReview}, błędów: ${data.failed}`
+        setImportSummary(summary)
+        if (data.failed === 0) {
+          toast.success(`Import BoSSA zakończony. ${summary}`)
+          onSuccess()
+          return
+        }
+
+        const failedRows = data.rows.filter((row) => row.status === 'failed')
+        setParseError(
+          failedRows.length > 0
+            ? failedRows.map(formatBrokerageImportRowError).join('\n')
+            : data.errors.length > 0
+              ? data.errors.join('\n')
+              : 'Część historii BoSSA nie została zaimportowana',
+        )
+        return
+      }
+
       if (brokerRows.length === 0) {
         setParseError('Najpierw sparsuj plik')
         return
       }
 
-      const { ok, data, error } = await apiJson<{ created: number; failed: number; errors: string[] }>('/api/wallet/brokerage/events/import', {
+      const { ok, data, error } = await apiJson<BrokerageImportSummary>('/api/wallet/brokerage/events/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -675,14 +1040,24 @@ function ImportTab({
         return
       }
 
-      setImportSummary(`Utworzono: ${data.created}, błędów: ${data.failed}`)
+      const skipped = data.skipped_duplicates ?? 0
+      const total = data.total ?? (data.created + skipped + data.failed)
+      const summary = `Razem: ${total}, utworzono: ${data.created}, pominięto duplikatów: ${skipped}, błędów: ${data.failed}`
+      setImportSummary(summary)
       if (data.failed === 0) {
-        toast.success(`Zaimportowano ${data.created} operacji maklerskich`)
+        toast.success(`Import maklerski zakończony. ${summary}`)
         onSuccess()
         return
       }
 
-      setParseError(data.errors[0] || 'Część operacji nie została zaimportowana')
+      const failedRows = data.rows.filter((row) => row.status === 'failed')
+      setParseError(
+        failedRows.length > 0
+          ? failedRows.map(formatBrokerageImportRowError).join('\n')
+          : data.errors.length > 0
+            ? data.errors.join('\n')
+            : 'Część operacji nie została zaimportowana',
+      )
     })
   }
 
@@ -711,13 +1086,25 @@ function ImportTab({
     <div className="space-y-3">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <div className="space-y-1">
-          <Label className="text-white/70 text-xs">Format banku *</Label>
+          <div className="flex items-center gap-1.5">
+            <Label className="text-white/70 text-xs">Format banku *</Label>
+            {selectedParserName && PARSER_INSTRUCTIONS[selectedParserName] && (
+              <button
+                type="button"
+                aria-label="Pokaż instrukcję przygotowania pliku"
+                onClick={() => setShowInstructions(true)}
+                className="text-sky-400 hover:text-sky-300 transition-colors"
+              >
+                <Info className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
           <Select
             value={selectedParserName}
             onValueChange={(value) => {
               const nextParser = parsers.find((parser) => parser.name === value) ?? null
               setSelectedParserName(value)
-              setImportMode(nextParser?.supports_brokerage_events ? importMode : 'transactions')
+              setImportMode(getImportModeForParser(nextParser, importMode))
               resetParsedState()
             }}
           >
@@ -734,7 +1121,7 @@ function ImportTab({
           </Select>
         </div>
 
-        {selectedParser?.supports_brokerage_events ? (
+        {importModeOptions.length > 0 ? (
           <div className="space-y-1">
             <Label className="text-white/70 text-xs">Tryb importu *</Label>
             <Select
@@ -748,8 +1135,9 @@ function ImportTab({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="bg-slate-900 border-white/10 text-white">
-                <SelectItem value="transactions">Import jako transakcje gotówkowe</SelectItem>
-                <SelectItem value="brokerage_events">Import jako operacje maklerskie</SelectItem>
+                {importModeOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -760,7 +1148,7 @@ function ImportTab({
         )}
       </div>
 
-      {importMode === 'transactions' ? (
+      {(importMode === 'transactions' || importMode === 'full') && (
         <div className="space-y-1">
           <Label className="text-white/70 text-xs">Konto dla importowanych transakcji *</Label>
           <Select value={accountId} onValueChange={setAccountId}>
@@ -784,7 +1172,9 @@ function ImportTab({
             </p>
           )}
         </div>
-      ) : (
+      )}
+
+      {(importMode === 'brokerage_events' || importMode === 'brokerage_history' || importMode === 'full') && (
         <div className="space-y-1">
           <Label className="text-white/70 text-xs">Rachunek maklerski dla operacji *</Label>
           <Select value={brokerageAccountId} onValueChange={setBrokerageAccountId}>
@@ -821,7 +1211,7 @@ function ImportTab({
       </div>
 
       {(parsersError || parseError) && (
-        <p className="text-sm text-red-400 break-words overflow-hidden">{parsersError || parseError}</p>
+        <p className="text-sm text-red-400 break-words overflow-hidden whitespace-pre-line">{parsersError || parseError}</p>
       )}
 
       {importBalanceWarning && (
@@ -860,7 +1250,7 @@ function ImportTab({
         <Button
           type="button"
           onClick={handleImport}
-          disabled={isParsing || isImporting}
+          disabled={isParsing || isImporting || (importMode === 'brokerage_history' && historyBlockingRows.length > 0)}
           className="bg-emerald-700 hover:bg-emerald-600 text-white gap-2"
         >
           {isImporting ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -868,7 +1258,7 @@ function ImportTab({
         </Button>
       </div>
 
-      {importMode === 'transactions' && txRows.length > 0 && (
+      {(importMode === 'transactions' || importMode === 'full') && txRows.length > 0 && (
         <div className="rounded-xl border border-white/10 bg-slate-800/40 overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
             <p className="text-sm font-medium text-white/85">Podgląd transakcji</p>
@@ -899,7 +1289,7 @@ function ImportTab({
         </div>
       )}
 
-      {importMode === 'brokerage_events' && brokerRows.length > 0 && (
+      {(importMode === 'brokerage_events' || importMode === 'full') && brokerRows.length > 0 && (
         <div className="rounded-xl border border-white/10 bg-slate-800/40 overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
             <p className="text-sm font-medium text-white/85">Podgląd operacji maklerskich</p>
@@ -931,6 +1321,83 @@ function ImportTab({
           </div>
         </div>
       )}
+
+      {importMode === 'brokerage_history' && historyRows.length > 0 && (
+        <div className="rounded-xl border border-white/10 bg-slate-800/40 overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
+            <p className="text-sm font-medium text-white/85">Podgląd historii BoSSA</p>
+            <span className="text-xs text-white/45">{historyRows.length} wierszy</span>
+          </div>
+          {historyBlockingRows.length > 0 && (
+            <div className="border-b border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 whitespace-pre-line">
+              {historyBlockingRows.map(formatHistoryBlockingRow).join('\n')}
+            </div>
+          )}
+          <div className="max-h-72 overflow-auto w-full">
+            <table className="w-full text-sm min-w-0">
+              <thead>
+                <tr className="border-b border-white/10">
+                  <th className="px-3 py-2 text-left text-xs text-white/40 font-medium">Data</th>
+                  <th className="px-3 py-2 text-left text-xs text-white/40 font-medium">Typ</th>
+                  <th className="px-3 py-2 text-left text-xs text-white/40 font-medium">Opis</th>
+                  <th className="px-3 py-2 text-right text-xs text-white/40 font-medium">Kwota</th>
+                  <th className="px-3 py-2 text-right text-xs text-white/40 font-medium">Saldo po</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyRows.map((row) => (
+                  <tr key={`${row.row_number}-${row.trade_at}`} className="border-b border-white/5 last:border-0">
+                    <td className="px-3 py-2 text-white/75">{formatDateLabel(row.trade_at)}</td>
+                    <td className="px-3 py-2 text-white/75">{row.operation_type}</td>
+                    <td className="px-3 py-2 text-white/75">
+                      {row.instrument_symbol ? `${row.instrument_symbol} · ` : ''}
+                      {row.description}
+                      {row.review_reason ? <span className="block text-amber-300/80">{row.review_reason}</span> : null}
+                    </td>
+                    <td className="px-3 py-2 text-right text-white/75">{row.amount} {row.currency}</td>
+                    <td className="px-3 py-2 text-right text-white/75">{row.amount_after} {row.currency}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {showInstructions && selectedParserName && PARSER_INSTRUCTIONS[selectedParserName] && (() => {
+        const instr = PARSER_INSTRUCTIONS[selectedParserName]?.[importMode]
+          ?? PARSER_INSTRUCTIONS[selectedParserName]?.full
+          ?? PARSER_INSTRUCTIONS[selectedParserName]?.transactions
+        if (!instr) return null
+        return (
+          <Dialog open={showInstructions} onOpenChange={setShowInstructions}>
+            <DialogContent className="bg-slate-900 border-white/10 text-white max-w-md">
+              <DialogHeader>
+                <DialogTitle className="text-white">{instr.title}</DialogTitle>
+                <DialogDescription className="text-white/55 text-xs">
+                  Wykonaj poniższe kroki przed wgraniem pliku.
+                </DialogDescription>
+              </DialogHeader>
+              <ol className="space-y-2 text-sm text-white/80 list-decimal list-inside">
+                {instr.steps.map((step, i) => (
+                  <li key={i}>{step}</li>
+                ))}
+              </ol>
+              {instr.columns && (
+                <div className="rounded-lg border border-white/10 bg-slate-800/60 px-3 py-2 space-y-1">
+                  <p className="text-xs text-white/50 mb-1.5">Wymagane nagłówki kolumn:</p>
+                  {instr.columns.map((col) => (
+                    <div key={col.name} className="flex gap-2 text-sm">
+                      <span className="text-white/40 w-6 shrink-0">{col.label}</span>
+                      <code className="text-emerald-300 font-mono text-xs">{col.name}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+        )
+      })()}
     </div>
   )
 }
@@ -952,9 +1419,11 @@ function BrokerageTab({
   const [mic, setMic] = useState('')
   const [instrumentQuery, setInstrumentQuery] = useState('')
   const [instrumentSymbol, setInstrumentSymbol] = useState('')
-  const [kind, setKind] = useState<'BUY' | 'SELL' | 'DIV'>('BUY')
+  const [kind, setKind] = useState<BrokerageKind>('BUY')
   const [quantity, setQuantity] = useState('0')
   const [price, setPrice] = useState('0')
+  const [splitRatio, setSplitRatio] = useState('0')
+  const [note, setNote] = useState('')
   const [currency, setCurrency] = useState<'PLN' | 'USD' | 'EUR'>('PLN')
   const [tradeAt, setTradeAt] = useState('')
   const [error, setError] = useState<string>()
@@ -1032,9 +1501,21 @@ function BrokerageTab({
     if (!mic) { setError('Wybierz rynek'); return }
     if (!instrumentSymbol) { setError('Wybierz instrument'); return }
     if (!tradeAt) { setError('Podaj datę operacji'); return }
+    const parsedSplitRatio = toDecimalNumber(splitRatio)
+    if (kind === 'SPLIT' && (parsedSplitRatio === null || parsedSplitRatio <= 0)) {
+      setError('Podaj dodatni współczynnik splitu')
+      return
+    }
+    if (kind === 'ADJUSTMENT' && !note.trim()) {
+      setError('Podaj notatkę korekty')
+      return
+    }
     setError(undefined)
 
     startTransition(async () => {
+      const normalizedQuantity = kind === 'SPLIT' ? '0' : quantity.trim().replace(',', '.')
+      const normalizedPrice = kind === 'SPLIT' ? '0' : price.trim().replace(',', '.')
+      const normalizedSplitRatio = kind === 'SPLIT' ? splitRatio.trim().replace(',', '.') : '0'
       const { ok, error: err } = await apiJson('/api/wallet/brokerage/event', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1044,10 +1525,11 @@ function BrokerageTab({
           instrument_mic: mic,
           instrument_name: selectedInstrument?.shortname ?? instrumentSymbol,
           kind,
-          quantity: quantity.trim().replace(',', '.'),
-          price: price.trim().replace(',', '.'),
+          quantity: normalizedQuantity,
+          price: normalizedPrice,
           currency,
-          split_ratio: '0',
+          split_ratio: normalizedSplitRatio,
+          note: note.trim() || null,
           trade_at: toIsoString(tradeAt),
         }),
       })
@@ -1147,7 +1629,7 @@ function BrokerageTab({
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <Label className="text-white/70 text-xs">Rodzaj *</Label>
-          <Select value={kind} onValueChange={(value: 'BUY' | 'SELL' | 'DIV') => setKind(value)}>
+          <Select value={kind} onValueChange={(value: BrokerageKind) => setKind(value)}>
             <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
               <SelectValue />
             </SelectTrigger>
@@ -1155,6 +1637,8 @@ function BrokerageTab({
               <SelectItem value="BUY">BUY</SelectItem>
               <SelectItem value="SELL">SELL</SelectItem>
               <SelectItem value="DIV">DIV</SelectItem>
+              <SelectItem value="SPLIT">SPLIT</SelectItem>
+              <SelectItem value="ADJUSTMENT">Korekta</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -1173,26 +1657,52 @@ function BrokerageTab({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      {kind === 'SPLIT' ? (
         <div className="space-y-1">
-          <Label className="text-white/70 text-xs">Ilość</Label>
+          <Label className="text-white/70 text-xs">Współczynnik splitu</Label>
           <Input
-            value={quantity}
-            onChange={(event) => setQuantity(event.target.value)}
+            value={splitRatio}
+            onChange={(event) => setSplitRatio(event.target.value)}
             inputMode="decimal"
+            placeholder="2 lub 0.1"
             className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
           />
         </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <Label className="text-white/70 text-xs">{kind === 'ADJUSTMENT' ? 'Ilość po korekcie' : 'Ilość'}</Label>
+            <Input
+              value={quantity}
+              onChange={(event) => setQuantity(event.target.value)}
+              inputMode="decimal"
+              className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-white/70 text-xs">{kind === 'ADJUSTMENT' ? 'Śr. cena po korekcie' : 'Cena / kwota'}</Label>
+            <Input
+              value={price}
+              onChange={(event) => setPrice(event.target.value)}
+              inputMode="decimal"
+              className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
+            />
+          </div>
+        </div>
+      )}
+
+      {kind === 'ADJUSTMENT' && (
         <div className="space-y-1">
-          <Label className="text-white/70 text-xs">Cena / kwota</Label>
+          <Label className="text-white/70 text-xs">Notatka korekty *</Label>
           <Input
-            value={price}
-            onChange={(event) => setPrice(event.target.value)}
-            inputMode="decimal"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            maxLength={500}
+            placeholder="np. stara nazwa: WORKSERV"
             className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
           />
         </div>
-      </div>
+      )}
 
       <div className="space-y-1">
         <Label className="text-white/70 text-xs">Data *</Label>

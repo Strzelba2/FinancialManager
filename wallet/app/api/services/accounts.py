@@ -6,12 +6,22 @@ import base64
 
 from app.schemas.schemas import (
     AccountCreation, DepositAccountCreate, DepositAccountRead, DepositAccountBalanceCreate,
-    BrokerageAccountCreate, BrokerageAccountRead, BrokerageDepositLinkCreate
+    BrokerageAccountCreate, BrokerageAccountRead, BrokerageDepositLinkCreate,
+    BrokerageCashAccountCreate, AccountType
 )
-from app.crud.deposit_account_crud import create_deposit_account, get_deposit_account, delete_deposit_account
+from app.crud.deposit_account_crud import (
+    create_deposit_account,
+    get_deposit_account,
+    get_deposit_account_for_user,
+    delete_deposit_account,
+)
 from app.crud.deposit_account_balance import create_deposit_account_balance
-from app.crud.brokerage_account_crud import create_brokerage_account
-from app.crud.brokerage_deposit_link_crud import create_brokerage_deposit_link
+from app.crud.brokerage_account_crud import create_brokerage_account, get_brokerage_account_for_user
+from app.crud.brokerage_deposit_link_crud import (
+    create_brokerage_deposit_link,
+    get_link_by_ba_and_currency,
+    list_brokerage_deposit_links,
+)
 from app.crud.bank_crud import get_bank
 from app.clients.auth_client import AuthCryptoClient
 from app.utils.utils import b64, b64e, b64d
@@ -62,7 +72,10 @@ async def create_deposit_account_service(
     res = await crypto.batch(str(username), ops)
     
     if not res:
-        HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Crypto server do not work correctly")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Crypto server do not work correctly",
+        )
     
     by_id = {r["id"]: r for r in res["results"] if r.get("ok")}
 
@@ -133,6 +146,124 @@ async def create_brokeage_account_service(
     await create_brokerage_deposit_link(session=session, data=brokerage_link)
     
     return BrokerageAccountRead.model_validate(brokerage_account, from_attributes=True)
+
+
+async def create_brokerage_cash_account_link_service(
+    session: AsyncSession,
+    brokerage_account_id: uuid.UUID,
+    wallet_id: uuid.UUID,
+    bank_id: uuid.UUID,
+    brokerage_name: str,
+    cash_account: BrokerageCashAccountCreate,
+    username: str,
+    crypto: AuthCryptoClient,
+) -> DepositAccountRead:
+    """
+    Create a brokerage cash sub-account and link it to a brokerage account for one currency.
+    """
+    account_number = (cash_account.account_number or "").strip()
+    if not account_number:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Brokerage cash account number is required.",
+        )
+
+    existing_link = await get_link_by_ba_and_currency(
+        session,
+        brokerage_account_id=brokerage_account_id,
+        currency=cash_account.currency,
+    )
+    if existing_link is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Brokerage cash account already linked for {cash_account.currency.value}.",
+        )
+
+    account_payload = AccountCreation(
+        name=cash_account.name or f"{brokerage_name} · Cash {cash_account.currency.value}",
+        account_type=AccountType.BROKERAGE,
+        currency=cash_account.currency,
+        account_number=account_number,
+        bank_id=bank_id,
+        iban=cash_account.iban,
+    )
+    account = await create_deposit_account_service(
+        session=session,
+        data=account_payload,
+        username=username,
+        wallet_id=wallet_id,
+        crypto=crypto,
+    )
+    link_payload = BrokerageDepositLinkCreate(
+        currency=cash_account.currency,
+        deposit_account_id=account.id,
+        brokerage_account_id=brokerage_account_id,
+    )
+    await create_brokerage_deposit_link(session=session, data=link_payload)
+    return account
+
+
+async def delete_brokerage_account_with_cash_accounts_service(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    brokerage_account_id: uuid.UUID,
+) -> bool:
+    """
+    Delete a brokerage account and its dedicated brokerage cash deposit accounts.
+
+    Cash accounts are ordinary deposit accounts linked through brokerage_deposit_links.
+    A linked deposit account is deleted only when it belongs to the same user, has
+    account_type BROKERAGE, and is not linked to another brokerage account.
+    """
+    brokerage_account = await get_brokerage_account_for_user(
+        session=session,
+        user_id=user_id,
+        brokerage_account_id=brokerage_account_id,
+    )
+    if brokerage_account is None:
+        return False
+
+    links = await list_brokerage_deposit_links(
+        session,
+        brokerage_account_id=brokerage_account_id,
+        limit=None,
+    )
+
+    deposit_accounts_to_delete = []
+    for link in links:
+        sibling_links = await list_brokerage_deposit_links(
+            session,
+            deposit_account_id=link.deposit_account_id,
+            limit=None,
+        )
+        linked_elsewhere = any(
+            sibling.brokerage_account_id != brokerage_account_id
+            for sibling in sibling_links
+        )
+        if linked_elsewhere:
+            continue
+
+        deposit_account = await get_deposit_account_for_user(
+            session=session,
+            user_id=user_id,
+            deposit_account_id=link.deposit_account_id,
+        )
+        if deposit_account is None:
+            continue
+        if deposit_account.account_type != AccountType.BROKERAGE:
+            continue
+        deposit_accounts_to_delete.append(deposit_account)
+
+    try:
+        for deposit_account in deposit_accounts_to_delete:
+            await session.delete(deposit_account)
+        await session.delete(brokerage_account)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+    return True
 
 
 async def get_plain_account_number_service(

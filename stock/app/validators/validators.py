@@ -25,6 +25,13 @@ def q2(v: Optional[Decimal]) -> Optional[Decimal]:
     return v.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def q3(v: Optional[Decimal]) -> Optional[Decimal]:
+    if v is None:
+        return None
+    logger.debug(f"q3: input={v!r}")
+    return v.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+
+
 def strip(v: Any) -> Any:
     """
     Strip whitespace from a string, pass through non-strings unchanged.
@@ -88,6 +95,25 @@ def require_len_between_1_12(v: str) -> str:
     logger.debug(f"require_len_between_1_12: input={v!r}, len={len(v)}")
     if not (1 <= len(v) <= 12):
         raise ValueError("must be 1..12 characters")
+    return v
+
+
+def require_len_between_1_40(v: str) -> str:
+    """
+    Ensure a string length is between 1 and 40 characters.
+
+    Args:
+        v: Input string.
+
+    Returns:
+        The original string if its length is in [1, 40].
+
+    Raises:
+        ValueError: If the length is outside the allowed range.
+    """
+    logger.debug(f"require_len_between_1_40: input={v!r}, len={len(v)}")
+    if not (1 <= len(v) <= 40):
+        raise ValueError("must be 1..40 characters")
     return v
 
 
@@ -339,6 +365,7 @@ def url_to_str(v: object) -> Optional[str]:
 
 
 Q2 = Annotated[Decimal, AfterValidator(q2)]
+Q3 = Annotated[Decimal, AfterValidator(q3)]
 NonEmptyStr = Annotated[str, AfterValidator(strip), AfterValidator(require_nonempty)]
 NonEmptyStrUpper = Annotated[str, AfterValidator(strip_upper), AfterValidator(require_nonempty)]
 NonEmptyStrUpperOpt = Annotated[
@@ -347,6 +374,7 @@ NonEmptyStrUpperOpt = Annotated[
     AfterValidator(nonempty_if_present),
 ]
 Shortname = Annotated[str, BeforeValidator(strip_upper), AfterValidator(require_len_between_1_12)]
+Shortname40 = Annotated[str, BeforeValidator(strip_upper), AfterValidator(require_len_between_1_40)]
 Name = Annotated[str, BeforeValidator(strip), AfterValidator(require_len_between_1_50)]
 MICCode = Annotated[
     str,

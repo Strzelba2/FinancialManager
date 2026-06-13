@@ -113,7 +113,8 @@ class StockClient:
 
         try:
             data = resp.json()
-            parsed = QuotesBySymbolsResponse(quotes=data) 
+            payload = data if isinstance(data, dict) else {"quotes": data}
+            parsed = QuotesBySymbolsResponse.model_validate(payload)
         except Exception:
             logger.exception("get_latest_quotes_for_symbols: failed to parse response")
             return {}

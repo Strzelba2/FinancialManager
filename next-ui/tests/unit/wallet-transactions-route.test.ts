@@ -100,6 +100,38 @@ describe('wallet transactions route', () => {
     expect(createTransactions).toHaveBeenCalledWith('user-1', expectedPayload)
   })
 
+  it('forwards skip_duplicates for idempotent file re-imports', async () => {
+    await nextUiUnitStory('Wallet transactions route forwards skip_duplicates flag for re-imports', {
+      severity: 'critical',
+      tags: ['wallet', 'transactions', 'api-route', 'import', 'financial-data'],
+    })
+    vi.mocked(resolveWalletUserId).mockResolvedValue('user-1')
+    vi.mocked(createTransactions).mockResolvedValue({
+      ok: true,
+      data: { created: 0, skipped_duplicates: 1 },
+      status: 200,
+    })
+
+    const payload = {
+      account_id: '11111111-1111-4111-8111-111111111111',
+      transactions: [
+        {
+          date: '2026-05-01T09:00:00.000Z',
+          amount: '100.00',
+          description: 'Salary',
+          amount_after: '100.00',
+          capital_gain_kind: null,
+        },
+      ],
+      skip_duplicates: true,
+    }
+
+    const response = await POST(jsonRequest('http://localhost/api/wallet/transactions', payload))
+
+    expect(response.status).toBe(200)
+    expect(createTransactions).toHaveBeenCalledWith('user-1', expect.objectContaining({ skip_duplicates: true }))
+  })
+
   it('maps create validation errors before calling wallet service', async () => {
     await nextUiUnitStory('Wallet transactions route validates create payloads', {
       severity: 'critical',
@@ -129,7 +161,7 @@ describe('wallet transactions route', () => {
     })
 
     const response = await GET(new NextRequest(
-      'http://localhost/api/wallet/transactions?page=2&size=20&account_id=acc-1&account_id=acc-2&category=FOOD&status=EXPENSE&date_from=2026-05-01&date_to=2026-05-31&q=grocery',
+      'http://localhost/api/wallet/transactions?page=2&size=20&account_id=acc-1&account_id=acc-2&category=FOOD&status=EXPENSE&date_from=2026-05-01&date_to=2026-05-31&q=grocery&sort_by=category&sort_dir=asc',
     ))
 
     expect(response.status).toBe(200)
@@ -142,6 +174,8 @@ describe('wallet transactions route', () => {
       date_from: '2026-05-01',
       date_to: '2026-05-31',
       q: 'grocery',
+      sort_by: 'category',
+      sort_dir: 'asc',
     })
   })
 

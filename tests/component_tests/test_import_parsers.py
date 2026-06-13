@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
 import allure
 import httpx
@@ -69,7 +70,6 @@ def _make_pdf(pages: list[list[tuple[int, int, str]]]) -> bytes:
 
 def _velo_pdf_page(
     rows: list[tuple[str, str, str, str, str]],
-    *,
     include_header: bool = True,
     start_y: int = 580,
     row_gap: int = 30,
@@ -118,6 +118,8 @@ class TestBankTransactionImportParserApi:
         assert parsers["IngBank CSV"]["accept"] == ".csv"
         assert parsers["Velo Bank PDF"]["kind"] == "PDF"
         assert parsers["Velo Bank PDF"]["accept"] == ".pdf"
+        assert parsers["BossaMakler CSV"]["kind"] == "CSV"
+        assert parsers["BossaMakler CSV"]["supports_brokerage_history"] is True
 
     def test_ing_bank_csv_parser_returns_transactions_and_deposit_interest(self) -> None:
         csv_payload = (FIXTURES_DIR / "transactions_ing.csv").read_bytes()
@@ -180,6 +182,319 @@ class TestBankTransactionImportParserApi:
         assert last_row["date"] == "2026-03-30"
         assert Decimal(str(last_row["amount"])) == Decimal("-45.00")
         assert last_row["description"] == "Kontrahent 45 Transakcja po duzym przelewie 45"
+
+    def test_ing_makler_csv_parser_sorts_transactions_by_date_and_balance_chain(self) -> None:
+        csv_payload = "\r\n".join([
+            "Data transakcji;Typ transakcji;Opis transakcji;Kwota transakcji;Saldo po operacji;Waluta",
+            "03-01-2026;Dywidendy;Dywidenda testowa - podatek;-10.00;140.00;PLN",
+            "03-01-2026;Dywidendy;Dywidenda testowa - rozliczenie;50.00;150.00;PLN",
+            "02-01-2026;Wpłaty/wypłaty;Dopłata rachunku;10.00;100.00;PLN",
+            "01-01-2026;Wpłaty/wypłaty;Zasilenie rachunku;100.00;100.00;PLN",
+            "01-01-2026;Blokady pod zlecenia;Blokada kupna;-30.00;70.00;PLN",
+            "01-01-2026;Transakcje;Aktualizacja blokady;20.00;90.00;PLN",
+        ]).encode("cp1250")
+
+        response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "IngMakler CSV", "mode": "transactions"},
+            files={"file": ("ing-makler.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["mode"] == "transactions"
+        assert payload["count"] == 6
+        assert [row["date"] for row in payload["rows"]] == [
+            "2026-01-01",
+            "2026-01-01",
+            "2026-01-01",
+            "2026-01-02",
+            "2026-01-03",
+            "2026-01-03",
+        ]
+        assert [Decimal(str(row["amount"])) for row in payload["rows"]] == [
+            Decimal("100.00"),
+            Decimal("-30.00"),
+            Decimal("20.00"),
+            Decimal("10.00"),
+            Decimal("50.00"),
+            Decimal("-10.00"),
+        ]
+        assert [Decimal(str(row["amount_after"])) for row in payload["rows"]] == [
+            Decimal("100.00"),
+            Decimal("70.00"),
+            Decimal("90.00"),
+            Decimal("100.00"),
+            Decimal("150.00"),
+            Decimal("140.00"),
+        ]
+
+        running_balance = Decimal("0.00")
+        for row in payload["rows"]:
+            running_balance += Decimal(str(row["amount"]))
+            assert running_balance == Decimal(str(row["amount_after"]))
+
+        assert payload["rows"][4]["capital_gain_kind"] == "BROKER_DIVIDEND"
+        assert payload["rows"][5]["capital_gain_kind"] == "BROKER_DIVIDEND"
+
+    def test_bossa_makler_full_history_generates_balance_after_per_currency(self) -> None:
+        csv_payload = "\r\n".join([
+            "data;tytuł operacji;szczegóły;kwota;waluta",
+            "2026-06-04;Wypłata dywidendy TEST;;5,00;PLN",
+            "2026-06-03;Wymiana waluty PLN/USD 4.0000;;25,00;USD",
+            "2026-06-03;Wymiana waluty PLN/USD 4.0000;;-100,00;PLN",
+            "2026-06-02;Przelew do DM BOŚ;;200,00;PLN",
+        ]).encode("cp1250")
+
+        response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "BossaMakler CSV", "mode": "brokerage_history"},
+            files={"file": ("bossa.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["mode"] == "brokerage_history"
+        assert payload["count"] == 4
+        assert [row["operation_type"] for row in payload["rows"]] == [
+            "DIVIDEND",
+            "FX",
+            "FX",
+            "TRANSFER",
+        ]
+        assert [row["currency"] for row in payload["rows"]] == ["PLN", "USD", "PLN", "PLN"]
+        assert [Decimal(str(row["amount"])) for row in payload["rows"]] == [
+            Decimal("5.00"),
+            Decimal("25.00"),
+            Decimal("-100.00"),
+            Decimal("200.00"),
+        ]
+        assert [Decimal(str(row["amount_after"])) for row in payload["rows"]] == [
+            Decimal("105.00"),
+            Decimal("25.00"),
+            Decimal("100.00"),
+            Decimal("200.00"),
+        ]
+
+    def test_bossa_makler_sprzedaz_and_zwrot_mapped_to_transfer(self) -> None:
+        csv_payload = "\r\n".join([
+            "data;tytuł operacji;szczegóły;kwota;waluta",
+            "2026-06-07;Sprzedaż JPP EUROHOLD-JPP**;;1500,00;PLN",
+            "2026-06-07;Zwrot nadpłaty - przekroczony limit wpłat na IKE/IKZE 614585;;-500,00;PLN",
+        ]).encode("cp1250")
+
+        response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "BossaMakler CSV", "mode": "brokerage_history"},
+            files={"file": ("bossa.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["count"] == 2
+        assert payload["rows"][0]["operation_type"] == "TRANSFER"
+        assert payload["rows"][1]["operation_type"] == "TRANSFER"
+
+    def test_bossa_makler_full_history_normalizes_market_suffix_and_falls_back_to_isin(self, stock_url: str) -> None:
+        suffix = uuid4().hex[:8].upper()
+        mic = f"B{suffix[:3]}"
+        normalized_symbol = f"B{suffix[:5]}"
+        isin_symbol = f"I{suffix[:5]}"
+        normalized_isin = f"PL{uuid4().hex[:9].upper()}1"
+        fallback_isin = f"PL{uuid4().hex[:9].upper()}2"
+
+        market_response = httpx.post(
+            f"{stock_url}/stock/markets",
+            json={
+                "mic": mic,
+                "name": f"BoSSA Parser Market {suffix}",
+                "country": "PL",
+                "timezone": "Europe/Warsaw",
+                "active": True,
+                "currency": "PLN",
+            },
+            timeout=10.0,
+        )
+        assert market_response.status_code == 201, market_response.text
+
+        for symbol, isin in ((normalized_symbol, normalized_isin), (isin_symbol, fallback_isin)):
+            instrument_response = httpx.post(
+                f"{stock_url}/stock/instruments",
+                json={
+                    "market_mic": mic,
+                    "symbol": symbol,
+                    "shortname": symbol,
+                    "name": f"{symbol} TEST",
+                    "type": "STOCK",
+                    "status": "ACTIVE",
+                    "currency": "PLN",
+                    "isin": isin,
+                    "historical_source": None,
+                    "quote_source": None,
+                    "popularity": 0,
+                    "last_seen_at": None,
+                },
+                timeout=10.0,
+            )
+            assert instrument_response.status_code == 201, instrument_response.text
+
+        csv_payload = "\r\n".join([
+            "data;tytuł operacji;szczegóły;kwota;waluta",
+            f"2026-06-02;Rozliczenie transakcji kupna;NIEZGODNY-NC ({fallback_isin}) 2 x 5,00 PLN;-10,00;PLN",
+            f"2026-06-01;Rozliczenie transakcji kupna;{normalized_symbol}-NC-FIX ({normalized_isin}) 10 x 2,00 PLN;-20,00;PLN",
+        ]).encode("cp1250")
+
+        response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "BossaMakler CSV", "mode": "brokerage_history"},
+            files={"file": ("bossa.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["mode"] == "brokerage_history"
+        assert payload["count"] == 2
+        assert [row["operation_type"] for row in payload["rows"]] == ["BUY", "BUY"]
+        assert payload["rows"][0]["instrument_symbol"] == isin_symbol
+        assert payload["rows"][0]["instrument_mic"] == mic
+        assert Decimal(str(payload["rows"][0]["quantity"])) == Decimal("2")
+        assert Decimal(str(payload["rows"][0]["price"])) == Decimal("5.00")
+        assert payload["rows"][1]["instrument_symbol"] == normalized_symbol
+        assert payload["rows"][1]["instrument_mic"] == mic
+        assert Decimal(str(payload["rows"][1]["quantity"])) == Decimal("10")
+        assert Decimal(str(payload["rows"][1]["price"])) == Decimal("2.00")
+        assert all(row.get("review_reason") is None for row in payload["rows"])
+
+    def test_bossa_makler_unknown_instrument_returns_needs_review_with_isin_and_normalized_name(self) -> None:
+        csv_payload = "\r\n".join([
+            "data;tytuł operacji;szczegóły;kwota;waluta",
+            "2026-06-01;Rozliczenie transakcji kupna;MISSING-NC-FIX (PLMISS000001) 10 x 2,00 PLN;-20,00;PLN",
+        ]).encode("cp1250")
+
+        response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "BossaMakler CSV", "mode": "brokerage_history"},
+            files={"file": ("bossa-missing.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["mode"] == "brokerage_history"
+        assert payload["count"] == 1
+        row = payload["rows"][0]
+        assert row["operation_type"] == "NEEDS_REVIEW"
+        assert row["instrument_name"] == "MISSING"
+        assert "MISSING" in row["review_reason"]
+        assert "MISSING-NC-FIX" in row["review_reason"]
+        assert "PLMISS000001" in row["review_reason"]
+        assert "PLN" in row["review_reason"]
+
+    def test_bossa_makler_zero_quantity_trade_returns_needs_review_instead_of_parser_error(self) -> None:
+        csv_payload = "\r\n".join([
+            "data;tytuł operacji;szczegóły;kwota;waluta",
+            "2026-06-01;Rozliczenie transakcji kupna;PKOBP (PLPKO0000016) 0 x 10,00 PLN;0,00;PLN",
+        ]).encode("cp1250")
+
+        response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "BossaMakler CSV", "mode": "brokerage_history"},
+            files={"file": ("bossa-zero-quantity.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["mode"] == "brokerage_history"
+        assert payload["count"] == 1
+        row = payload["rows"][0]
+        assert row["operation_type"] == "NEEDS_REVIEW"
+        assert row["price"] is None
+        assert row["quantity"] is None
+        assert "ilości" in row["review_reason"]
+
+    def test_saxo_makler_csv_parses_cash_and_chf_brokerage_event_with_pln_settlement(self, stock_url: str) -> None:
+        suffix = uuid4().hex[:4].upper()
+        mic = f"S{suffix[:3]}"
+        symbol = f"U{suffix}"
+        isin = "CH0012255151"
+
+        market_response = httpx.post(
+            f"{stock_url}/stock/markets",
+            json={
+                "mic": mic,
+                "name": f"Saxo Test Market {suffix}",
+                "country": "CH",
+                "timezone": "Europe/Zurich",
+                "active": True,
+                "currency": "CHF",
+            },
+            timeout=10.0,
+        )
+        assert market_response.status_code == 201, market_response.text
+
+        instrument_response = httpx.post(
+            f"{stock_url}/stock/instruments",
+            json={
+                "market_mic": mic,
+                "symbol": symbol,
+                "shortname": symbol,
+                "name": "Swatch Group AG",
+                "type": "STOCK",
+                "status": "ACTIVE",
+                "currency": "CHF",
+                "isin": isin,
+                "historical_source": None,
+                "quote_source": None,
+                "popularity": 0,
+                "last_seen_at": None,
+            },
+            timeout=10.0,
+        )
+        assert instrument_response.status_code == 201, instrument_response.text
+
+        csv_payload = "\r\n".join([
+            "ID klienta;Data transakcji;Zdarzenie;Kwota;Saldo po operacji;Waluta;Instrument;Symbol instrumentu;Instrument ISIN;Waluta instrumentu;Rodzaj transakcji;Przelicznik konwersji",
+            f"1;20-01-2026;Kupno 14 @ 30.80 CHF;-1983,55;8016,45;PLN;Swatch Group AG;{symbol}:{mic.lower()};{isin};CHF;Kupno akcji;4,598222",
+        ]).encode("cp1250")
+
+        cash_response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "SaxoMakler CSV", "mode": "transactions"},
+            files={"file": ("saxo.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+        assert cash_response.status_code == 200, cash_response.text
+        cash_payload = cash_response.json()
+        assert cash_payload["mode"] == "transactions"
+        assert cash_payload["count"] == 1
+        assert Decimal(str(cash_payload["rows"][0]["amount"])) == Decimal("-1983.55")
+        assert Decimal(str(cash_payload["rows"][0]["amount_after"])) == Decimal("8016.45")
+        assert "Swatch Group AG" in cash_payload["rows"][0]["description"]
+
+        event_response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "SaxoMakler CSV", "mode": "brokerage_events"},
+            files={"file": ("saxo.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+        assert event_response.status_code == 200, event_response.text
+        event_payload = event_response.json()
+        assert event_payload["mode"] == "brokerage_events"
+        assert event_payload["count"] == 1
+        event = event_payload["rows"][0]
+        assert event["instrument_symbol"] == symbol
+        assert event["instrument_mic"] == mic
+        assert event["kind"] == "BUY"
+        assert Decimal(str(event["quantity"])) == Decimal("14.00")
+        assert Decimal(str(event["price"])) == Decimal("30.80")
+        assert event["currency"] == "CHF"
+        assert event["settlement_currency"] == "PLN"
+        assert Decimal(str(event["fx_rate"])) == Decimal("4.598222")
 
     def test_velo_bank_pdf_parser_returns_transactions_from_pdf_fixture(self) -> None:
         pdf_payload = (FIXTURES_DIR / "velobank_statement.pdf").read_bytes()

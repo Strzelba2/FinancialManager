@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Plus, Save, Trash2, ChevronLeft, ChevronRight, Search, RefreshCw, ChevronDown, Check } from 'lucide-react'
 import { convertCurrency } from '@/lib/api/nbp'
 import type { EventRow, EventsPageResult } from '@/lib/api/brokerageEvents'
+import type { FxRates } from '@/lib/api/nbp'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { TransactionsDialog } from '@/features/wallet/components/TransactionsDialog'
 import type { TransactionBrokerageAccountOpt } from '@/features/wallet/components/TransactionsDialog'
@@ -15,6 +16,8 @@ const KIND_LABELS: Record<string, string> = {
   SELL: 'Sprzedaż',
   SPLIT: 'Split',
   DIV: 'Dywidenda',
+  ADJUSTMENT: 'Korekta',
+  CONVERSION: 'Konwersja',
   FEE: 'Opłata',
   TAX: 'Podatek',
 }
@@ -24,11 +27,13 @@ const KIND_COLORS: Record<string, string> = {
   SELL: 'bg-red-500/20 text-red-300',
   DIV: 'bg-emerald-500/20 text-emerald-300',
   SPLIT: 'bg-cyan-500/20 text-cyan-300',
+  ADJUSTMENT: 'bg-violet-500/20 text-violet-300',
+  CONVERSION: 'bg-fuchsia-500/20 text-fuchsia-300',
   FEE: 'bg-amber-500/20 text-amber-300',
   TAX: 'bg-amber-500/20 text-amber-300',
 }
 
-const ALL_KINDS = ['BUY', 'SELL', 'DIV', 'SPLIT', 'FEE', 'TAX']
+const ALL_KINDS = ['BUY', 'SELL', 'DIV', 'SPLIT', 'ADJUSTMENT', 'CONVERSION', 'FEE', 'TAX']
 const ALL_CCYS = ['PLN', 'USD', 'EUR']
 const PAGE_SIZES = [20, 40, 80, 120]
 
@@ -40,6 +45,11 @@ function fmtNum(v: number, d = 2): string {
 
 function fmtMoney(v: number, ccy: string): string {
   return fmtNum(v) + '\u00a0' + ccy
+}
+
+function convertWithRates(amount: number, from: string, to: string, rates: FxRates | null): number {
+  if (from === to || !rates) return amount
+  return convertCurrency(amount, from, to, rates)
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -329,7 +339,7 @@ export function BrokerageEventsPage({ brokerageAccounts, initialData }: Props) {
         updated.notionalFmt = fmtMoney(updated.notionalView, viewCcy)
       } else {
         updated.priceView = numValue
-        updated.priceNative = convertCurrency(numValue, viewCcy, r.currency, data.fxRates)
+        updated.priceNative = convertWithRates(numValue, viewCcy, r.currency, data.fxRates)
         updated.notionalView = r.quantity * numValue
         updated.notionalFmt = fmtMoney(updated.notionalView, viewCcy)
       }
@@ -345,7 +355,7 @@ export function BrokerageEventsPage({ brokerageAccounts, initialData }: Props) {
         else delete rowPatch.quantity
       } else {
         const rowCcy = rows.find((r) => r.id === rowId)?.currency ?? viewCcy
-        const newNative = convertCurrency(numValue, viewCcy, rowCcy, data.fxRates)
+        const newNative = convertWithRates(numValue, viewCcy, rowCcy, data.fxRates)
         if (Math.abs(newNative - orig.priceNative) > 0.000001) rowPatch.price = String(newNative)
         else delete rowPatch.price
       }
@@ -576,6 +586,9 @@ export function BrokerageEventsPage({ brokerageAccounts, initialData }: Props) {
                           <span className="font-medium text-white">{row.symbol}</span>
                           {row.instrumentName && (
                             <span className="text-white/30 text-xs ml-1.5">— {row.instrumentName}</span>
+                          )}
+                          {row.note && (
+                            <p className="text-xs text-violet-300/70 mt-0.5 max-w-md truncate">{row.note}</p>
                           )}
                         </td>
                         <td className="px-4 py-2.5 text-center"><KindChip kind={row.kind} /></td>

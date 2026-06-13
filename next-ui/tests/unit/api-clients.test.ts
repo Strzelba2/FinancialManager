@@ -1,23 +1,11 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 
 import { nextUiUnitStory } from '../allure'
-
-const server = setupServer()
-
-beforeAll(() => {
-  server.listen({ onUnhandledRequest: 'error' })
-})
-
 afterEach(() => {
   server.resetHandlers()
 })
-
-afterAll(() => {
-  server.close()
-})
-
 describe('wallet API client', () => {
   afterEach(() => {
     vi.resetModules()
@@ -162,6 +150,8 @@ describe('wallet API client', () => {
       date_from: '2026-05-01',
       date_to: '2026-05-31',
       q: 'grocery',
+      sort_by: 'category',
+      sort_dir: 'asc',
     })
 
     expect(result.ok).toBe(true)
@@ -176,6 +166,8 @@ describe('wallet API client', () => {
     expect(url).toContain('date_from=2026-05-01')
     expect(url).toContain('date_to=2026-05-31')
     expect(url).toContain('q=grocery')
+    expect(url).toContain('sort_by=category')
+    expect(url).toContain('sort_dir=asc')
     expect(requests[0]?.method).toBe('GET')
     expect(requests[0]?.headers.get('X-User-Id')).toBe('user-1')
   })
@@ -226,6 +218,132 @@ describe('wallet API client', () => {
     expect(requests[1]?.headers.get('X-User-Id')).toBe('user-1')
   })
 
+  it('imports brokerage events and preserves duplicate skip summary fields', async () => {
+    await nextUiUnitStory('Wallet API client preserves brokerage import duplicate skip summary', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'import', 'api-client', 'financial-data'],
+    })
+    const payload = {
+      brokerage_account_id: '11111111-1111-4111-8111-111111111111',
+      events: [
+        {
+          trade_at: '2026-06-01T09:00:00.000Z',
+          instrument_symbol: 'PKOBP',
+          instrument_mic: 'XWAR',
+          instrument_name: 'PKO BP SA',
+          kind: 'BUY',
+          quantity: '1.00',
+          price: '10.00',
+          currency: 'PLN',
+          split_ratio: '0.00',
+        },
+      ],
+    }
+    const responsePayload = {
+      total: 2,
+      created: 1,
+      cash_transactions_created: 0,
+      skipped_duplicates: 1,
+      needs_review: 0,
+      failed: 0,
+      errors: [],
+      rows: [
+        { row: 1, status: 'skipped_duplicate', message: 'Brokerage event already exists.' },
+        { row: 2, status: 'created', brokerage_event_id: 'event-2' },
+      ],
+    }
+    const requests: Request[] = []
+    server.use(http.post('http://wallet:8001/wallet/brokerage/events/import', async ({ request }) => {
+      requests.push(request.clone())
+      return HttpResponse.json(responsePayload)
+    }))
+    process.env.WALLET_API_URL = 'http://wallet:8001'
+    const { importBrokerageEvents } = await import('@/lib/api/wallet')
+
+    const result = await importBrokerageEvents('user-1', payload)
+
+    expect(result).toEqual({ ok: true, data: responsePayload, status: 200 })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.method).toBe('POST')
+    expect(requests[0]?.headers.get('X-User-Id')).toBe('user-1')
+    await expect(requests[0]?.json()).resolves.toEqual(payload)
+  })
+
+  it('deletes brokerage accounts with the internal user header', async () => {
+    await nextUiUnitStory('Wallet API client deletes brokerage accounts with user identity header', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'api-client', 'ownership'],
+    })
+    const requests: Request[] = []
+    server.use(http.delete('http://wallet:8001/wallet/brokerage/brokerage-1', async ({ request }) => {
+      requests.push(request.clone())
+      return HttpResponse.json({ ok: true })
+    }))
+    process.env.WALLET_API_URL = 'http://wallet:8001'
+    const { deleteBrokerageAccount } = await import('@/lib/api/wallet')
+
+    const ok = await deleteBrokerageAccount('user-1', 'brokerage-1')
+
+    expect(ok).toBe(true)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.method).toBe('DELETE')
+    expect(requests[0]?.headers.get('X-User-Id')).toBe('user-1')
+  })
+
+  it('imports brokerage history and ensures cash links with the internal user header', async () => {
+    await nextUiUnitStory('Wallet API client forwards brokerage history and cash-link requests with user identity', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'api-client', 'cash-links', 'financial-data'],
+    })
+    const historyPayload = {
+      brokerage_account_id: 'brokerage-1',
+      rows: [
+        {
+          row_number: 1,
+          operation_type: 'TRANSFER',
+          trade_at: '2026-06-04T10:00:00.000Z',
+          currency: 'PLN',
+          amount: '100.00',
+          amount_after: '100.00',
+          description: 'Wpłata',
+        },
+      ],
+    }
+    const cashPayload = {
+      cash_accounts: [
+        { currency: 'USD', account_number: 'BOSSA-USD', name: 'USD cash' },
+      ],
+    }
+    const requests: Request[] = []
+    server.use(
+      http.post('http://wallet:8001/wallet/brokerage/history/import', async ({ request }) => {
+        requests.push(request.clone())
+        return HttpResponse.json({ total: 1, created: 1, failed: 0, rows: [] })
+      }),
+      http.post('http://wallet:8001/wallet/brokerage/brokerage-1/cash-links/ensure', async ({ request }) => {
+        requests.push(request.clone())
+        return HttpResponse.json([{ currency: 'USD', deposit_account_id: 'deposit-1', created: true }])
+      }),
+    )
+    process.env.WALLET_API_URL = 'http://wallet:8001'
+    const { importBrokerageHistory, ensureBrokerageCashLinks } = await import('@/lib/api/wallet')
+
+    await expect(importBrokerageHistory('user-1', historyPayload)).resolves.toEqual({
+      ok: true,
+      data: { total: 1, created: 1, failed: 0, rows: [] },
+      status: 200,
+    })
+    await expect(ensureBrokerageCashLinks('user-1', 'brokerage-1', cashPayload)).resolves.toEqual({
+      ok: true,
+      data: [{ currency: 'USD', deposit_account_id: 'deposit-1', created: true }],
+      status: 200,
+    })
+    expect(requests.map((request) => request.method)).toEqual(['POST', 'POST'])
+    expect(requests.map((request) => request.headers.get('X-User-Id'))).toEqual(['user-1', 'user-1'])
+    await expect(requests[0]?.json()).resolves.toEqual(historyPayload)
+    await expect(requests[1]?.json()).resolves.toEqual(cashPayload)
+  })
+
   it('returns safe defaults when wallet service is unavailable', async () => {
     await nextUiUnitStory('Wallet API client returns safe defaults on service outage', {
       severity: 'critical',
@@ -274,8 +392,8 @@ describe('stock API client', () => {
     const quote = result.data.PKO
     expect(quote).toBeDefined()
     if (!quote) throw new Error('PKO quote was not returned')
-    expect(quote.last_price_fmt).toBe('55,12')
-    expect(quote.change_pct_fmt).toBe('+1,20%')
+    expect(quote.last_price_fmt).toBe('55,120')
+    expect(quote.change_pct_fmt).toBe('+1,200%')
     expect(processQuotes(result.data)).toEqual([
       expect.objectContaining({
         symbol: 'PKO',
@@ -295,11 +413,9 @@ describe('stock API client', () => {
     const requests: Request[] = []
     server.use(http.post('http://stock:8001/stock/quotes/latest/symbols', ({ request }) => {
       requests.push(request)
-      return HttpResponse.json({
-        quotes: [
-          { symbol: 'PKO', price: '55.12', currency: 'PLN', change_pct: '1.20' },
-        ],
-      })
+      return HttpResponse.json([
+        { symbol: 'PKO', price: '55.12', currency: 'PLN', change_pct: '1.20' },
+      ])
     }))
     process.env.STOCK_API_URL = 'http://stock:8001'
     const { getQuotesBySymbols } = await import('@/lib/api/stock')
@@ -309,6 +425,73 @@ describe('stock API client', () => {
       PKO: { symbol: 'PKO', price: '55.12', currency: 'PLN', change_pct: '1.20' },
     })
     expect(requests).toHaveLength(1)
+  })
+
+  it('sends quote_source when creating a manual stock instrument', async () => {
+    await nextUiUnitStory('Stock API client sends quote_source for manual instruments', {
+      severity: 'critical',
+      tags: ['stock', 'quote-source', 'api-client'],
+    })
+    const requests: Request[] = []
+    server.use(http.post('http://stock:8001/stock/instruments', ({ request }) => {
+      requests.push(request.clone())
+      return HttpResponse.json({
+        market_id: 'market-1',
+        mic: 'XLON',
+        market_mic: 'XLON',
+        symbol: 'LNGA.UK',
+        shortname: 'LNGA.UK',
+        name: 'WisdomTree Natural Gas',
+        type: 'ETF',
+        status: 'ACTIVE',
+        currency: 'USD',
+        quote_source: 'https://quotes.example.com/q/?s=lnga.uk',
+      }, { status: 201 })
+    }))
+    process.env.STOCK_API_URL = 'http://stock:8001'
+    const { createInstrument } = await import('@/lib/api/stock')
+
+    const result = await createInstrument({
+      market_mic: 'XLON',
+      symbol: 'LNGA.UK',
+      shortname: 'LNGA.UK',
+      name: 'WisdomTree Natural Gas',
+      type: 'ETF',
+      status: 'ACTIVE',
+      currency: 'USD',
+      isin: null,
+      historical_source: null,
+      quote_source: 'https://quotes.example.com/q/?s=lnga.uk',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.method).toBe('POST')
+    await expect(requests[0]?.json()).resolves.toEqual(expect.objectContaining({
+      market_mic: 'XLON',
+      symbol: 'LNGA.UK',
+      quote_source: 'https://quotes.example.com/q/?s=lnga.uk',
+    }))
+  })
+
+  it('requests only markets with instruments for quote navigation', async () => {
+    await nextUiUnitStory('Stock API client requests markets with instruments filter', {
+      severity: 'normal',
+      tags: ['stock', 'markets', 'api-client'],
+    })
+    const urls: string[] = []
+    server.use(http.get('http://stock:8001/stock/markets', ({ request }) => {
+      urls.push(request.url)
+      return HttpResponse.json([{ mic: 'XLON', name: 'London' }])
+    }))
+    process.env.STOCK_API_URL = 'http://stock:8001'
+    const { getMarkets } = await import('@/lib/api/stock')
+
+    const result = await getMarkets({ onlyWithInstruments: true })
+
+    expect(result.ok).toBe(true)
+    expect(urls).toHaveLength(1)
+    expect(new URL(urls[0]!).searchParams.get('only_with_instruments')).toBe('true')
   })
 
   it('returns empty quote maps on stock API failures', async () => {
@@ -329,5 +512,74 @@ describe('stock API client', () => {
 
     await expect(getQuotesBulk('XWAR')).resolves.toEqual({})
     await expect(getQuotesBySymbols(['PKO'])).resolves.toEqual({})
+  })
+})
+
+describe('NBP FX rates', () => {
+  const NBP_URL = 'https://api.nbp.pl/api/exchangerates/tables/A'
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  function tableA(rates: { code: string; mid: number }[]) {
+    return [{ table: 'A', no: '001/A/NBP/2026', effectiveDate: '2026-06-10', rates }]
+  }
+
+  it('derives CHF and GBP cross rates against PLN/USD/EUR from NBP table A', async () => {
+    await nextUiUnitStory('NBP client derives CHF and GBP cross rates for the view currencies', {
+      severity: 'critical',
+      tags: ['nbp', 'fx', 'money', 'financial-data'],
+    })
+    server.use(http.get(NBP_URL, () => HttpResponse.json(tableA([
+      { code: 'USD', mid: 4.0 },
+      { code: 'EUR', mid: 4.4 },
+      { code: 'CHF', mid: 4.5 },
+      { code: 'GBP', mid: 5.2 },
+    ]))))
+    const { getFxRates, convertCurrency } = await import('@/lib/api/nbp')
+
+    const rates = await getFxRates()
+    expect(rates).not.toBeNull()
+    if (!rates) throw new Error('expected FX rates')
+
+    // Forward source -> view currency rates must be present and correct.
+    expect(rates['CHF/PLN']).toBe(4.5)
+    expect(rates['CHF/USD']).toBe(1.125) // 4.5 / 4.0
+    expect(rates['CHF/EUR']).toBe(1.0227) // 4.5 / 4.4, rounded to 4dp
+    expect(rates['GBP/PLN']).toBe(5.2)
+    expect(rates['GBP/USD']).toBe(1.3) // 5.2 / 4.0
+    expect(rates['GBP/EUR']).toBe(1.1818) // 5.2 / 4.4, rounded to 4dp
+
+    // Existing pairs remain unchanged.
+    expect(rates['USD/PLN']).toBe(4.0)
+    expect(rates['EUR/PLN']).toBe(4.4)
+
+    // CHF/GBP amounts convert to each view currency (direct lookup).
+    expect(convertCurrency(100, 'CHF', 'PLN', rates)).toBe(450)
+    expect(convertCurrency(100, 'CHF', 'USD', rates)).toBe(112.5)
+    expect(convertCurrency(100, 'CHF', 'EUR', rates)).toBe(102.27)
+    expect(convertCurrency(100, 'GBP', 'PLN', rates)).toBe(520)
+  })
+
+  it('keeps CHF/GBP rates at zero (no conversion) when NBP omits them', async () => {
+    await nextUiUnitStory('NBP client falls back to no conversion when CHF/GBP are missing', {
+      severity: 'normal',
+      tags: ['nbp', 'fx', 'money', 'error-state'],
+    })
+    server.use(http.get(NBP_URL, () => HttpResponse.json(tableA([
+      { code: 'USD', mid: 4.0 },
+      { code: 'EUR', mid: 4.4 },
+    ]))))
+    const { getFxRates, convertCurrency } = await import('@/lib/api/nbp')
+
+    const rates = await getFxRates()
+    expect(rates).not.toBeNull()
+    if (!rates) throw new Error('expected FX rates')
+
+    expect(rates['CHF/PLN']).toBe(0)
+    expect(rates['GBP/USD']).toBe(0)
+    // Missing rate -> amount returned unconverted (pre-existing behaviour).
+    expect(convertCurrency(100, 'CHF', 'PLN', rates)).toBe(100)
   })
 })

@@ -10,8 +10,8 @@ from sqlalchemy.types import DateTime
 from pydantic import ConfigDict, field_validator
 from .enums import InstrumentType, InstrumentStatus, Currency, ReportAssetClass
 from app.validators.validators import (
-    Shortname, MICCode, ISINOpt, Name,
-    g0int, datetimeUTC, Q2, NonEmptyStrUpperOpt, url_to_str
+    Shortname, Shortname40, MICCode, ISINOpt, Name,
+    g0int, datetimeUTC, Q2, Q3, NonEmptyStrUpperOpt, url_to_str
 )
 
 
@@ -83,14 +83,19 @@ class InstrumentBase(SQLModel):
         sa_column=sa.Column(sa.String(12), nullable=False, unique=True),
         description="instrument symbol"
     )
-    shortname: Shortname = Field(
-        sa_column=sa.Column(sa.String(12), nullable=False, unique=True),
+    shortname: Shortname40 = Field(
+        sa_column=sa.Column(sa.String(40), nullable=False, unique=True),
         description="Short name of instument"
     )
     name: NonEmptyStrUpperOpt = Field(
         default=None,
         sa_column=sa.Column(sa.String(255), nullable=True),
         description="Full name of instrument"
+    )
+    currency: Optional[Currency] = Field(
+        default=None,
+        sa_column=sa.Column(sa.String(3), nullable=True, index=True),
+        description="Quote currency for this instrument. Falls back only for legacy seeded instruments.",
     )
     type: InstrumentType = Field(
         sa_column=sa.Column(sa.Enum(InstrumentType, name="instrument_type_enum"), nullable=False),
@@ -105,6 +110,11 @@ class InstrumentBase(SQLModel):
         default=None,
         sa_column=sa.Column(sa.String(64), nullable=True, index=True),
         description="href Data source/provider tag"
+    )
+    quote_source: Optional[str] = Field(
+        default=None,
+        sa_column=sa.Column(sa.String(255), nullable=True, index=True),
+        description="Full quote page URL used for manually managed instruments.",
     )
     popularity: g0int = Field(
         default=0,
@@ -121,14 +131,19 @@ class InstrumentBase(SQLModel):
     @classmethod
     def _val_hist(cls, v):
         return url_to_str(v)
+
+    @field_validator("quote_source", mode="before")
+    @classmethod
+    def _val_quote(cls, v):
+        return url_to_str(v)
     
     
 class QuoteLatestBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True)
 
-    last_price: Q2 = Field(
+    last_price: Q3 = Field(
         default=Decimal("0"),
-        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        sa_column=sa.Column(sa.Numeric(20, 3), nullable=False, server_default="0"),
         description="Last traded price"
     )
     change_pct: Q2 = Field(
@@ -178,24 +193,24 @@ class CandleDailyBase(SQLModel):
         description="Session date (UTC calendar)"
     )
 
-    open: Q2 = Field(
+    open: Q3 = Field(
         default=Decimal("0"),
-        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        sa_column=sa.Column(sa.Numeric(20, 3), nullable=False, server_default="0"),
         description="Price Open"
     )
-    high: Q2 = Field(
+    high: Q3 = Field(
         default=Decimal("0"),
-        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        sa_column=sa.Column(sa.Numeric(20, 3), nullable=False, server_default="0"),
         description="Price High"
     )
-    low: Q2 = Field(
+    low: Q3 = Field(
         default=Decimal("0"),
-        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        sa_column=sa.Column(sa.Numeric(20, 3), nullable=False, server_default="0"),
         description="Price Low"
     )
-    close: Q2 = Field(
+    close: Q3 = Field(
         default=Decimal("0"),
-        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        sa_column=sa.Column(sa.Numeric(20, 3), nullable=False, server_default="0"),
         description="Price Close"
     )
 

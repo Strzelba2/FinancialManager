@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Instrument
 from app.schemas.schemas import InstrumentCreate, InstrumentUpdate
-from app.models.enums import InstrumentType, Currency
+from app.models.enums import InstrumentType, Currency, InstrumentCurrency
 
 
 async def create_instrument(session: AsyncSession, data: InstrumentCreate) -> Instrument:
@@ -28,7 +28,8 @@ async def get_or_create_instrument(
     mic: str,
     symbol: str,
     name: str | None,
-    currency: Currency,
+    currency: InstrumentCurrency,
+    instrument_type: InstrumentType = InstrumentType.STOCK,
 ) -> Instrument:
     stmt = (
         select(Instrument)
@@ -38,14 +39,17 @@ async def get_or_create_instrument(
     result = await session.execute(stmt)
     inst = result.scalar_one_or_none()
     if inst:
+        inst.name = name or inst.name
+        inst.currency = currency
+        inst.type = instrument_type
         return inst
 
     inst = Instrument(
         mic=mic,
         symbol=symbol,
-        name=name,   
-        currency=currency, 
-        type=InstrumentType.STOCK, 
+        name=name,
+        currency=currency,
+        type=instrument_type,
     )
     session.add(inst)
     await session.flush()

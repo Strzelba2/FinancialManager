@@ -58,7 +58,8 @@ async def create_transactions_rebalance(
                 session=session,
                 user_id=user_id,
                 payload=payload,
-                verify_amount_after=True,  
+                verify_amount_after=True,
+                skip_duplicates=payload.skip_duplicates,
             )
         except UnknownUserError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -80,6 +81,8 @@ async def get_transactions_page(
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     q: Optional[str] = Query(None),
+    sort_by: str = Query("date", pattern="^(date|account|category|status)$"),
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     user_id: uuid.UUID = Depends(get_internal_user_id),
     session: AsyncSession = Depends(db.get_session),
 ) -> TransactionPageOut:
@@ -120,6 +123,8 @@ async def get_transactions_page(
                                                 date_from=date_from,
                                                 date_to=date_to,
                                                 q=q,
+                                                sort_by=sort_by,
+                                                sort_dir=sort_dir,
                                             )
     
     items: list[TransactionRowOut] = []

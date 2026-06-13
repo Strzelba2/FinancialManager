@@ -20,15 +20,6 @@ export async function POST() {
     return NextResponse.json({ error: celery.error }, { status: celery.status })
   }
 
-  if (celery.data.online) {
-    return NextResponse.json({
-      ok: true,
-      mode: 'reload',
-      detail: celery.data.detail,
-      workers: celery.data.workers,
-    })
-  }
-
   const ingest = await startManualIngest()
   if (!ingest.ok) {
     return NextResponse.json({ error: ingest.error }, { status: ingest.status })
@@ -41,6 +32,7 @@ export async function POST() {
         mode: 'ingest',
         alreadyRunning: true,
         detail: ingest.data.detail,
+        workers: celery.data.workers,
       },
       { status: 202 },
     )
@@ -59,6 +51,7 @@ export async function POST() {
       mode: 'ingest',
       alreadyRunning: false,
       detail: ingest.data.detail,
+      workers: celery.data.workers,
     },
     { status: 202 },
   )

@@ -34,6 +34,12 @@ describe('money utilities', () => {
         'PLN/EUR': 0.2326,
         'USD/EUR': 0.9302,
         'EUR/USD': 1.075,
+        'CHF/PLN': 4.5,
+        'CHF/USD': 1.125,
+        'CHF/EUR': 1.0465,
+        'GBP/PLN': 5,
+        'GBP/USD': 1.25,
+        'GBP/EUR': 1.1628,
       },
     )
 

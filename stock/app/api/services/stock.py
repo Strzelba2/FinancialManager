@@ -8,11 +8,28 @@ from app.markerdata.provider import MarketProvider
 from app.core.cache.redis import Storage
 from app.crud.quote_latest import upsert_quote_latest
 from app.crud.market import get_market_id_by_mic
-from app.crud.instrument import count_by_market_id, get_by_symbol_in_market, create_instrument
+from app.crud.instrument import (
+    count_by_market_id,
+    get_by_symbol_in_market,
+    create_instrument,
+    list_quote_source_instruments,
+)
 from app.schemas.schemas import QuoteLatesInput
 from app.core.clients.gpw_client import GpwListingsClient
 from app.utils.numbers import parse_float_pl, parse_int_pl
 from app.utils.dates import parse_last_trade_at
+from app.markerdata.quote_source_page import (
+    normalize_quote_source_url,
+    parse_quote_source_page,
+    quote_source_fetch_url,
+)
+from app.markerdata.quote_source_alt import (
+    is_alt_quote_url,
+    navigate_alt_quote_source,
+    normalize_alt_quote_url,
+    parse_alt_quote_source_page,
+)
+from app.markerdata.scraper import navigate_quote_source
 
 logger = logging.getLogger(__name__)
 
@@ -328,5 +345,122 @@ async def ingest_gpw_quotes_from_html(
         raise Exception("The update of the quotations failed (symbol_map).")
     return processed
 
-     
-        
+
+async def refresh_quote_source_instruments(
+    session: AsyncSession,
+    storage: Storage,
+) -> dict[str, Any]:
+    """
+    Refresh latest quotes for manually managed instruments with `quote_source`.
+
+    `quote_source` is a full quote page URL. The function intentionally
+    does not create instruments; only existing active stock instruments are
+    refreshed.
+    """
+    rows = await list_quote_source_instruments(session)
+    await session.rollback()
+
+    processed = 0
+    failed = 0
+    errors: list[dict[str, str]] = []
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-setuid-sandbox",
+            ],
+        )
+        ctx = await browser.new_context(locale="pl-PL")
+        page = await ctx.new_page()
+        page.set_default_timeout(10000)
+        page.set_default_navigation_timeout(10000)
+        logger.info(f"Browser started for quote_source fetch, total instruments: {len(rows)}")
+
+        page_nr = 0
+        alt_consented = False
+        try:
+            for row in rows:
+                quote_source = (row.quote_source or "").strip()
+                if not quote_source:
+                    continue
+                try:
+                    if is_alt_quote_url(quote_source):
+                        parse_source = normalize_alt_quote_url(quote_source)
+                        await navigate_alt_quote_source(
+                            parse_source, page, consent_needed=not alt_consented
+                        )
+                        alt_consented = True
+                        parsed = await parse_alt_quote_source_page(page, parse_source)
+                    else:
+                        parse_source = normalize_quote_source_url(quote_source)
+                        fetch_source = quote_source_fetch_url(quote_source)
+                        fetch_sources = [fetch_source]
+                        if parse_source != fetch_source:
+                            fetch_sources.append(parse_source)
+
+                        last_error: Exception | None = None
+                        parsed = None
+                        for candidate_source in fetch_sources:
+                            try:
+                                await navigate_quote_source(candidate_source, page, page_nr)
+                                parsed = await parse_quote_source_page(page, parse_source)
+                                page_nr += 1
+                                break
+                            except Exception as parse_exc:
+                                last_error = parse_exc
+                                if candidate_source == fetch_sources[-1]:
+                                    raise
+                                logger.debug(
+                                    "quote_source primary page did not contain a parseable quote; "
+                                    "trying canonical quote page",
+                                    exc_info=True,
+                                )
+
+                        if parsed is None:
+                            raise last_error or ValueError("Quote source page does not contain last price")
+
+                    qin = QuoteLatesInput(
+                        last_price=parsed.last_price,
+                        change_pct=parsed.change_pct,
+                        volume=parsed.volume,
+                        last_trade_at=parsed.last_trade_at,
+                        provider=parsed.source_url,
+                        href=parsed.source_url,
+                    )
+                    async with session.begin():
+                        latest = await upsert_quote_latest(session, row.id, qin)
+                    await storage.stock.hset(
+                        key=f"latest_quote:{row.mic}",
+                        field=row.symbol,
+                        value={
+                            "instrument_id": str(row.id),
+                            "name": row.shortname,
+                            "last_price": str(latest.last_price),
+                            "change_pct": str(latest.change_pct),
+                            "volume": latest.volume,
+                            "last_trade_at": latest.last_trade_at.isoformat(),
+                        },
+                        ttl=3600,
+                    )
+                    processed += 1
+                except Exception as exc:
+                    failed += 1
+                    logger.exception(
+                        "refresh_quote_source_instruments: failed symbol=%r mic=%r",
+                        row.symbol,
+                        row.mic,
+                    )
+                    errors.append({"symbol": row.symbol, "mic": row.mic, "detail": str(exc)})
+        finally:
+            with suppress(Exception):
+                await page.close()
+            with suppress(Exception):
+                await ctx.close()
+            with suppress(Exception):
+                await browser.close()
+
+    return {"processed": processed, "failed": failed, "errors": errors}

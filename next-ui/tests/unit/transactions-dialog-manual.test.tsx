@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 import { toast } from 'sonner'
 
 import {
@@ -38,23 +38,12 @@ function fillManualForm() {
   fireEvent.click(screen.getByRole('button', { name: /Teraz/i }))
 }
 
-const server = setupServer()
-
 describe('TransactionsDialog – manual form', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     Element.prototype.scrollIntoView = vi.fn()
     server.resetHandlers()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('shows validation errors when required fields are empty on submit', async () => {
     await nextUiUnitStory('Wallet manual transaction form shows validation error when required fields are empty', {
       severity: 'critical',

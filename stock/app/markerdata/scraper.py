@@ -1,4 +1,6 @@
 from datetime import datetime
+from urllib.parse import urlsplit
+
 from playwright.async_api import Page
 from typing import Optional, List, AsyncIterator
 from contextlib import suppress
@@ -15,6 +17,50 @@ from app.utils.numbers import parse_float_pl, parse_int_pl
 
 logger = logging.getLogger(__name__)
 
+
+BLOCK_MARKERS = [
+    "Przekroczony dzienny limit wywołań strony",
+    "Dane zostały ukryte",
+    "Odblokuj dostęp",
+    "Przepisz powyższy kod",
+    "captcha",
+    "Uzyskaj apikey",
+]
+
+
+def _has_block_marker(text: str) -> bool:
+    lower = (text or "").lower()
+    return any(marker.lower() in lower for marker in BLOCK_MARKERS)
+
+
+def _snippet(text: str, limit: int = 240) -> str:
+    compact = " ".join(part.strip() for part in (text or "").splitlines() if part.strip())
+    return compact[:limit]
+
+
+async def navigate_quote_source(url: str, page: Page, fetch_nr: int) -> None:
+    """Navigate a manually configured quote page through a browser context."""
+    response = None
+    try:
+        response = await page.goto(url, wait_until="domcontentloaded")
+    except Exception:
+        logger.debug("quote_source browser navigation did not complete cleanly", exc_info=True)
+    if response and not response.ok:
+        raise RuntimeError(f"HTTP {response.status} at quote_source")
+    with suppress(Exception):
+        await page.wait_for_load_state("networkidle", timeout=3000)
+
+    if fetch_nr == 0:
+        logger.info("navigate_quote_source: first page -> attempting to dismiss cookies")
+        with suppress(Exception):
+            await dismiss_cookies_if_present(page, prefer_reject=True, overall_timeout_ms=4000)
+
+    await page.wait_for_selector('td a[href="pomoc/"]', state="visible", timeout=30000)
+
+    body = await page.locator("body").inner_text()
+    if _has_block_marker(body):
+        raise RuntimeError(f"Quote source page blocked: {_snippet(body)}")
+        
 
 async def find_next_href(page: Page, cfg: MarketConfig) -> Optional[str]:
     """

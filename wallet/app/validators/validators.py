@@ -22,6 +22,12 @@ def q6(v: Optional[Decimal]) -> Optional[Decimal]:
     return v.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
 
+def q10(v: Optional[Decimal]) -> Optional[Decimal]:
+    if v is None:
+        return None
+    return v.quantize(Decimal("0.0000000001"), rounding=ROUND_HALF_UP)
+
+
 def strip(v: Any) -> Any:
     return v.strip() if isinstance(v, str) else v
 
@@ -147,6 +153,7 @@ FirstNameOpt = Annotated[Optional[str], AfterValidator(strip),
                          ))]
 NonEmptyStr = Annotated[str, AfterValidator(strip), AfterValidator(require_nonempty)]
 Shortname = Annotated[str, BeforeValidator(strip_upper), AfterValidator(require_len_between_1_5)]
+Symbol12 = Annotated[str, BeforeValidator(strip_upper), AfterValidator(require_len_between_1_12)]
 EmailLower = Annotated[EmailStr, BeforeValidator(lambda v: strip_lower(str(v)))]
 
 CountryISO2Opt = Annotated[Optional[str], AfterValidator(require_iso2_opt)]
@@ -163,6 +170,8 @@ BytesLen32 = Annotated[bytes, AfterValidator(require_bytes_len_32)]
 Q2 = Annotated[Decimal, AfterValidator(q2)]
 Q2OptNonNeg = Annotated[Optional[Decimal], AfterValidator(require_nonnegative_opt), AfterValidator(q2)]
 Q6Pos = Annotated[Decimal, AfterValidator(q6), AfterValidator(require_positive)]
+Q10 = Annotated[Decimal, AfterValidator(q10)]
+Q10Opt = Annotated[Optional[Decimal], AfterValidator(q10)]
 AreaQ2OptPos = Annotated[
     Optional[Decimal],
     AfterValidator(lambda v: None if v is None else q2(v)),

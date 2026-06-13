@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ChevronDown, ChevronRight, Camera, RefreshCw,
-  AlertTriangle, Eye,
+  AlertTriangle, Eye, Plus, LoaderCircle, Trash2, FilePlus, MoreHorizontal,
 } from 'lucide-react'
 import type {
   WalletManagerNode,
@@ -15,6 +15,30 @@ import type {
   ManagerHealth,
 } from '@/lib/api/wallet'
 import type { FxRates } from '@/lib/api/nbp'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 type ViewCcy = 'PLN' | 'USD' | 'EUR'
 
@@ -63,6 +87,14 @@ function fmtMoney(v: number | null, ccy: string): string {
 
 function fmtPct(v: number): string {
   return (v >= 0 ? '+' : '') + v.toFixed(1) + '%'
+}
+
+function fmtUnitPct(v: number): string {
+  return fmtPct(v * 100)
+}
+
+function normalizeCashId(value: string): string {
+  return value.trim()
 }
 
 type Breakdown = {
@@ -265,15 +297,37 @@ function DepositSection({
   )
 }
 
+type BrokerageCashCurrency = 'USD' | 'EUR'
+
+function BrokerageMetric({ label, value, ccy }: { label: string; value: number; ccy: string }) {
+  return (
+    <div className="rounded-lg border border-white/5 bg-slate-950/35 px-2.5 py-2">
+      <p className="text-[11px] uppercase tracking-wide text-white/30">{label}</p>
+      <p className="mt-0.5 text-sm font-semibold text-white tabular-nums">{fmtMoney(value, ccy)}</p>
+    </div>
+  )
+}
+
 function BrokerageSection({
-  accounts, viewCcy, conv,
+  accounts, viewCcy, conv, onRefresh,
 }: {
   accounts: ManagerBrokerageAccount[]
   viewCcy: ViewCcy
   conv: (a: number, f: string, t: string) => number
+  onRefresh: () => void
 }) {
   const [open, setOpen] = useState(true)
   const [openAccounts, setOpenAccounts] = useState<Set<string>>(new Set())
+  const [cashLinkOpen, setCashLinkOpen] = useState(false)
+  const [cashLinkAccountId, setCashLinkAccountId] = useState('')
+  const [cashLinkCurrency, setCashLinkCurrency] = useState<BrokerageCashCurrency>('USD')
+  const [cashLinkAccountNumber, setCashLinkAccountNumber] = useState('')
+  const [cashLinkError, setCashLinkError] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deletingAccountId, setDeletingAccountId] = useState<string | null>(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [accountToDelete, setAccountToDelete] = useState<ManagerBrokerageAccount | null>(null)
+  const [isCashLinkPending, startCashLinkTransition] = useTransition()
 
   const total = accounts.reduce((s, b) => {
     const src = b.ccy ?? viewCcy
@@ -297,6 +351,73 @@ function BrokerageSection({
     })
   }, [])
 
+  function openCashLink(account: ManagerBrokerageAccount) {
+    setCashLinkAccountId(account.id)
+    setCashLinkCurrency('USD')
+    setCashLinkAccountNumber('')
+    setCashLinkError(null)
+    setCashLinkOpen(true)
+  }
+
+  function submitCashLink(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const accountNumber = normalizeCashId(cashLinkAccountNumber)
+    if (!cashLinkAccountId) { setCashLinkError('Wybierz rachunek maklerski'); return }
+    if (!accountNumber) { setCashLinkError('Podaj numer albo techniczny identyfikator subkonta'); return }
+
+    setCashLinkError(null)
+    startCashLinkTransition(async () => {
+      const account = accounts.find((item) => item.id === cashLinkAccountId)
+      const response = await fetch('/api/wallet/brokerage/cash-links/ensure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brokerage_account_id: cashLinkAccountId,
+          cash_accounts: [{
+            currency: cashLinkCurrency,
+            account_number: accountNumber,
+            name: `${account?.name ?? 'Makler'} · ${cashLinkCurrency}`,
+          }],
+        }),
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null
+        setCashLinkError(body?.error ?? 'Nie udało się podpiąć subkonta')
+        return
+      }
+
+      setCashLinkOpen(false)
+      setCashLinkAccountNumber('')
+      onRefresh()
+    })
+  }
+
+  function openDeleteConfirm(account: ManagerBrokerageAccount) {
+    setAccountToDelete(account)
+    setDeleteConfirmOpen(true)
+  }
+
+  async function confirmDeleteAccount() {
+    if (!accountToDelete) return
+    setDeleteConfirmOpen(false)
+    setDeleteError(null)
+    setDeletingAccountId(accountToDelete.id)
+    const id = accountToDelete.id
+    setAccountToDelete(null)
+    try {
+      const response = await fetch(`/api/wallet/brokerage/accounts/${id}`, { method: 'DELETE' })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null
+        setDeleteError(body?.error ?? 'Nie udało się usunąć rachunku maklerskiego')
+        return
+      }
+      onRefresh()
+    } finally {
+      setDeletingAccountId(null)
+    }
+  }
+
   if (!accounts.length) return null
 
   return (
@@ -309,6 +430,9 @@ function BrokerageSection({
         open={open}
         onToggle={() => setOpen((v) => !v)}
       />
+      {deleteError && (
+        <p className="ml-2 mt-1 text-xs text-red-300">{deleteError}</p>
+      )}
       {open && (
         <div className="space-y-2 mt-1 ml-2">
           {accounts.map((b) => {
@@ -327,73 +451,134 @@ function BrokerageSection({
 
             return (
               <div key={b.id} className="bg-slate-900/50 border border-white/5 rounded-lg overflow-hidden">
-                <button
-                  onClick={() => toggleAccount(b.id)}
-                  className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/5 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-white/40" /> : <ChevronRight className="w-3.5 h-3.5 text-white/40" />}
-                    <div className="text-left">
-                      <p className="text-sm font-medium text-white">{b.name}</p>
-                      <p className="text-xs text-white/35">
-                        Zdarzenia/mies: {Math.round(b.events_per_month ?? 0)} · {b.ccy ?? '—'}
-                      </p>
+                <div className="flex items-center">
+                  <button
+                    onClick={() => toggleAccount(b.id)}
+                    aria-label={`${isOpen ? 'Ukryj' : 'Pokaż'} szczegóły ${b.name}`}
+                    className="flex-1 flex items-center justify-between px-3 py-2.5 hover:bg-white/5 transition-colors min-w-0"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-white/40 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-white/40 shrink-0" />}
+                      <div className="text-left min-w-0">
+                        <p className="text-sm font-medium text-white">{b.name}</p>
+                        <p className="text-xs text-white/35">
+                          Zdarzenia/mies: {Math.round(b.events_per_month ?? 0)} · {b.ccy ?? '—'} · Pozycje: {b.positions_count ?? positions.length}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap justify-end">
-                    <HealthChips health={b.health} />
-                    {accMom !== null && <MomBadge value={accMom} />}
-                    <span className="text-sm font-semibold text-white tabular-nums">
-                      {fmtMoney(accTotal, viewCcy)}
-                    </span>
-                  </div>
-                </button>
+                    <div className="flex items-center gap-2 flex-wrap justify-end ml-2">
+                      <HealthChips health={b.health} />
+                      {accMom !== null && <MomBadge value={accMom} />}
+                      <span className="text-sm font-semibold text-white tabular-nums">
+                        {fmtMoney(accTotal, viewCcy)}
+                      </span>
+                    </div>
+                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="px-2.5 py-2.5 text-white/30 hover:text-white hover:bg-white/5 transition-colors shrink-0"
+                        aria-label={`Akcje dla ${b.name}`}
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="bg-slate-900 border-white/10 text-white min-w-[180px]">
+                      <DropdownMenuItem
+                        onClick={() => openCashLink(b)}
+                        className="gap-2 cursor-pointer focus:bg-white/10 focus:text-white"
+                      >
+                        <Plus className="w-3.5 h-3.5 text-emerald-400" />
+                        Subkonto walutowe
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild className="gap-2 cursor-pointer focus:bg-white/10 focus:text-white">
+                        <a href={`/wallet/brokerage/events?account=${b.id}`}>
+                          <FilePlus className="w-3.5 h-3.5 text-blue-400" />
+                          Dodaj event
+                        </a>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator className="bg-white/10" />
+                      <DropdownMenuItem
+                        onClick={() => openDeleteConfirm(b)}
+                        disabled={deletingAccountId === b.id}
+                        className="gap-2 cursor-pointer text-red-400 focus:bg-red-500/10 focus:text-red-300"
+                      >
+                        {deletingAccountId === b.id
+                          ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                          : <Trash2 className="w-3.5 h-3.5" />}
+                        Usuń rachunek
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
 
                 {isOpen && (
                   <div className="px-3 pb-3 pt-1 space-y-3 border-t border-white/5">
-                    {/* Cash accounts */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <BrokerageMetric label="Gotówka" value={cashView} ccy={viewCcy} />
+                      <BrokerageMetric label="Pozycje" value={posView} ccy={viewCcy} />
+                      <BrokerageMetric label="Total" value={accTotal} ccy={viewCcy} />
+                    </div>
+
                     <div>
                       <p className="text-xs text-white/30 uppercase tracking-wide mb-1.5">Konta gotówkowe</p>
                       {!cashAccounts.length ? (
                         <p className="text-xs text-white/30">Brak powiązanych kont.</p>
                       ) : (
                         <div className="space-y-1">
-                          {cashAccounts.map((ca, i) => (
-                            <div key={i} className="flex justify-between text-xs text-white/60">
-                              <span>{ca.name ?? '—'}</span>
-                              <span className="tabular-nums">
-                                {toNum(ca.available).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                {'\u00a0'}{ca.ccy ?? ''}
-                              </span>
-                            </div>
-                          ))}
+                          {cashAccounts.map((ca, i) => {
+                            const caCcy = ca.ccy ?? src
+                            const raw = toNum(ca.available)
+                            const viewValue = conv(raw, caCcy, viewCcy)
+                            return (
+                              <div key={ca.deposit_account_id ?? i} className="flex justify-between gap-3 text-xs text-white/60">
+                                <span>{ca.name ?? '—'}</span>
+                                <span className="text-right tabular-nums">
+                                  {fmtMoney(raw, caCcy)}
+                                  {caCcy !== viewCcy && (
+                                    <span className="ml-1 text-white/35">≈ {fmtMoney(viewValue, viewCcy)}</span>
+                                  )}
+                                </span>
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
-                      <div className="flex justify-between text-xs font-medium text-white/50 mt-1.5 pt-1.5 border-t border-white/5">
-                        <span>Suma gotówki</span>
-                        <span className="tabular-nums">{fmtMoney(cashView, viewCcy)}</span>
-                      </div>
                     </div>
 
-                    {/* Top positions */}
                     {positions.length > 0 && (
                       <div>
                         <p className="text-xs text-white/30 uppercase tracking-wide mb-1.5">Pozycje (top 8)</p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {positions.slice(0, 8).map((p, i) => {
-                            const pnl = toNum(p.pnl_pct)
-                            const positive = pnl >= 0
-                            return (
-                              <span
-                                key={i}
-                                className={`text-xs px-2 py-0.5 rounded font-medium ${
-                                  positive ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'
-                                }`}
-                              >
-                                {p.symbol ?? '?'} · {fmtPct(pnl)}
-                              </span>
-                            )
-                          })}
+                        <div className="overflow-x-auto rounded-lg border border-white/5">
+                          <table className="w-full text-xs">
+                            <thead className="bg-slate-950/40">
+                              <tr>
+                                <th className="px-2 py-1.5 text-left font-medium text-white/30">Symbol</th>
+                                <th className="px-2 py-1.5 text-right font-medium text-white/30">Wartość</th>
+                                <th className="px-2 py-1.5 text-right font-medium text-white/30">PnL</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {positions.slice(0, 8).map((p, i) => {
+                                const pnl = toNum(p.pnl_pct)
+                                const positive = pnl >= 0
+                                const pCcy = p.currency ?? src
+                                const positionValue = p.value_default_ccy !== undefined
+                                  ? conv(toNum(p.value_default_ccy), src, viewCcy)
+                                  : conv(toNum(p.value), pCcy, viewCcy)
+                                return (
+                                  <tr key={`${p.symbol ?? 'position'}-${i}`} className="border-t border-white/5">
+                                    <td className="px-2 py-1.5 font-medium text-white/70">{p.symbol ?? '?'}</td>
+                                    <td className="px-2 py-1.5 text-right tabular-nums text-white/60">{fmtMoney(positionValue, viewCcy)}</td>
+                                    <td className={`px-2 py-1.5 text-right tabular-nums ${positive ? 'text-emerald-300' : 'text-red-300'}`}>
+                                      {fmtUnitPct(pnl)}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
                         </div>
                       </div>
                     )}
@@ -404,6 +589,118 @@ function BrokerageSection({
           })}
         </div>
       )}
+
+      <Dialog
+        open={deleteConfirmOpen}
+        onOpenChange={(open) => { if (!open) { setDeleteConfirmOpen(false); setAccountToDelete(null) } }}
+      >
+        <DialogContent className="bg-slate-900 border-white/10 text-white sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-white flex items-center gap-2">
+              <Trash2 className="w-4 h-4 text-red-400" />
+              Usuń rachunek maklerski
+            </DialogTitle>
+            <DialogDescription className="text-white/50 text-sm">
+              Czy na pewno chcesz usunąć rachunek{' '}
+              <span className="text-white font-medium">&quot;{accountToDelete?.name}&quot;</span>?{' '}
+              Tej operacji nie można cofnąć.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => { setDeleteConfirmOpen(false); setAccountToDelete(null) }}
+              className="text-white/60 hover:text-white hover:bg-white/10"
+            >
+              Anuluj
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void confirmDeleteAccount()}
+              className="bg-red-700 hover:bg-red-600 text-white gap-2"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Usuń
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cashLinkOpen} onOpenChange={setCashLinkOpen}>
+        <DialogContent className="bg-slate-900 border-white/10 text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-white">Podepnij subkonto walutowe</DialogTitle>
+            <DialogDescription className="text-white/50 text-sm">
+              Subkonto jest zwykłym kontem gotówkowym maklera. Podaj realny numer albo techniczny identyfikator.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={submitCashLink} className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-white/70 text-xs">Rachunek maklerski *</Label>
+              <Select value={cashLinkAccountId} onValueChange={setCashLinkAccountId}>
+                <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
+                  <SelectValue placeholder="Wybierz rachunek" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 border-white/10 text-white">
+                  {accounts.map((account) => (
+                    <SelectItem key={account.id} value={account.id}>{account.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-white/70 text-xs">Waluta *</Label>
+                <Select value={cashLinkCurrency} onValueChange={(value) => setCashLinkCurrency(value as BrokerageCashCurrency)}>
+                  <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-white/10 text-white">
+                    <SelectItem value="USD">USD</SelectItem>
+                    <SelectItem value="EUR">EUR</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="manager-cash-link-number" className="text-white/70 text-xs">Numer / identyfikator *</Label>
+                <Input
+                  id="manager-cash-link-number"
+                  value={cashLinkAccountNumber}
+                  onChange={(event) => setCashLinkAccountNumber(event.target.value)}
+                  maxLength={32}
+                  placeholder="np. BOSSA-IKE-USD"
+                  className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
+                />
+              </div>
+            </div>
+
+            {cashLinkError && <p className="text-sm text-red-400">{cashLinkError}</p>}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setCashLinkOpen(false)}
+                disabled={isCashLinkPending}
+                className="text-white/60 hover:text-white hover:bg-white/10"
+              >
+                Anuluj
+              </Button>
+              <Button
+                type="submit"
+                disabled={isCashLinkPending}
+                className="bg-emerald-700 hover:bg-emerald-600 text-white gap-2"
+              >
+                {isCashLinkPending && <LoaderCircle className="w-4 h-4 animate-spin" />}
+                Podepnij
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -528,11 +825,12 @@ function RealEstateSection({
 }
 
 function WalletCard({
-  wallet, viewCcy, conv,
+  wallet, viewCcy, conv, onRefresh,
 }: {
   wallet: WalletManagerNode
   viewCcy: ViewCcy
   conv: (a: number, f: string, t: string) => number
+  onRefresh: () => void
 }) {
   const [open, setOpen] = useState(true)
 
@@ -587,7 +885,7 @@ function WalletCard({
             <DepositSection accounts={depositAccounts} viewCcy={viewCcy} conv={conv} />
           )}
           {brokerageAccounts.length > 0 && (
-            <BrokerageSection accounts={brokerageAccounts} viewCcy={viewCcy} conv={conv} />
+            <BrokerageSection accounts={brokerageAccounts} viewCcy={viewCcy} conv={conv} onRefresh={onRefresh} />
           )}
           {wallet.metals && (wallet.metals.count ?? 0) > 0 && (
             <MetalsSection metals={wallet.metals} viewCcy={viewCcy} conv={conv} />
@@ -716,7 +1014,13 @@ export function WalletManagerPage({ wallets, fxRates }: Props) {
 
         {/* Wallet cards */}
         {wallets.map((w) => (
-          <WalletCard key={w.id} wallet={w} viewCcy={viewCcy} conv={conv} />
+          <WalletCard
+            key={w.id}
+            wallet={w}
+            viewCcy={viewCcy}
+            conv={conv}
+            onRefresh={() => router.refresh()}
+          />
         ))}
 
       </div>

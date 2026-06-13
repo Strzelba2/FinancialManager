@@ -61,6 +61,7 @@ services:
       POSTGRES_PASSWORD: mypassword
       DJANGO_CREATE_SUPERUSER: "0"
       ALLOWED_HOSTS: ${SESSION_AUTH_ALLOWED_HOSTS:-wallet.localhost,localhost,127.0.0.1,session-auth,session-auth.localhost}
+      ALLOWED_WALLET_IPS: "['127.0.0.1', '172.0.0.0/8']"
       GUNICORN_WORKERS: ${SESSION_AUTH_GUNICORN_WORKERS:-3}
       GUNICORN_TIMEOUT: ${SESSION_AUTH_GUNICORN_TIMEOUT:-60}
       GUNICORN_LOG_LEVEL: ${SESSION_AUTH_GUNICORN_LOG_LEVEL:-info}
@@ -107,6 +108,8 @@ services:
       context: .
       dockerfile: tests/docker/test-runner.Dockerfile
     working_dir: /workspace
+    env_file:
+      - ./stock/app/core/.envs/.env.local
     volumes:
       - .:/workspace
     depends_on:

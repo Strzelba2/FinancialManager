@@ -8,27 +8,48 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import db
 from app.schemas.response import (
     BrokerageEventWithHoldingRead, BrokerageEventsImportSummary, BrokerageEventPageOut,
-    BrokerageEventRowOut, BatchUpdateBrokerageEventsRequest
+    BrokerageEventRowOut, BatchUpdateBrokerageEventsRequest, BrokerageCashLinkResult
     )
 from app.schemas.schemas import (
-    BrokerageEventCreate, HoldingRead, BrokerageEventsImportRequest, BrokerageAccountRead
+    BrokerageEventCreate, HoldingRead, BrokerageEventsImportRequest, BrokerageAccountRead,
+    BrokerageCashLinksEnsureRequest, BrokerageHistoryImportRequest
     )
+from app.models.enums import BrokerageEventKind
 from app.api.services.brokerage_event import (
     create_brokerage_event_and_update_holding
     )
+from app.api.services.brokerage_history_import import import_brokerage_history_service
+from app.api.services.accounts import (
+    create_brokerage_cash_account_link_service,
+    delete_brokerage_account_with_cash_accounts_service,
+)
+from app.api.deps import get_auth_crypto, get_internal_user_id, get_stock_client
+from app.clients.auth_client import AuthCryptoClient
+from app.clients.stock_client import StockClient
+from app.crud.brokerage_deposit_link_crud import get_link_by_ba_and_currency
 from app.crud.broker_event_crud import (
     list_brokerage_events_page, batch_patch_brokerage_events, delete_brokerage_event_and_rebuild_holding
     )
+from app.crud.holding_crud import HoldingQuantityExceeded
 from app.crud.brokerage_account_crud import (
-    list_brokerage_accounts_for_user, get_brokerage_account_for_user, delete_brokerage_account
+    list_brokerage_accounts_for_user, get_brokerage_account_for_user
 )
-from app.api.deps import get_internal_user_id
 from app.crud.user_crud import get_user
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _brokerage_row_context(row) -> dict:
+    return {
+        "instrument_symbol": row.instrument_symbol,
+        "instrument_name": row.instrument_name,
+        "kind": row.kind,
+        "trade_at": row.trade_at,
+        "quantity": row.quantity,
+    }
 
 
 @router.get("/brokerage/accounts", response_model=list[BrokerageAccountRead])
@@ -52,6 +73,87 @@ async def get_brokerage_accounts_for_user(
 
 
 @router.post(
+    "/brokerage/{brokerage_account_id}/cash-links/ensure",
+    response_model=list[BrokerageCashLinkResult],
+)
+async def ensure_brokerage_cash_links(
+    brokerage_account_id: uuid.UUID,
+    payload: BrokerageCashLinksEnsureRequest,
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+    crypto: AuthCryptoClient = Depends(get_auth_crypto),
+) -> list[BrokerageCashLinkResult]:
+    user = await get_user(session, user_id)
+    if not user:
+        raise HTTPException(status_code=400, detail='Unknown user_id')
+    username = user.username
+    await session.rollback()
+
+    brokerage_account = await get_brokerage_account_for_user(
+        session=session,
+        user_id=user_id,
+        brokerage_account_id=brokerage_account_id,
+    )
+    if brokerage_account is None:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Brokerage account not found.",
+        )
+    brokerage_id = brokerage_account.id
+    brokerage_wallet_id = brokerage_account.wallet_id
+    brokerage_bank_id = brokerage_account.bank_id
+    brokerage_name = brokerage_account.name
+    await session.rollback()
+
+    seen = set()
+    results: list[BrokerageCashLinkResult] = []
+    for cash_account in payload.cash_accounts:
+        if cash_account.currency in seen:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Duplicate brokerage cash currency: {cash_account.currency.value}",
+            )
+        seen.add(cash_account.currency)
+
+        existing = await get_link_by_ba_and_currency(
+            session,
+            brokerage_account_id=brokerage_id,
+            currency=cash_account.currency,
+        )
+        if existing is not None:
+            results.append(
+                BrokerageCashLinkResult(
+                    currency=cash_account.currency,
+                    deposit_account_id=existing.deposit_account_id,
+                    created=False,
+                )
+            )
+            continue
+
+        account = await create_brokerage_cash_account_link_service(
+            session=session,
+            brokerage_account_id=brokerage_id,
+            wallet_id=brokerage_wallet_id,
+            bank_id=brokerage_bank_id,
+            brokerage_name=brokerage_name,
+            cash_account=cash_account,
+            username=username,
+            crypto=crypto,
+        )
+        results.append(
+            BrokerageCashLinkResult(
+                currency=cash_account.currency,
+                deposit_account_id=account.id,
+                created=True,
+                name=account.name,
+            )
+        )
+
+    return results
+
+
+@router.post(
     "/brokerage/event",
     response_model=BrokerageEventWithHoldingRead,
 )
@@ -59,6 +161,7 @@ async def create_brokerage_event_endpoint(
     payload: BrokerageEventCreate,
     user_id: uuid.UUID = Depends(get_internal_user_id),
     session: AsyncSession = Depends(db.get_session),
+    stock_client: StockClient = Depends(get_stock_client),
 ):
     """
     Create a single brokerage event and update the corresponding holding.
@@ -87,9 +190,25 @@ async def create_brokerage_event_endpoint(
             "create_brokerage_event_endpoint: unknown user_id"
         )
         raise HTTPException(status_code=400, detail='Unknown user_id')
+
+    brokerage_account = await get_brokerage_account_for_user(
+        session=session,
+        user_id=user_id,
+        brokerage_account_id=payload.brokerage_account_id,
+    )
+    await session.rollback()
+    if brokerage_account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Brokerage account not found.",
+        )
     
     async with session.begin():
-        event, holding = await create_brokerage_event_and_update_holding(session, payload)
+        event, holding = await create_brokerage_event_and_update_holding(
+            session,
+            payload,
+            stock_client=stock_client,
+        )
     
     if holding:
         holding = HoldingRead.model_validate(holding)
@@ -103,6 +222,8 @@ async def create_brokerage_event_endpoint(
         price=event.price,
         currency=event.currency,
         split_ratio=event.split_ratio,
+        note=event.note,
+        target_instrument_id=event.target_instrument_id,
         trade_at=event.trade_at,
         holding=holding,
     )
@@ -116,6 +237,7 @@ async def import_brokerage_events_endpoint(
     payload: BrokerageEventsImportRequest,
     user_id: uuid.UUID = Depends(get_internal_user_id),
     session: AsyncSession = Depends(db.get_session),
+    stock_client: StockClient = Depends(get_stock_client),
 ) -> BrokerageEventsImportSummary:
     """
     Import a batch of brokerage events and update holdings for each row.
@@ -151,35 +273,121 @@ async def import_brokerage_events_endpoint(
         )
         raise HTTPException(status_code=400, detail='Unknown user_id')
 
+    brokerage_account = await get_brokerage_account_for_user(
+        session=session,
+        user_id=user_id,
+        brokerage_account_id=payload.brokerage_account_id,
+    )
+    await session.rollback()
+    if brokerage_account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Brokerage account not found.",
+        )
+
+    total = len(payload.events)
     created = 0
+    skipped_duplicates = 0
     failed = 0
     errors: list[str] = []
+    rows: list[dict] = []
 
-    for idx, row in enumerate(payload.events, start=1):
+    # Apply events oldest-first so that holdings build up before they are reduced
+    # (broker exports such as Saxo list newest-first, which would otherwise process
+    # a SELL before its BUY). The original 1-based index is kept for row labels.
+    ordered_events = sorted(enumerate(payload.events, start=1), key=lambda pair: pair[1].trade_at)
+
+    for idx, row in ordered_events:
+        if row.kind == BrokerageEventKind.CONVERSION:
+            failed += 1
+            msg = "CONVERSION events must be created manually through holding actions."
+            errors.append(f"Row {idx}: {msg}")
+            rows.append(
+                {
+                    "row": idx,
+                    "status": "failed",
+                    "message": msg,
+                    "reason_code": "conversion_import_not_supported",
+                    **_brokerage_row_context(row),
+                }
+            )
+            continue
+
         be_payload = BrokerageEventCreate(
             brokerage_account_id=payload.brokerage_account_id,
             instrument_symbol=row.instrument_symbol,
             instrument_mic=row.instrument_mic,
-            instrument_name=row.instrument_name,
+            instrument_name=row.instrument_name or row.instrument_symbol,
             kind=row.kind,
-            quantity=row.quantity,
-            price=row.price,
-            currency=row.currency,
-            split_ratio=row.split_ratio,
-            trade_at=row.trade_at,
-        )
+                quantity=row.quantity,
+                price=row.price,
+                currency=row.currency,
+                split_ratio=row.split_ratio,
+                note=row.note,
+                target_instrument_id=row.target_instrument_id,
+                trade_at=row.trade_at,
+                settlement_currency=row.settlement_currency,
+                fx_rate=row.fx_rate,
+            )
 
         try:
             async with session.begin():
                 event, holding = await create_brokerage_event_and_update_holding(
-                    session, be_payload, creat_transaction=False
+                    session,
+                    be_payload,
+                    creat_transaction=False,
+                    stock_client=stock_client,
                 )
             created += 1
-        except HTTPException as e:
+            rows.append(
+                {
+                    "row": idx,
+                    "status": "created",
+                    "brokerage_event_id": event.id,
+                    **_brokerage_row_context(row),
+                }
+            )
+        except HoldingQuantityExceeded as e:
             failed += 1
             msg = f"Row {idx}: HTTP {e.status_code} - {e.detail}"
             logger.warning(msg)
             errors.append(msg)
+            rows.append(
+                {
+                    "row": idx,
+                    "status": "failed",
+                    "message": msg,
+                    **_brokerage_row_context(row),
+                    **e.context,
+                }
+            )
+        except HTTPException as e:
+            if e.status_code == status.HTTP_409_CONFLICT:
+                skipped_duplicates += 1
+                msg = f"Row {idx}: skipped duplicate - {e.detail}"
+                logger.info(msg)
+                rows.append(
+                    {
+                        "row": idx,
+                        "status": "skipped_duplicate",
+                        "message": str(e.detail),
+                        **_brokerage_row_context(row),
+                    }
+                )
+                continue
+
+            failed += 1
+            msg = f"Row {idx}: HTTP {e.status_code} - {e.detail}"
+            logger.warning(msg)
+            errors.append(msg)
+            rows.append(
+                {
+                    "row": idx,
+                    "status": "failed",
+                    "message": msg,
+                    **_brokerage_row_context(row),
+                }
+            )
         except Exception as e: 
             failed += 1
             msg = f"Row {idx}: unexpected error: {e}"
@@ -187,12 +395,60 @@ async def import_brokerage_events_endpoint(
                 f"import_brokerage_events_endpoint: unexpected error for row {idx}"
             )
             errors.append(msg)
+            rows.append(
+                {
+                    "row": idx,
+                    "status": "failed",
+                    "message": msg,
+                    **_brokerage_row_context(row),
+                }
+            )
 
     return BrokerageEventsImportSummary(
+        total=total,
         created=created,
+        skipped_duplicates=skipped_duplicates,
         failed=failed,
         errors=errors,
+        rows=rows,
     )
+
+
+@router.post(
+    "/brokerage/history/import",
+    response_model=BrokerageEventsImportSummary,
+)
+async def import_brokerage_history_endpoint(
+    payload: BrokerageHistoryImportRequest,
+    user_id: uuid.UUID = Depends(get_internal_user_id),
+    session: AsyncSession = Depends(db.get_session),
+    stock_client: StockClient = Depends(get_stock_client),
+) -> BrokerageEventsImportSummary:
+    user = await get_user(session, user_id)
+    await session.rollback()
+    if not user:
+        logger.warning("import_brokerage_history_endpoint: unknown user_id")
+        raise HTTPException(status_code=400, detail='Unknown user_id')
+
+    brokerage_account = await get_brokerage_account_for_user(
+        session=session,
+        user_id=user_id,
+        brokerage_account_id=payload.brokerage_account_id,
+    )
+    await session.rollback()
+    if brokerage_account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Brokerage account not found.",
+        )
+
+    async with session.begin():
+        return await import_brokerage_history_service(
+            session=session,
+            user_id=user_id,
+            payload=payload,
+            stock_client=stock_client,
+        )
     
 
 @router.get("/brokerage/events", response_model=BrokerageEventPageOut)
@@ -351,9 +607,10 @@ async def api_delete_brokerage_account(
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Account not found')
     
-    ok = await delete_brokerage_account(
+    ok = await delete_brokerage_account_with_cash_accounts_service(
         session=session,
-        account_id=brokerage_account_id,
+        user_id=user_id,
+        brokerage_account_id=brokerage_account_id,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Brokerage account not found")

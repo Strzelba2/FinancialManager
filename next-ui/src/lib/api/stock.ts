@@ -9,8 +9,19 @@ type RequestResult<T> =
   | { ok: true; data: T; status: number }
   | { ok: false; error: string; status: number }
 
-function buildErrorMessage(status: number): string {
+function extractErrorMessage(status: number, body: string): string {
   if (status === 404) return 'Nie znaleziono danych'
+  try {
+    const json = JSON.parse(body) as Record<string, unknown>
+    if (typeof json.detail === 'string') return json.detail
+    if (Array.isArray(json.detail) && json.detail.length > 0) {
+      const first = json.detail[0] as Record<string, unknown>
+      if (typeof first.msg === 'string') return first.msg
+    }
+    if (typeof json.error === 'string') return json.error
+  } catch {
+    // ignore parse error
+  }
   return `Błąd serwera (${status})`
 }
 
@@ -28,7 +39,7 @@ async function requestWithMeta<T>(path: string, init?: RequestInit): Promise<Req
     if (!res.ok) {
       const text = await res.text()
       logger.warn({ path, status: res.status, body: text }, 'stock API error')
-      return { ok: false, error: buildErrorMessage(res.status), status: res.status }
+      return { ok: false, error: extractErrorMessage(res.status, text), status: res.status }
     }
 
     const data = await res.json() as T
@@ -48,13 +59,61 @@ async function request<T>(path: string, init?: RequestInit): Promise<ApiResult<T
   return { ok: false, error: result.error }
 }
 
-export async function getMarkets(): Promise<ApiResult<Array<{ mic: string; name: string }>>> {
-  return request<Array<{ mic: string; name: string }>>('/stock/markets')
+export async function getMarkets(options?: { onlyWithInstruments?: boolean }): Promise<ApiResult<Array<{ mic: string; name: string }>>> {
+  const qs = new URLSearchParams()
+  if (options?.onlyWithInstruments) qs.set('only_with_instruments', 'true')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return request<Array<{ mic: string; name: string }>>(`/stock/markets${suffix}`)
 }
 
 export async function getInstruments(mic: string): Promise<ApiResult<Array<{ symbol: string; shortname: string }>>> {
   const qs = new URLSearchParams({ mic })
   return request<Array<{ symbol: string; shortname: string }>>(`/stock/instruments/options?${qs.toString()}`)
+}
+
+export type CreateMarketPayload = {
+  mic: string
+  name: string
+  country: string
+  timezone: string
+  active: boolean
+  currency: 'PLN' | 'USD' | 'EUR' | 'GBP' | 'CHF'
+}
+
+export type CreateInstrumentPayload = {
+  market_mic: string
+  symbol: string
+  shortname: string
+  name?: string | null
+  type: string
+  status: string
+  currency: 'PLN' | 'USD' | 'EUR' | 'GBP' | 'CHF'
+  isin?: string | null
+  historical_source?: string | null
+  quote_source?: string | null
+}
+
+export type CreatedMarket = CreateMarketPayload
+
+export type CreatedInstrument = CreateInstrumentPayload & {
+  market_id: string
+  mic: string
+}
+
+export async function createMarket(payload: CreateMarketPayload): Promise<RequestResult<CreatedMarket>> {
+  return requestWithMeta<CreatedMarket>('/stock/markets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function createInstrument(payload: CreateInstrumentPayload): Promise<RequestResult<CreatedInstrument>> {
+  return requestWithMeta<CreatedInstrument>('/stock/instruments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
 }
 
 // GET /stock/quotes/latest/bulk?mic=... — full quotes (price, change, volume, last_trade_at)
@@ -69,11 +128,12 @@ export type BulkQuote = {
   last_trade_date_fmt?: string | null
   last_trade_time_fmt?: string | null
   name?: string | null
+  currency?: string | null
 }
 
 const amountFormatter = new Intl.NumberFormat('pl-PL', {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
+  minimumFractionDigits: 3,
+  maximumFractionDigits: 3,
 })
 
 const dateFormatter = new Intl.DateTimeFormat('pl-PL', {
@@ -167,6 +227,7 @@ export type QuoteRow = {
   changePctFmt: string
   lastTradeDateFmt: string | null
   lastTradeTimeFmt: string | null
+  currency: string | null
 }
 
 export function processQuotes(raw: Record<string, BulkQuote>): QuoteRow[] {
@@ -180,6 +241,7 @@ export function processQuotes(raw: Record<string, BulkQuote>): QuoteRow[] {
     changePctFmt: q.change_pct_fmt ?? '—',
     lastTradeDateFmt: q.last_trade_date_fmt ?? null,
     lastTradeTimeFmt: q.last_trade_time_fmt ?? null,
+    currency: q.currency ?? null,
   }))
 }
 
@@ -189,6 +251,8 @@ export type QuoteBySymbol = {
   currency: string
   change_pct: string | number
 }
+
+type QuoteBySymbolResponse = QuoteBySymbol[] | { quotes?: QuoteBySymbol[] }
 
 export type CeleryStatus = {
   enabled: boolean
@@ -207,6 +271,10 @@ export type ManualIngestStatus = {
   state: 'idle' | 'running' | 'done' | 'error'
   detail?: string
   started_at?: string
+  processed?: string | number
+  quote_source_processed?: string | number
+  quote_source_failed?: string | number
+  quote_source_errors?: Array<{ symbol?: string; mic?: string; detail?: string }>
 }
 
 export type EquityReportApiResponse = {
@@ -378,9 +446,10 @@ export async function getQuotesBySymbols(symbols: string[]): Promise<Record<stri
       logger.warn({ status: res.status }, 'getQuotesBySymbols: API error')
       return {}
     }
-    const data = await res.json() as { quotes?: QuoteBySymbol[] }
+    const data = await res.json() as QuoteBySymbolResponse
+    const quotes = Array.isArray(data) ? data : (data.quotes ?? [])
     const out: Record<string, QuoteBySymbol> = {}
-    for (const q of data.quotes ?? []) {
+    for (const q of quotes) {
       out[q.symbol] = q
     }
     return out

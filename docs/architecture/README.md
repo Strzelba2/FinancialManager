@@ -32,6 +32,8 @@ Current detailed design entrypoints:
 
 - [Session Login Security](../design/session-login-security.md)
 - [Wallet Transaction Lifecycle](../design/wallet-transaction-lifecycle.md)
+- [Brokerage Holding Events](../design/brokerage-holding-events.md)
+- [Brokerage Account Import And Quotes](../design/brokerage-account-import-and-quotes.md)
 
 ## System at a Glance
 

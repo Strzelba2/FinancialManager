@@ -245,12 +245,14 @@ class TestNextUiForwardAuthBypass:
             f"{traefik_url}{path}",
             headers={
                 "Host": "next.localhost",
+                "Accept": "text/html",
+                "User-Agent": BROWSER_USER_AGENT,
                 "X-User": "spoofed-user",
                 "X-First-Name": "Spoofed",
                 "X-Email": "spoofed@example.com",
                 "X-User-Id": str(uuid4()),
             },
-            follow_redirects=True,
+            follow_redirects=False,
             timeout=10.0,
         )
 

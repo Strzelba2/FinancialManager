@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 
 import { TransactionsPage } from '@/features/wallet/components/TransactionsPage'
 import { nextUiUnitStory } from '../allure'
@@ -20,22 +20,11 @@ vi.mock('sonner', () => ({
   },
 }))
 
-const server = setupServer()
-
 describe('TransactionsPage filters', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     server.resetHandlers()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('offers tax category and status filters for transaction classification', async () => {
     await nextUiUnitStory('Wallet transactions page exposes tax category and status filters', {
       severity: 'critical',

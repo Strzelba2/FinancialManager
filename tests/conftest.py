@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from tests.helpers import factories
@@ -28,3 +30,8 @@ def wallet_url() -> str:
 @pytest.fixture
 def stock_url() -> str:
     return "http://stock:8001"
+
+
+@pytest.fixture
+def quote_source_base_url() -> str:
+    return os.environ.get("ST_BASE_URL", "").rstrip("/")

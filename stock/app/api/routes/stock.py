@@ -6,18 +6,25 @@ import asyncio
 import uuid
 import logging
 
+from app.models.models import Market
 from app.api.services.quotes import get_latest_quote_service, get_latest_bulk_service
 from app.db.session import db
 from app.schemas.schemas import (
-    MarketOut, InstrumentOptionOut, InstrumentSearchRead, InstrumentRead
+    MarketCreate,
+    MarketOut,
+    InstrumentCreate,
+    InstrumentManualCreate,
+    InstrumentOptionOut,
+    InstrumentSearchRead,
+    InstrumentRead,
 )
 from app.schemas.quotes import (
     LatestQuoteBySymbol, QuotesBySymbolsRequest, CandleDailyOut, SyncDailyResponse,
     SyncDailyRequest, ImportDailyCsvRequest, SyncDailyResult
 )
-from app.crud.market import list_markets
+from app.crud.market import create_market, get_market_id_by_mic, list_markets
 from app.crud.instrument import (
-    list_instruments, search_instruments_by_shortname_or_name, get_instrument_by_symbol,
+    create_instrument, list_instruments, search_instruments_by_shortname_or_name, get_instrument_by_symbol,
     get_instrument_with_market_by_mic_symbol
 )
 from app.api.services.quotes import (
@@ -25,7 +32,7 @@ from app.api.services.quotes import (
 )
 from app.crud.candle_daily import list_candles_daily
 from app.markerdata.registry import get_provider
-from app.api.services.stock import ingest_market
+from app.api.services.stock import ingest_market, refresh_quote_source_instruments
 from app.reports.equity.schemas import EquityReportResponse
 from app.reports.equity.service import (
     ReportConflictError,
@@ -35,8 +42,19 @@ from app.reports.equity.service import (
 )
 
 router = APIRouter()
-
 logger = logging.getLogger(__name__)
+
+
+def _instrument_read_with_mic(inst: Any, mic: str) -> InstrumentRead:
+    if inst.currency is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Instrument currency must be set in stock.",
+        )
+    return InstrumentRead(
+        **inst.model_dump(),
+        mic=mic,
+    )
 
 
 async def _build_sync_daily_response(
@@ -141,7 +159,10 @@ async def get_latest_bulk(
 
 
 @router.get("/markets", response_model=list[MarketOut])
-async def get_list_markets(session: AsyncSession = Depends(db.get_session)) -> list[MarketOut]:
+async def get_list_markets(
+    only_with_instruments: bool = Query(False),
+    session: AsyncSession = Depends(db.get_session),
+) -> list[MarketOut]:
     """
     List all configured markets.
 
@@ -154,9 +175,12 @@ async def get_list_markets(session: AsyncSession = Depends(db.get_session)) -> l
     Raises:
         HTTPException(404): If there are no markets to display.
     """
-    logger.info("Request: get_list_markets")
+    logger.info("Request: get_list_markets only_with_instruments=%r", only_with_instruments)
     
-    list_of_markets = await list_markets(session)   
+    list_of_markets = await list_markets(
+        session,
+        only_with_instruments=only_with_instruments,
+    )
     if not list_of_markets:
         logger.warning("No markets found in database")
         raise HTTPException(status_code=404, detail="No markets to display")
@@ -164,6 +188,24 @@ async def get_list_markets(session: AsyncSession = Depends(db.get_session)) -> l
     result = [MarketOut.model_validate(m) for m in list_of_markets]
     logger.debug(f"Markets response with {len(result)} items")
     return result
+
+
+@router.post(
+    "/markets",
+    response_model=MarketOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_market_endpoint(
+    payload: MarketCreate,
+    session: AsyncSession = Depends(db.get_session),
+) -> MarketOut:
+    logger.info("Request: create_market_endpoint mic=%r", payload.mic)
+    try:
+        async with session.begin():
+            market = await create_market(session, payload)
+        return MarketOut.model_validate(market)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/instruments/options", response_model=list[InstrumentOptionOut])
@@ -195,6 +237,59 @@ async def get_instrument_options(
     result = [InstrumentOptionOut.model_validate(i) for i in instruments]
     logger.debug(f"Instrument options response for mic={mic!r}: {len(result)} items")
     return result
+
+
+@router.post(
+    "/instruments",
+    response_model=InstrumentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_instrument_endpoint(
+    payload: InstrumentManualCreate,
+    session: AsyncSession = Depends(db.get_session),
+) -> InstrumentRead:
+    market_id = payload.market_id
+    if market_id is None:
+        if not payload.market_mic:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="market_id or market_mic is required",
+            )
+        market_id = await get_market_id_by_mic(session, payload.market_mic.strip().upper())
+        await session.rollback()
+
+    if market_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Market not found.",
+        )
+
+    market = await session.get(Market, market_id)
+    if market is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Market not found.",
+        )
+    market_mic = market.mic
+    await session.rollback()
+    if payload.currency is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Instrument currency is required.",
+        )
+
+    data = InstrumentCreate(
+        **payload.model_dump(exclude={"market_id", "market_mic"}),
+        market_id=market_id,
+    )
+
+    try:
+        async with session.begin():
+            instrument = await create_instrument(session, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return _instrument_read_with_mic(instrument, market_mic)
 
 
 @router.get("/instruments/resolve", response_model=InstrumentRead)
@@ -231,11 +326,7 @@ async def api_resolve_instrument(
 
     inst, market = result
 
-    return InstrumentRead(
-        **inst.model_dump(),
-        mic=market.mic,
-        currency=market.currency,
-    )
+    return _instrument_read_with_mic(inst, market.mic)
 
 
 @router.get(
@@ -606,7 +697,19 @@ async def start_manual_ingest(
 
                     all_processed += await ingest_market(session, provider, market_key, storage)
 
-            await storage.stock.hmset(job_key, {"state": "done"}, ttl=60 * 60)
+                quote_source_result = await refresh_quote_source_instruments(session, storage)
+
+            await storage.stock.hmset(
+                job_key,
+                {
+                    "state": "done",
+                    "processed": all_processed,
+                    "quote_source_processed": quote_source_result["processed"],
+                    "quote_source_failed": quote_source_result["failed"],
+                    "quote_source_errors": quote_source_result["errors"][:10],
+                },
+                ttl=60 * 60,
+            )
 
         except Exception as ex:
             logger.exception(f"start_manual_ingest._run: job failed job_id={job_id!r}")
@@ -621,7 +724,7 @@ async def start_manual_ingest(
                 )
 
     asyncio.create_task(_run())
-    return {"ok": True}
+    return {"ok": True, "job_id": job_id}
 
 
 @router.get("/ingest/status")

@@ -3,10 +3,25 @@ from enum import Enum
 
 class Currency(str, Enum):
     PLN = "PLN"
-    USD = "USD" 
+    USD = "USD"
     EUR = "EUR"
-   
-    
+
+
+class InstrumentCurrency(str, Enum):
+    """Quote/trade currency of an instrument or brokerage event.
+
+    Superset of the base reporting ``Currency`` (PLN/USD/EUR). Instruments may be
+    quoted in additional currencies (e.g. CHF, GBP); positions are tracked in this
+    currency and converted to a base reporting currency via FX. Cash settlement and
+    capital gains stay in the base ``Currency``.
+    """
+    PLN = "PLN"
+    USD = "USD"
+    EUR = "EUR"
+    GBP = "GBP"
+    CHF = "CHF"
+
+
 class AccountType(str, Enum):
     CURRENT = "CURRENT"  
     SAVINGS = "SAVINGS" 
@@ -19,6 +34,8 @@ class BrokerageEventKind(str, Enum):
     TRADE_SELL = "SELL"
     SPLIT = "SPLIT"
     DIV = "DIV"
+    ADJUSTMENT = "ADJUSTMENT"
+    CONVERSION = "CONVERSION"
     
 
 class CapitalGainKind(str, Enum):

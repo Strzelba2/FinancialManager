@@ -13,6 +13,7 @@ class QuotePayloadOut(BaseModel):
     change_pct: Optional[Decimal] = None
     volume: Optional[int] = None
     last_trade_at: Optional[datetime] = None
+    currency: Optional[Currency] = None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -20,7 +20,9 @@ function conv(amount: number, from: string, to: string, rates: FxRates | null): 
 
 export type HoldingRawRow = {
   id: string
+  accountId: string
   symbol: string
+  instrumentMic: string
   name: string
   currency: string          
   accountsDisp: string      
@@ -35,6 +37,7 @@ export type HoldingRawRow = {
   valueView: number | null  
   pnlView: number | null    
   changePct: number         
+  quoteMissing: boolean
 }
 
 export type HoldingsResult = {
@@ -74,6 +77,7 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
     currency: string
     accounts: Set<string>
     accountId: string
+    instrumentMic: string
     totalQty: number
     totalCost: number   
   }>()
@@ -98,6 +102,7 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
         currency: ccy,
         accounts: new Set([accountName]),
         accountId: h.account_id,
+        instrumentMic: h.instrument_mic ?? '',
         totalQty: qty,
         totalCost: qty * avgCost,
       })
@@ -121,19 +126,20 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
     const cost = rec.totalCost
 
     const quote = quotesMap[symbol]
+    const quoteMissing = !quote
     const quoteCcy = quote?.currency ?? rec.currency
     const ccy = quoteCcy || rec.currency
-    const priceRaw = toNum(quote?.price)
-    const changePct = toNum(quote?.change_pct)
+    const priceRaw = quoteMissing ? 0 : toNum(quote?.price)
+    const changePct = quoteMissing ? 0 : toNum(quote?.change_pct)
 
     const avgCostRaw = qty > 0 ? cost / qty : 0
-    const valueRaw = qty * priceRaw
-    const pnlAmountRaw = valueRaw - cost
-    const pnlPct = cost > 0 ? pnlAmountRaw / cost : 0
+    const valueRaw = quoteMissing ? 0 : qty * priceRaw
+    const pnlAmountRaw = quoteMissing ? 0 : valueRaw - cost
+    const pnlPct = !quoteMissing && cost > 0 ? pnlAmountRaw / cost : 0
 
-    const costView = ccy && ccy !== '—' ? conv(cost, ccy, viewCcy, rates) : null
-    const valueView = ccy && ccy !== '—' ? conv(valueRaw, ccy, viewCcy, rates) : null
-    const pnlView = ccy && ccy !== '—' ? conv(pnlAmountRaw, ccy, viewCcy, rates) : null
+    const costView = !quoteMissing && ccy && ccy !== '—' ? conv(cost, ccy, viewCcy, rates) : null
+    const valueView = !quoteMissing && ccy && ccy !== '—' ? conv(valueRaw, ccy, viewCcy, rates) : null
+    const pnlView = !quoteMissing && ccy && ccy !== '—' ? conv(pnlAmountRaw, ccy, viewCcy, rates) : null
 
     if (valueView !== null) totalValueView += valueView
     if (costView !== null) totalCostView += costView
@@ -145,7 +151,9 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
 
     rows.push({
       id: rec.key,
+      accountId: rec.accountId,
       symbol,
+      instrumentMic: rec.instrumentMic,
       name,
       currency: ccy,
       accountsDisp,
@@ -160,6 +168,7 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
       valueView,
       pnlView,
       changePct,
+      quoteMissing,
     })
   }
 

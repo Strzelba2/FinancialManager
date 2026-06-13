@@ -10,16 +10,16 @@ from sqlalchemy.dialects import postgresql as pg
 from typing import Optional, ClassVar, Set, Dict, Any
 
 from .enums import (
-    PropertyType, AccountType, Currency, InstrumentType,
+    PropertyType, AccountType, Currency, InstrumentCurrency, InstrumentType,
     MetalType, BrokerageEventKind, CapitalGainKind
     )
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, 
     Shortname, BICOpt, NonEmptyStr,
-    BytesLen32, Q2,  Q6Pos, AreaQ2OptPos,
+    BytesLen32, Q2, Q10, Q6Pos, AreaQ2OptPos,
     CountryISO2Opt, CityOpt, NoneIfEmpty,
-    MICCode
+    MICCode, Symbol12
 )
 
 
@@ -207,15 +207,30 @@ class BrokerageEventBase(SQLModel):
         sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
         description="price envent"
     )
-    currency: Currency = Field(
-        sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False),
-        description="Brokerage event currency."
+    currency: InstrumentCurrency = Field(
+        sa_column=sa.Column(sa.Enum(InstrumentCurrency, name="instrument_currency_enum"), nullable=False),
+        description="Brokerage event (instrument/quote) currency."
     )
     
-    split_ratio: Q2 = Field(
+    split_ratio: Q10 = Field(
         default=Decimal("0"),
-        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        sa_column=sa.Column(sa.Numeric(28, 10), nullable=False, server_default="0"),
         description="Split event"
+    )
+    note: NoneIfEmpty = Field(
+        default=None,
+        sa_column=sa.Column(sa.String(500), nullable=True),
+        description="Optional brokerage event audit note."
+    )
+    target_instrument_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("instruments.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+        description="Target instrument for corporate conversions/rebrandings."
     )
     trade_at: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))  
    
@@ -270,12 +285,12 @@ class HoldingBase(SQLModel):
 class InstrumentBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True)
     
-    symbol: Shortname = Field(sa_column=sa.Column(sa.String(5), unique=True, index=True))
+    symbol: Symbol12 = Field(sa_column=sa.Column(sa.String(12), unique=True, index=True))
     mic: MICCode = Field(sa_column=sa.Column(sa.String(4), index=True, nullable=False),
                          description="MIC: 4 uppercase alphanumeric (ISO 10383 operating MICs like XWAR, XLON, XNAS)")
     name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255), nullable=False))
     type: InstrumentType = Field(sa_column=sa.Column(sa.Enum(InstrumentType, name="instrument_type_enum"), nullable=False))
-    currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
+    currency: InstrumentCurrency = Field(sa_column=sa.Column(sa.Enum(InstrumentCurrency, name="instrument_currency_enum"), nullable=False))
     sync_at: datetime = Field(
         sa_column=sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now(),
                             onupdate=sa.func.now(), nullable=False)

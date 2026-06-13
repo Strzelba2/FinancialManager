@@ -8,12 +8,48 @@ const Schema = z.object({
   instrument_symbol: z.string().min(1).trim(),
   instrument_mic: z.string().min(1).trim(),
   instrument_name: z.string().min(1).trim(),
-  kind: z.enum(['BUY', 'SELL', 'DIV']),
+  kind: z.enum(['BUY', 'SELL', 'DIV', 'SPLIT', 'ADJUSTMENT', 'CONVERSION']),
   quantity: z.string().min(1).trim(),
   price: z.string().min(1).trim(),
-  currency: z.enum(['PLN', 'USD', 'EUR']),
+  // Instrument/quote (trade) currency — may be a non-base currency (e.g. CHF, GBP).
+  currency: z.enum(['PLN', 'USD', 'EUR', 'GBP', 'CHF']),
   split_ratio: z.string().min(1).trim(),
+  note: z.string().max(500).trim().nullish(),
+  target_instrument_symbol: z.string().trim().optional(),
+  target_instrument_mic: z.string().trim().optional(),
+  target_instrument_name: z.string().trim().optional(),
   trade_at: z.string().min(1).trim(),
+}).superRefine((data, ctx) => {
+  if (data.kind === 'ADJUSTMENT' && !data.note?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['note'],
+      message: 'Podaj notatkę korekty',
+    })
+  }
+  if (data.kind === 'CONVERSION') {
+    if (!data.note?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['note'],
+        message: 'Podaj notatkę konwersji',
+      })
+    }
+    if (!data.target_instrument_symbol?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['target_instrument_symbol'],
+        message: 'Podaj symbol instrumentu docelowego',
+      })
+    }
+    if (!data.target_instrument_mic?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['target_instrument_mic'],
+        message: 'Podaj rynek instrumentu docelowego',
+      })
+    }
+  }
 })
 
 export async function POST(req: Request) {

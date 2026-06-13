@@ -7,6 +7,12 @@ export type FxRates = {
   'PLN/EUR': number
   'USD/EUR': number
   'EUR/USD': number
+  'CHF/PLN': number
+  'CHF/USD': number
+  'CHF/EUR': number
+  'GBP/PLN': number
+  'GBP/USD': number
+  'GBP/EUR': number
 }
 
 const NBP_URL = 'https://api.nbp.pl/api/exchangerates/tables/A?format=json'
@@ -35,6 +41,12 @@ export async function getFxRates(): Promise<FxRates | null> {
 
     const usdEur = usdPln / eurPln
 
+    // CHF/GBP are secondary: their absence must not fail the whole table.
+    // A 0 rate is treated as falsy by the conversion helpers, which then
+    // return the amount unconverted (same as the pre-CHF/GBP behaviour).
+    const chfPln = rates['CHF'] ?? 0
+    const gbpPln = rates['GBP'] ?? 0
+
     return {
       'USD/PLN': usdPln,
       'EUR/PLN': eurPln,
@@ -42,6 +54,12 @@ export async function getFxRates(): Promise<FxRates | null> {
       'PLN/EUR': Math.round((1 / eurPln) * 1e4) / 1e4,
       'USD/EUR': Math.round(usdEur * 1e4) / 1e4,
       'EUR/USD': Math.round((1 / usdEur) * 1e4) / 1e4,
+      'CHF/PLN': chfPln,
+      'CHF/USD': chfPln ? Math.round((chfPln / usdPln) * 1e4) / 1e4 : 0,
+      'CHF/EUR': chfPln ? Math.round((chfPln / eurPln) * 1e4) / 1e4 : 0,
+      'GBP/PLN': gbpPln,
+      'GBP/USD': gbpPln ? Math.round((gbpPln / usdPln) * 1e4) / 1e4 : 0,
+      'GBP/EUR': gbpPln ? Math.round((gbpPln / eurPln) * 1e4) / 1e4 : 0,
     }
   } catch (err) {
     logger.error({ err }, 'NBP API request failed')

@@ -7,6 +7,7 @@ import {
   Search, RefreshCw, TrendingUp, TrendingDown,
   ChevronUp, ChevronDown as ChevdownIcon, Minus,
   MoreVertical, Bell, BarChart2, Star, FileText,
+  Plus,
 } from 'lucide-react'
 import type { QuoteRow } from '@/lib/api/stock'
 import { FavoritesDialog } from './FavoritesDialog'
@@ -19,6 +20,10 @@ const MIC_LABELS: Record<string, string> = {
 }
 
 const MICS = ['XWAR', 'XNCO', 'STCM'] as const
+const DEFAULT_MARKETS = MICS.map((marketMic) => ({
+  mic: marketMic,
+  name: MIC_LABELS[marketMic] ?? marketMic,
+}))
 const AUTO_REFRESH_MS = 10 * 60 * 1000
 const INGEST_POLL_MS = 2_000
 const NO_QUOTES_MESSAGE = 'Brak ostatnich notowań dla tego rynku. Auto-odświeżanie zostało wstrzymane.'
@@ -37,7 +42,36 @@ type RefreshStatusResponse = {
   state?: 'idle' | 'running' | 'done' | 'error'
   detail?: string
   started_at?: string
+  processed?: string | number
+  quote_source_processed?: string | number
+  quote_source_failed?: string | number
+  quote_source_errors?: Array<{ symbol?: string; mic?: string; detail?: string }>
   error?: string
+}
+type MarketOption = {
+  mic: string
+  name: string
+}
+type Currency = 'PLN' | 'USD' | 'EUR' | 'GBP' | 'CHF'
+type MarketForm = {
+  mic: string
+  name: string
+  country: string
+  timezone: string
+  active: boolean
+  currency: Currency
+}
+type InstrumentForm = {
+  market_mic: string
+  symbol: string
+  shortname: string
+  name: string
+  type: string
+  status: string
+  currency: Currency
+  isin: string
+  historical_source: string
+  quote_source: string
 }
 
 function sortRows(rows: QuoteRow[], field: SortField, dir: SortDir): QuoteRow[] {
@@ -58,6 +92,23 @@ function SortIcon({ field, current, dir }: { field: SortField; current: SortFiel
   return dir === 'asc'
     ? <ChevronUp className="w-3 h-3 text-blue-400" />
     : <ChevdownIcon className="w-3 h-3 text-blue-400" />
+}
+
+function countLabel(value: string | number | undefined): number {
+  if (value === undefined || value === null || value === '') return 0
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function formatQuoteSourceErrors(errors: RefreshStatusResponse['quote_source_errors']): string | null {
+  if (!errors?.length) return null
+  const preview = errors.slice(0, 3).map((error) => {
+    const label = [error.symbol, error.mic ? `(${error.mic})` : null].filter(Boolean).join(' ')
+    return [label, error.detail].filter(Boolean).join(': ')
+  }).filter(Boolean)
+  if (!preview.length) return null
+  const suffix = errors.length > preview.length ? ` oraz ${errors.length - preview.length} więcej` : ''
+  return `Błędy ręcznych źródeł notowań: ${preview.join('; ')}${suffix}`
 }
 
 function ThBtn({
@@ -143,6 +194,8 @@ export function QuotesPage({ mic, initialRows }: Props) {
   const router = useRouter()
 
   const [rows, setRows] = useState<QuoteRow[]>(initialRows)
+  const [allMarketOptions, setAllMarketOptions] = useState<MarketOption[]>(DEFAULT_MARKETS)
+  const [quoteMarketOptions, setQuoteMarketOptions] = useState<MarketOption[]>(DEFAULT_MARKETS)
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortField>('symbol')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
@@ -156,6 +209,30 @@ export function QuotesPage({ mic, initialRows }: Props) {
   const [refreshMessage, setRefreshMessage] = useState<string | null>(
     initialRows.length > 0 ? null : NO_QUOTES_MESSAGE,
   )
+  const [showMarketDialog, setShowMarketDialog] = useState(false)
+  const [showInstrumentDialog, setShowInstrumentDialog] = useState(false)
+  const [stockFormError, setStockFormError] = useState<string | null>(null)
+  const [savingStockForm, setSavingStockForm] = useState(false)
+  const [marketForm, setMarketForm] = useState<MarketForm>({
+    mic: '',
+    name: '',
+    country: '',
+    timezone: 'Europe/Warsaw',
+    active: true,
+    currency: 'PLN',
+  })
+  const [instrumentForm, setInstrumentForm] = useState<InstrumentForm>({
+    market_mic: mic,
+    symbol: '',
+    shortname: '',
+    name: '',
+    type: 'ETF',
+    status: 'ACTIVE',
+    currency: 'USD',
+    isin: '',
+    historical_source: '',
+    quote_source: '',
+  })
 
   const [flashMap, setFlashMap] = useState<Record<string, 'up' | 'down'>>({})
   const prevPricesRef = useRef<Record<string, number>>({})
@@ -170,6 +247,45 @@ export function QuotesPage({ mic, initialRows }: Props) {
     }
     ingestPollInFlightRef.current = false
   }, [])
+
+  const loadMarkets = useCallback(async () => {
+    const normalizeMarkets = (payload: MarketOption[]) => (
+      payload
+        .map((market) => ({
+          mic: (market.mic || '').trim().toUpperCase(),
+          name: (market.name || '').trim(),
+        }))
+        .filter((market) => market.mic)
+    )
+
+    try {
+      const [allResponse, quoteResponse] = await Promise.all([
+        fetch('/api/stock/markets', { cache: 'no-store' }),
+        fetch('/api/stock/markets?only_with_instruments=true', { cache: 'no-store' }),
+      ])
+      const allPayload = await allResponse.json().catch(() => null) as MarketOption[] | { error?: string } | null
+      const quotePayload = await quoteResponse.json().catch(() => null) as MarketOption[] | { error?: string } | null
+
+      if (allResponse.ok && Array.isArray(allPayload)) {
+        const markets = normalizeMarkets(allPayload)
+        if (markets.length > 0) setAllMarketOptions(markets)
+      }
+      if (quoteResponse.ok && Array.isArray(quotePayload)) {
+        const markets = normalizeMarkets(quotePayload)
+        if (markets.length > 0) setQuoteMarketOptions(markets)
+      }
+    } catch {
+      /* keep defaults */
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadMarkets()
+  }, [loadMarkets])
+
+  useEffect(() => {
+    setInstrumentForm((current) => ({ ...current, market_mic: mic }))
+  }, [mic])
 
   const applyRows = useCallback((data: QuoteRow[]) => {
     const newFlash: Record<string, 'up' | 'down'> = {}
@@ -298,9 +414,17 @@ export function QuotesPage({ mic, initialRows }: Props) {
         setRefreshing(false)
         const loaded = await fetchRows(targetMic)
         if (loaded) {
-          toast.success('Notowania zostały odświeżone')
+          const manualOk = countLabel(payload?.quote_source_processed)
+          const manualFailed = countLabel(payload?.quote_source_failed)
+          const manualSuffix = manualOk || manualFailed
+            ? ` Ręczne: ${manualOk}, błędów: ${manualFailed}.`
+            : ''
+          toast.success(`Notowania zostały odświeżone.${manualSuffix}`)
         } else {
-          toast.warning('Odświeżanie zakończone, ale nadal brak ostatnich notowań')
+          const manualErrorMessage = formatQuoteSourceErrors(payload?.quote_source_errors)
+          const message = manualErrorMessage ?? 'Odświeżanie zakończone, ale nadal brak ostatnich notowań'
+          setRefreshMessage(message)
+          toast.warning(message)
         }
       } finally {
         ingestPollInFlightRef.current = false
@@ -357,6 +481,87 @@ export function QuotesPage({ mic, initialRows }: Props) {
       toast.error('Nie udało się uruchomić odświeżania notowań')
     }
   }, [fetchRows, mic, startIngestPolling, stopIngestPolling])
+
+  const handleCreateMarket = useCallback(async () => {
+    setStockFormError(null)
+    setSavingStockForm(true)
+    try {
+      const response = await fetch('/api/stock/markets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...marketForm,
+          mic: marketForm.mic.trim().toUpperCase(),
+        }),
+      })
+      const payload = await response.json().catch(() => null) as { error?: string; mic?: string } | null
+      if (!response.ok) {
+        setStockFormError(payload?.error ?? 'Nie udało się dodać marketu')
+        return
+      }
+      toast.success('Market został dodany')
+      setShowMarketDialog(false)
+      setMarketForm({
+        mic: '',
+        name: '',
+        country: '',
+        timezone: 'Europe/Warsaw',
+        active: true,
+        currency: 'PLN',
+      })
+      await loadMarkets()
+    } catch {
+      setStockFormError('Nie udało się dodać marketu')
+    } finally {
+      setSavingStockForm(false)
+    }
+  }, [loadMarkets, marketForm])
+
+  const handleCreateInstrument = useCallback(async () => {
+    setStockFormError(null)
+    setSavingStockForm(true)
+    try {
+      const response = await fetch('/api/stock/instruments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...instrumentForm,
+          market_mic: instrumentForm.market_mic.trim().toUpperCase(),
+          symbol: instrumentForm.symbol.trim().toUpperCase(),
+          shortname: instrumentForm.shortname.trim().toUpperCase(),
+          name: instrumentForm.name.trim() || null,
+          isin: instrumentForm.isin.trim() || null,
+          historical_source: instrumentForm.historical_source.trim() || null,
+          quote_source: instrumentForm.quote_source.trim() || null,
+        }),
+      })
+      const payload = await response.json().catch(() => null) as { error?: string } | null
+      if (!response.ok) {
+        setStockFormError(payload?.error ?? 'Nie udało się dodać instrumentu')
+        return
+      }
+      toast.success('Instrument został dodany')
+      setShowInstrumentDialog(false)
+      setInstrumentForm({
+        market_mic: mic,
+        symbol: '',
+        shortname: '',
+        name: '',
+        type: 'ETF',
+        status: 'ACTIVE',
+        currency: 'USD',
+        isin: '',
+        historical_source: '',
+        quote_source: '',
+      })
+      await loadMarkets()
+      await fetchRows(mic, { manual: true })
+    } catch {
+      setStockFormError('Nie udało się dodać instrumentu')
+    } finally {
+      setSavingStockForm(false)
+    }
+  }, [fetchRows, instrumentForm, loadMarkets, mic])
 
   useEffect(() => {
     stopIngestPolling()
@@ -436,6 +641,236 @@ export function QuotesPage({ mic, initialRows }: Props) {
 
   return (
     <>
+    {showMarketDialog && (
+      <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 px-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-market-title"
+          className="w-full max-w-lg rounded-xl border border-white/10 bg-slate-950 p-5 shadow-2xl"
+        >
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 id="add-market-title" className="text-lg font-semibold text-white">Dodaj market</h2>
+            <button
+              type="button"
+              onClick={() => setShowMarketDialog(false)}
+              className="rounded-lg px-2 py-1 text-white/50 hover:bg-white/10 hover:text-white"
+              aria-label="Zamknij formularz marketu"
+            >
+              ×
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="space-y-1 text-xs text-white/50">
+              MIC
+              <input
+                value={marketForm.mic}
+                onChange={(event) => setMarketForm((current) => ({ ...current, mic: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="XLON"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-white/50">
+              Waluta
+              <select
+                value={marketForm.currency}
+                onChange={(event) => setMarketForm((current) => ({ ...current, currency: event.target.value as Currency }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+              >
+                <option value="PLN">PLN</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+                <option value="GBP">GBP</option>
+                <option value="CHF">CHF</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-xs text-white/50 sm:col-span-2">
+              Nazwa
+              <input
+                value={marketForm.name}
+                onChange={(event) => setMarketForm((current) => ({ ...current, name: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="London Stock Exchange"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-white/50">
+              Kraj
+              <input
+                value={marketForm.country}
+                onChange={(event) => setMarketForm((current) => ({ ...current, country: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="UK"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-white/50">
+              Strefa czasowa
+              <input
+                value={marketForm.timezone}
+                onChange={(event) => setMarketForm((current) => ({ ...current, timezone: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="Europe/London"
+              />
+            </label>
+          </div>
+          {stockFormError && <p className="mt-3 text-sm text-red-400">{stockFormError}</p>}
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowMarketDialog(false)}
+              className="rounded-lg px-3 py-2 text-sm text-white/60 hover:bg-white/10 hover:text-white"
+            >
+              Anuluj
+            </button>
+            <button
+              type="button"
+              onClick={handleCreateMarket}
+              disabled={savingStockForm}
+              className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+            >
+              Dodaj market
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {showInstrumentDialog && (
+      <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 px-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-instrument-title"
+          className="w-full max-w-2xl rounded-xl border border-white/10 bg-slate-950 p-5 shadow-2xl"
+        >
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 id="add-instrument-title" className="text-lg font-semibold text-white">Dodaj instrument</h2>
+            <button
+              type="button"
+              onClick={() => setShowInstrumentDialog(false)}
+              className="rounded-lg px-2 py-1 text-white/50 hover:bg-white/10 hover:text-white"
+              aria-label="Zamknij formularz instrumentu"
+            >
+              ×
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label className="space-y-1 text-xs text-white/50">
+              Market
+              <select
+                value={instrumentForm.market_mic}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, market_mic: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+              >
+                {allMarketOptions.map((market) => (
+                  <option key={market.mic} value={market.mic}>
+                    {market.mic}{market.name ? ` · ${market.name}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-xs text-white/50">
+              Symbol
+              <input
+                value={instrumentForm.symbol}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, symbol: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="LNGA.UK"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-white/50">
+              Skrót
+              <input
+                value={instrumentForm.shortname}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, shortname: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="WisdomTree Natural Gas"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-white/50 sm:col-span-2">
+              Nazwa
+              <input
+                value={instrumentForm.name}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, name: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="WisdomTree Natural Gas"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-white/50">
+              Waluta
+              <select
+                value={instrumentForm.currency}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, currency: event.target.value as Currency }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+              >
+                <option value="PLN">PLN</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+                <option value="GBP">GBP</option>
+                <option value="CHF">CHF</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-xs text-white/50">
+              Typ
+              <select
+                value={instrumentForm.type}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, type: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+              >
+                <option value="ETF">ETF</option>
+                <option value="STOCK">Akcja</option>
+                <option value="BOND">Obligacja</option>
+                <option value="COMMODITY">Towar</option>
+                <option value="INDEX">Indeks</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-xs text-white/50">
+              ISIN
+              <input
+                value={instrumentForm.isin}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, isin: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="IE00..."
+              />
+            </label>
+            <label className="space-y-1 text-xs text-white/50 sm:col-span-3">
+              Źródło notowań
+              <input
+                value={instrumentForm.quote_source}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, quote_source: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="https://quotes.example.com/q/?s=SYMBOL"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-white/50 sm:col-span-3">
+              Źródło historii
+              <input
+                value={instrumentForm.historical_source}
+                onChange={(event) => setInstrumentForm((current) => ({ ...current, historical_source: event.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white"
+                placeholder="https://quotes.example.com/q/d/l/?s=SYMBOL&i=d"
+              />
+            </label>
+          </div>
+          {stockFormError && <p className="mt-3 text-sm text-red-400">{stockFormError}</p>}
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowInstrumentDialog(false)}
+              className="rounded-lg px-3 py-2 text-sm text-white/60 hover:bg-white/10 hover:text-white"
+            >
+              Anuluj
+            </button>
+            <button
+              type="button"
+              onClick={handleCreateInstrument}
+              disabled={savingStockForm}
+              className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+            >
+              Dodaj instrument
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     {alertTarget && (
       <PriceAlertModal
         symbol={alertTarget.symbol}
@@ -477,6 +912,26 @@ export function QuotesPage({ mic, initialRows }: Props) {
                   Odświeżono: {timeFmt}
                 </span>
               )}
+              <button
+                type="button"
+                onClick={() => { setStockFormError(null); setShowMarketDialog(true) }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-slate-700/60 border border-white/10 rounded-lg text-white/60 hover:text-white hover:border-white/20 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Market
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setStockFormError(null)
+                  void loadMarkets()
+                  setShowInstrumentDialog(true)
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-emerald-700/70 border border-emerald-400/20 rounded-lg text-white hover:bg-emerald-600/80 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Instrument
+              </button>
               {/* Manual refresh */}
               <button
                 onClick={handleManualRefresh}
@@ -512,17 +967,17 @@ export function QuotesPage({ mic, initialRows }: Props) {
 
           {/* Market selector */}
           <div className="flex rounded-lg overflow-hidden border border-white/10">
-            {MICS.map((m) => (
+            {quoteMarketOptions.map((market) => (
               <button
-                key={m}
-                onClick={() => router.push(`/stock/quotes/${m}`)}
+                key={market.mic}
+                onClick={() => router.push(`/stock/quotes/${market.mic}`)}
                 className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  mic === m
+                  mic === market.mic
                     ? 'bg-blue-600 text-white'
                     : 'text-white/50 hover:text-white hover:bg-white/5'
                 }`}
               >
-                {MIC_LABELS[m]}
+                {MIC_LABELS[market.mic] ?? market.name ?? market.mic}
               </button>
             ))}
           </div>
@@ -540,14 +995,14 @@ export function QuotesPage({ mic, initialRows }: Props) {
                   <th className="px-4 py-3 text-left">
                     <ThBtn label="Nazwa" field="name" sort={sort} dir={sortDir} onSort={handleSort} className="text-left" />
                   </th>
-                  <th className="px-4 py-3 text-right">
-                    <ThBtn label="Kurs" field="lastPrice" sort={sort} dir={sortDir} onSort={handleSort} />
+                  <th className="px-4 py-3 text-left">
+                    <ThBtn label="Kurs" field="lastPrice" sort={sort} dir={sortDir} onSort={handleSort} className="text-left" />
                   </th>
-                  <th className="px-4 py-3 text-right">
-                    <ThBtn label="Zmiana %" field="changePct" sort={sort} dir={sortDir} onSort={handleSort} />
+                  <th className="px-4 py-3 text-left">
+                    <ThBtn label="Zmiana %" field="changePct" sort={sort} dir={sortDir} onSort={handleSort} className="text-left" />
                   </th>
-                  <th className="px-4 py-3 text-right">
-                    <ThBtn label="Wolumen" field="volume" sort={sort} dir={sortDir} onSort={handleSort} />
+                  <th className="px-4 py-3 text-left">
+                    <ThBtn label="Wolumen" field="volume" sort={sort} dir={sortDir} onSort={handleSort} className="text-left" />
                   </th>
                   <th className="px-4 py-3 text-left">
                     <span className="text-xs text-white/40 uppercase tracking-wide">Ostatni handel</span>
@@ -585,10 +1040,11 @@ export function QuotesPage({ mic, initialRows }: Props) {
                       <td className="px-4 py-2.5 text-white/70 max-w-[260px] truncate">
                         {row.name ?? '—'}
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-white whitespace-nowrap">
+                      <td className="px-4 py-2.5 text-left tabular-nums text-white whitespace-nowrap">
                         {row.lastPriceFmt}
+                        {row.currency && row.lastPrice > 0 ? ` ${row.currency}` : ''}
                       </td>
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      <td className="px-4 py-2.5 text-left whitespace-nowrap">
                         <span className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded tabular-nums ${
                           positive
                             ? 'bg-emerald-500/20 text-emerald-300'
@@ -600,7 +1056,7 @@ export function QuotesPage({ mic, initialRows }: Props) {
                           {row.changePctFmt}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-white/60 whitespace-nowrap">
+                      <td className="px-4 py-2.5 text-left tabular-nums text-white/60 whitespace-nowrap">
                         {row.volume > 0
                           ? row.volume.toLocaleString('pl-PL')
                           : '—'}

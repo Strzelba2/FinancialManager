@@ -64,16 +64,6 @@ export function proxy(request: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  // X-User is injected by Traefik ForwardAuth when session is valid.
-  // If user is already logged in and visits /login or /register — send them home.
-  const xUser = request.headers.get('x-user')
-  if (
-    xUser &&
-    (pathname.startsWith('/login') || pathname.startsWith('/register'))
-  ) {
-    return NextResponse.redirect(new URL('/home', request.url))
-  }
-
   return NextResponse.next()
 }
 

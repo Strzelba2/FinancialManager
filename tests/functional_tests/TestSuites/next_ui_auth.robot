@@ -6,7 +6,7 @@ Library          ${CURDIR}/../TestKeywords/auth_keywords.py
 Library          ${CURDIR}/../TestKeywords/allure_helper.py    WITH NAME    AllureHelper
 Suite Setup      Open Next Ui Browser
 Suite Teardown   Close Browser And Keep Failure Artifacts
-Test Setup       Reset Functional Auth Rate Limits
+Test Setup       Reset Functional Auth Browser State
 Test Tags        functional    next-ui    allure.label.epic:System Tests    allure.label.feature:Functional    allure.label.tag:functional    allure.label.tag:next-ui    allure.label.severity:normal
 
 *** Variables ***
@@ -200,3 +200,8 @@ Fresh Backend Session Blocks Second Browser Login
     Page Should Have Text    Konto jest już aktywne na innym urządzeniu.
     Wait For Function    () => window.location.pathname.includes('/login')
     Capture Test Screenshot
+
+*** Keywords ***
+Reset Functional Auth Browser State
+    Reset Functional Auth Rate Limits
+    Reset Next Ui Browser Session

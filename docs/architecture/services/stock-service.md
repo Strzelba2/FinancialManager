@@ -11,6 +11,8 @@ candles, parsing and ingestion paths, and stock report generation snapshots.
 - Expose stock API reads for markets, instrument options/search/resolve, quotes, candles,
   report reads, and ingest/status operations.
 - Parse and ingest market data from configured providers and web sources.
+- Allow manual markets and instruments, including optional per-instrument quote source
+  URLs for instruments that are not covered by a standard market table ingestor.
 - Run scheduled quote ingestion through stock Celery processes and expose a separate
   API-started manual ingest path.
 - Build equity report output and store report-related snapshots.
@@ -63,6 +65,9 @@ Stock worker entrypoints are:
 - Configured external boundaries include market-source URLs, report web-source URLs, and
   the configured OpenAI report client.
 - Next UI reads stock data and reports; wallet calls stock through `StockClient`.
+- `stock` is the source of truth for instrument existence. Wallet may mirror an
+  instrument after a successful stock resolve, but missing instruments must be created in
+  stock first.
 
 ## Key Flows
 
@@ -132,3 +137,6 @@ flowchart LR
 4. `stock/app/markerdata/` before changing provider or parser behavior.
 5. `stock/app/reports/equity/service.py` before changing report generation or report
    snapshots.
+
+For manual instrument administration and quote-source refresh behavior, also read
+[Brokerage Account Import And Quotes](../../design/brokerage-account-import-and-quotes.md).

@@ -4,7 +4,11 @@ import logging
 from app.core.celery_app import celery_app
 from app.core.context import app_context, market_lock
 from app.markerdata.registry import get_provider
-from app.api.services.stock import ingest_market, ingest_gpw_quotes_from_html
+from app.api.services.stock import (
+    ingest_market,
+    ingest_gpw_quotes_from_html,
+    refresh_quote_source_instruments,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +64,8 @@ def ingest_gpw_quarter() -> int:
                     )
                     all_processed += processed
 
+            quote_source = await refresh_quote_source_instruments(session, storage)
+            all_processed += int(quote_source["processed"])
             logger.info(
                 f"ingest_gpw_quarter: finished, total_processed={all_processed}"
             )
@@ -110,6 +116,8 @@ def ingest_gpw_quarter_alt() -> int:
                     )
                     all_processed += processed
 
+            quote_source = await refresh_quote_source_instruments(session, storage)
+            all_processed += int(quote_source["processed"])
             logger.info(
                 f"ingest_gpw_quarter_alt: finished, total_processed={all_processed}"
             )

@@ -32,6 +32,24 @@ class TwoFactorVerifyThrottle(UserRateThrottle):
     scope = 'two_factor_verify'
 
 
+class CryptoBatchThrottle(AnonRateThrottle):
+    """
+    Service-to-service throttle for wallet crypto batch operations.
+
+    The endpoint is still protected by the wallet IP allow-list. This throttle is
+    intentionally looser than login/register limits so normal brokerage account
+    setup with several cash subaccounts is not rate limited.
+    """
+    scope = 'crypto_batch'
+
+    def get_cache_key(self, request: HttpRequest, view) -> str:
+        ip = get_client_ip(request)
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': ip,
+        }
+
+
 class RegisterIPThrottle(AnonRateThrottle):
     """
     Throttle for registration attempts.

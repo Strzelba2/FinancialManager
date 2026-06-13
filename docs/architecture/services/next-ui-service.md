@@ -13,6 +13,8 @@ and protected dashboard pages, then acts as the server-side call boundary toward
   favorites, reports, and settings.
 - Render manual transaction entry, bank-file import preview, transaction filtering,
   classification editing, pagination, sorting, and deletion.
+- Render brokerage account creation, optional brokerage cash subaccount setup, holding
+  actions, brokerage history preview, and manual stock instrument administration.
 - Use server actions for auth and selected form workflows.
 - Use server-side API helpers and App Router route handlers to call backend APIs.
 - Read ForwardAuth headers supplied by Traefik for protected requests.
@@ -61,6 +63,8 @@ keeps the public auth paths on a separate router.
 - Calls wallet and stock APIs from server-side code; backend services remain data owners.
 - Proxies the current bank parser API through `src/app/api/wallet/import/`. The parser
   implementation still runs in the existing `ui` service while NiceGUI is being retired.
+- Proxies stock administration and quote refresh requests through Next route handlers;
+  stock remains the source of truth for markets, instruments, and quotes.
 
 ## Key Flows
 
@@ -147,6 +151,37 @@ sequenceDiagram
 Changing the parser selector resets parsed preview state but keeps the selected file.
 The user can choose a file before or after choosing a bank format.
 
+### Brokerage account and import handoff
+
+```mermaid
+sequenceDiagram
+    actor Browser
+    participant Next as next-ui
+    participant Parser as ui parser API
+    participant Wallet as wallet API
+    participant Stock as stock API
+
+    Browser->>Next: Create BROKERAGE account with optional USD/EUR cash IDs
+    Next->>Wallet: POST /wallet/account/create
+    Wallet-->>Next: Brokerage account and linked cash accounts
+    Browser->>Next: Upload BoSSA or broker CSV
+    Next->>Parser: POST /api/import/parse
+    Parser-->>Next: Preview rows, including NEEDS_REVIEW rows
+    Browser->>Next: Confirm import only when preview is clean
+    Next->>Wallet: POST /wallet/brokerage/history/import
+    Wallet->>Stock: Resolve instruments before writing
+    Wallet-->>Next: Import summary or controlled 4xx error
+```
+
+For brokerage account creation, `CreateAccountDialog` sends PLN as the main brokerage
+cash account currency and may include USD/EUR technical identifiers. The identifiers are
+ordinary wallet deposit accounts linked to the brokerage account; they are not separate
+market instruments.
+
+For BoSSA full-history import, the preview is allowed to show unresolved instruments, but
+the import button is blocked while any row is marked `NEEDS_REVIEW`. Wallet repeats the
+preflight so a crafted browser payload cannot create partial cash or holding state.
+
 ## Cookie and Identity Handoff
 
 `src/features/auth/actions/auth-cookies.ts` and related auth actions copy the cookies
@@ -166,3 +201,7 @@ through the session service for later ForwardAuth responses.
 
 For transaction import, classification, and dashboard-flow behavior, also read
 [Wallet Transaction Lifecycle](../../design/wallet-transaction-lifecycle.md).
+
+For brokerage account creation, BoSSA all-or-nothing import, cash subaccounts, manual
+stock instruments, and quote source refresh, also read
+[Brokerage Account Import And Quotes](../../design/brokerage-account-import-and-quotes.md).

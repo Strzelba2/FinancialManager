@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 
 import { TransactionsPage } from '@/features/wallet/components/TransactionsPage'
 import { nextUiUnitStory } from '../allure'
@@ -39,8 +39,6 @@ function makePage(page: number, totalPages: number, size = 40) {
   }
 }
 
-const server = setupServer()
-
 function transactionPageHandler(totalPages: number, requestedUrls?: string[]) {
   return http.get('*/api/wallet/transactions', ({ request }) => {
     requestedUrls?.push(request.url)
@@ -50,19 +48,10 @@ function transactionPageHandler(totalPages: number, requestedUrls?: string[]) {
 }
 
 describe('TransactionsPage – pagination', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     server.resetHandlers()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('renders a page number input and a last-page button', async () => {
     await nextUiUnitStory('Wallet transactions pagination shows a page number input and last-page button', {
       severity: 'critical',

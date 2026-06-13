@@ -1,6 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 
 import { nextUiUnitStory } from '../allure'
 
@@ -47,13 +47,7 @@ async function loadActions() {
   return import('@/features/auth/actions/two-factor')
 }
 
-const server = setupServer()
-
 describe('two-factor auth actions', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     mocks.cookieGet.mockReset()
     mocks.cookieSet.mockReset()
@@ -85,11 +79,6 @@ describe('two-factor auth actions', () => {
     vi.unstubAllEnvs()
     vi.resetModules()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('verifies a pending 2FA session and stores only auth cookies from session-auth', async () => {
     await nextUiUnitStory('Two-factor action completes pending login with HMAC cookie', {
       severity: 'blocker',

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 import unittest
 
@@ -69,6 +69,23 @@ class WalletClientBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await client.batch("artur", []))
 
+    async def test_auth_crypto_batch_retries_temporary_rate_limit_before_success(self) -> None:
+        client = AuthCryptoClient("http://auth.local")
+        client.client.post = AsyncMock(side_effect=[
+            httpx.Response(429, json={"detail": "throttled"}),
+            httpx.Response(429, json={"detail": "throttled"}),
+            httpx.Response(200, json={"results": []}),
+        ])
+        self.addAsyncCleanup(client.aclose)
+
+        with patch("app.clients.auth_client.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            result = await client.batch("artur", [{"id": "acc_h", "kind": "hmac"}])
+
+        self.assertEqual(result, {"results": []})
+        self.assertEqual(client.client.post.await_count, 3)
+        sleep_mock.assert_any_await(0.4)
+        sleep_mock.assert_any_await(0.8)
+
     async def test_stock_request_sets_json_headers_and_returns_response(self) -> None:
         fake = _FakeAsyncHttpClient(httpx.Response(200, json={"ok": True}))
         client = _stock_client_with(fake)
@@ -109,6 +126,29 @@ class WalletClientBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(list(result), ["PKO"])
         self.assertEqual(result["PKO"].price, Decimal("55.12"))
+
+    async def test_latest_quotes_parses_wrapped_quotes_payload(self) -> None:
+        fake = _FakeAsyncHttpClient(
+            httpx.Response(
+                200,
+                json={
+                    "quotes": [
+                        {
+                            "symbol": "PEO",
+                            "price": "235.50",
+                            "currency": "PLN",
+                            "change_pct": "-0.59",
+                        }
+                    ]
+                },
+            )
+        )
+        client = _stock_client_with(fake)
+
+        result = await client.get_latest_quotes_for_symbols(["PEO"])
+
+        self.assertEqual(list(result), ["PEO"])
+        self.assertEqual(result["PEO"].price, Decimal("235.50"))
 
     async def test_latest_quotes_returns_empty_dict_on_bad_status_or_payload(self) -> None:
         error_client = _stock_client_with(_FakeAsyncHttpClient(httpx.Response(500, text="boom")))

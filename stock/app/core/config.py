@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
     ST_BASE_URL: str = ""
+    ST_BASE_URL_ALT: str = ""
     ST_START_WSE_QUOTE_URL: str = ""
     ST_START_NC_QUOTE_URL: str = ""
     ST_START_COMMODITIES_QUOTE_URL: str = ""

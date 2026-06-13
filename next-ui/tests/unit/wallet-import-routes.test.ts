@@ -1,6 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 
 import { nextUiUnitStory } from '../allure'
 
@@ -16,13 +16,7 @@ async function loadParseRoute() {
   return import('@/app/api/wallet/import/parse/route')
 }
 
-const server = setupServer()
-
 describe('wallet import proxy routes', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     server.resetHandlers()
@@ -32,11 +26,6 @@ describe('wallet import proxy routes', () => {
     vi.resetModules()
     delete process.env.UI_API_URL
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('forwards parser metadata JSON from the parser service', async () => {
     await nextUiUnitStory('Wallet import route forwards parser metadata JSON', {
       severity: 'critical',

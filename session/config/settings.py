@@ -67,6 +67,7 @@ REST_FRAMEWORK = {
         'verify_session': '100/minute',
         'two_factor_management': '10/minute',
         'two_factor_verify': '10/minute',
+        'crypto_batch': '120/minute',
         'register': '2/minute',
         'login': '4/minute'
     },

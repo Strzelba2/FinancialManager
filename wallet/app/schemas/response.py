@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 from datetime import datetime, date
 from decimal import Decimal
 from typing import List, Optional, Dict, Any
@@ -6,8 +6,26 @@ from .schemas import (
     AccountType, TransactionRead, HoldingRead,
     BrokerageEventRead, BrokerageEventUpdate, TransactionBatchUpdate, YearGoalRead,
     )
-from app.models.enums import BrokerageEventKind, Currency, PropertyType, MetalType
+from app.models.enums import BrokerageEventKind, Currency, InstrumentCurrency, PropertyType, MetalType
 import uuid
+
+
+def _serialize_decimals(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, list):
+        return [_serialize_decimals(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_serialize_decimals(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _serialize_decimals(item) for key, item in value.items()}
+    return value
+
+
+class DecimalResponseModel(BaseModel):
+    @field_serializer("*", when_used="json", check_fields=False)
+    def serialize_decimal_fields(self, value: Any) -> Any:
+        return _serialize_decimals(value)
 
 
 class AccountListItem(BaseModel):
@@ -24,15 +42,15 @@ class AccountListItem(BaseModel):
 class BrokerageAccountListItem(BaseModel):
     id: uuid.UUID
     name: str
-    totals_by_currency: Dict[Currency, Decimal] = Field(default_factory=dict)
-    
+    totals_by_currency: Dict[InstrumentCurrency, Decimal] = Field(default_factory=dict)
+
 
 class PositionPerformance(BaseModel):
     symbol: str
     quantity: Decimal
     avg_cost: Decimal
     price: Decimal
-    currency: Currency
+    currency: InstrumentCurrency
     value: Decimal   
     cost: Decimal    
     pnl_amount: Decimal   
@@ -40,13 +58,13 @@ class PositionPerformance(BaseModel):
     
     
 class BrokerageEventListItem(BaseModel):
-    date: datetime 
-    sym: str          
-    type: BrokerageEventKind  
+    date: datetime
+    sym: str
+    type: BrokerageEventKind
     qty: Decimal
     price: Decimal
-    value: Optional[Decimal] = None   
-    ccy: Currency
+    value: Optional[Decimal] = None
+    ccy: InstrumentCurrency
     account: str
  
     
@@ -145,9 +163,9 @@ class WalletListItem(BaseModel):
 
 class LastFavoriteObservedItem(BaseModel):
     sym: str
-    pl_pct: Decimal = Decimal("0")  
-    pl_abs: Decimal = Decimal("0") 
-    currency: Currency
+    pl_pct: Decimal = Decimal("0")
+    pl_abs: Decimal = Decimal("0")
+    currency: InstrumentCurrency
     
     
 class LastPriceAlertObservedItem(BaseModel):
@@ -194,16 +212,45 @@ class BrokerageEventWithHoldingRead(BrokerageEventRead):
     holding: Optional[HoldingRead]
     
 
+class BrokerageEventImportRowResult(BaseModel):
+    row: int
+    status: str
+    message: Optional[str] = None
+    brokerage_event_id: Optional[uuid.UUID] = None
+    transaction_id: Optional[uuid.UUID] = None
+    instrument_symbol: Optional[str] = None
+    instrument_name: Optional[str] = None
+    kind: Optional[BrokerageEventKind] = None
+    trade_at: Optional[datetime] = None
+    currency: Optional[Currency] = None
+    quantity: Optional[Decimal] = None
+    held_quantity: Optional[Decimal] = None
+    missing_quantity: Optional[Decimal] = None
+    reason_code: Optional[str] = None
+
+
 class BrokerageEventsImportSummary(BaseModel):
+    total: int = 0
     created: int
+    cash_transactions_created: int = 0
+    skipped_duplicates: int = 0
+    needs_review: int = 0
     failed: int
     errors: list[str] = []
+    rows: list[BrokerageEventImportRowResult] = []
+
+
+class BrokerageCashLinkResult(BaseModel):
+    currency: Currency
+    deposit_account_id: uuid.UUID
+    created: bool = False
+    name: Optional[str] = None
  
     
 class QuoteBySymbolItem(BaseModel):
     symbol: str
     price: Decimal
-    currency: Currency
+    currency: InstrumentCurrency
     change_pct: Decimal
 
 
@@ -297,18 +344,18 @@ class HoldingRowOut(HoldingRead):
     account_name: str
 
     instrument_symbol: str
+    instrument_mic: str
     instrument_name: str
     instrument_currency: str 
 
 
-class DepositSnapshotItem(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str})
+class DepositSnapshotItem(DecimalResponseModel):
     ccy: str
     available: Decimal    
    
  
-class WalletManagerDepositAccountOut(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str}, extra="allow")
+class WalletManagerDepositAccountOut(DecimalResponseModel):
+    model_config = ConfigDict(extra="allow")
     id: str
     name: str
     ccy: str
@@ -318,35 +365,35 @@ class WalletManagerDepositAccountOut(BaseModel):
     snapshots: Dict[str, DepositSnapshotItem] = Field(default_factory=dict)   
 
 
-class CashAccountOut(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str})
+class CashAccountOut(DecimalResponseModel):
     deposit_account_id: str
     name: str
     ccy: str
     available: Decimal
 
 
-class PositionOut(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str})
+class PositionOut(DecimalResponseModel):
     symbol: str
     mic: str
     value: Decimal
+    value_default_ccy: Decimal
+    currency: str
     pnl_pct: Decimal
   
   
-class BrokerageSnapshotItem(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str})
+class BrokerageSnapshotItem(DecimalResponseModel):
     ccy: str
     cash: Decimal
     stocks: Decimal
       
 
-class WalletManagerBrokerageAccountOut(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str}, extra="allow")
+class WalletManagerBrokerageAccountOut(DecimalResponseModel):
+    model_config = ConfigDict(extra="allow")
     id: str
     name: str
     ccy: str
     cash_account: CashAccountOut | None = None
+    cash_accounts: List[CashAccountOut] = Field(default_factory=list)
     positions: List[PositionOut] = Field(default_factory=list)
     positions_count: int = 0
     positions_value: Decimal = Decimal("0")
@@ -355,8 +402,8 @@ class WalletManagerBrokerageAccountOut(BaseModel):
     snapshots: Dict[str, BrokerageSnapshotItem] = Field(default_factory=dict)
   
   
-class MetalItems(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str}, extra="allow")
+class MetalItems(DecimalResponseModel):
+    model_config = ConfigDict(extra="allow")
     name: str  
     quantity: Decimal
     qty_unit: str = "g"
@@ -364,16 +411,16 @@ class MetalItems(BaseModel):
     ccy: str
     
     
-class RealEstateItems(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str}, extra="allow")
+class RealEstateItems(DecimalResponseModel):
+    model_config = ConfigDict(extra="allow")
     name: str  
     city: str
     value: Decimal
     ccy: str   
     
 
-class AssetSummaryMetalOut(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str}, extra="allow")
+class AssetSummaryMetalOut(DecimalResponseModel):
+    model_config = ConfigDict(extra="allow")
     count: int
     value: Decimal
     ccy: str
@@ -381,8 +428,8 @@ class AssetSummaryMetalOut(BaseModel):
     health: Dict[str, Any] = Field(default_factory=dict)
     
 
-class AssetSummaryRealEstateOut(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str}, extra="allow")
+class AssetSummaryRealEstateOut(DecimalResponseModel):
+    model_config = ConfigDict(extra="allow")
     count: int
     value: Decimal
     ccy: str
@@ -390,8 +437,7 @@ class AssetSummaryRealEstateOut(BaseModel):
     health: Dict[str, Any] = Field(default_factory=dict)
   
 
-class WalletSnapshotItem(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str})
+class WalletSnapshotItem(DecimalResponseModel):
     ccy: str
     cash_deposit: Decimal
     cash_broker: Decimal
@@ -400,8 +446,8 @@ class WalletSnapshotItem(BaseModel):
     real_estate: Decimal
       
       
-class WalletManagerWalletOut(BaseModel):
-    model_config = ConfigDict(json_encoders={Decimal: str}, extra="allow")
+class WalletManagerWalletOut(DecimalResponseModel):
+    model_config = ConfigDict(extra="allow")
     id: str
     name: str
     base_ccy: str

@@ -8,11 +8,24 @@ const EventSchema = z.object({
   instrument_symbol: z.string().min(1).trim(),
   instrument_mic: z.string().min(1).trim(),
   instrument_name: z.string().trim().nullish(),
-  kind: z.enum(['BUY', 'SELL', 'SPLIT', 'DIV']),
+  kind: z.enum(['BUY', 'SELL', 'SPLIT', 'DIV', 'ADJUSTMENT']),
   quantity: z.string().min(1).trim(),
   price: z.string().min(1).trim(),
-  currency: z.enum(['PLN', 'USD', 'EUR']),
+  // Instrument/quote (trade) currency — may be a non-base currency (e.g. CHF, GBP).
+  currency: z.enum(['PLN', 'USD', 'EUR', 'GBP', 'CHF']),
   split_ratio: z.string().min(1).trim(),
+  note: z.string().max(500).trim().nullish(),
+  // Cash settlement (account/base) currency + FX rate (instrument -> settlement).
+  settlement_currency: z.enum(['PLN', 'USD', 'EUR']).nullish(),
+  fx_rate: z.string().trim().nullish(),
+}).superRefine((data, ctx) => {
+  if (data.kind === 'ADJUSTMENT' && !data.note?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['note'],
+      message: 'Podaj notatkę korekty',
+    })
+  }
 })
 
 const Schema = z.object({
@@ -33,7 +46,11 @@ export async function POST(req: Request) {
 
   const validated = Schema.safeParse(body)
   if (!validated.success) {
-    return NextResponse.json({ error: validated.error.issues[0]?.message ?? 'Nieprawidłowe dane' }, { status: 422 })
+    const detail = validated.error.issues
+      .slice(0, 5)
+      .map((issue) => `${issue.path.join('.') || '(body)'}: ${issue.message}`)
+      .join('; ')
+    return NextResponse.json({ error: detail || 'Nieprawidłowe dane' }, { status: 422 })
   }
 
   const result = await importBrokerageEvents(userId, validated.data)

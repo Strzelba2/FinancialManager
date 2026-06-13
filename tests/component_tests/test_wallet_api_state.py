@@ -10,6 +10,13 @@ import psycopg
 import pytest
 
 
+PASSWORD = "ComponentPass123!"
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
 def _unique_user_payload(prefix: str) -> dict[str, str]:
     suffix = uuid4().hex[:8]
     return {
@@ -31,6 +38,29 @@ def _sync_user(wallet_url: str, prefix: str = "u") -> dict:
 
 def _auth_headers(user_id: str) -> dict[str, str]:
     return {"X-User-Id": user_id}
+
+
+def _register_session_crypto_user(session_url: str, fixture: dict[str, str]) -> None:
+    suffix = uuid4().hex[:2]
+    response = httpx.post(
+        f"{session_url}/register/",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Referer": "http://next.localhost:8081/register",
+            "User-Agent": BROWSER_USER_AGENT,
+            "X-Original-Client-IP": f"10.221.{int(suffix, 16)}.10",
+        },
+        json={
+            "first_name": "Component",
+            "last_name": "Tester",
+            "username": fixture["username"],
+            "email": fixture["email"],
+            "password": PASSWORD,
+        },
+        timeout=10.0,
+    )
+    assert response.status_code == 201, response.text
 
 
 def _wallet_db_connect():
@@ -130,11 +160,110 @@ def _seed_wallet_account(
         "user_id": user_id,
         "wallet_id": wallet_id,
         "account_id": account_id,
+        "bank_id": bank_id,
         "currency": currency,
         "account_type": account_type,
         "username": username,
         "email": email,
     }
+
+
+def _seed_brokerage_account_link(fixture: dict[str, str], currency: str = "PLN") -> str:
+    brokerage_account_id = str(uuid4())
+    now = datetime.now(timezone.utc)
+    suffix = brokerage_account_id[:8]
+
+    with _wallet_db_connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO brokerage_accounts (
+                    id, created_at, updated_at, name, wallet_id, bank_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    brokerage_account_id,
+                    now,
+                    now,
+                    f"brokerage-{suffix}",
+                    fixture["wallet_id"],
+                    fixture["bank_id"],
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO brokerage_deposit_links (
+                    brokerage_account_id, deposit_account_id, currency
+                )
+                VALUES (%s, %s, %s)
+                """,
+                (
+                    brokerage_account_id,
+                    fixture["account_id"],
+                    currency,
+                ),
+            )
+
+    return brokerage_account_id
+
+
+def _seed_brokerage_cash_account(
+    fixture: dict[str, str],
+    brokerage_account_id: str,
+    currency: str,
+    opening_balance: str = "0.00",
+) -> str:
+    account_id = str(uuid4())
+    now = datetime.now(timezone.utc)
+    suffix = account_id[:8]
+    fingerprint = uuid4().bytes + uuid4().bytes
+
+    with _wallet_db_connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO deposit_accounts (
+                    id, created_at, updated_at, name, account_type,
+                    account_number_nonce, account_number_ct, account_number_fp,
+                    iban_nonce, iban_ct, iban_fp,
+                    currency, wallet_id, bank_id
+                )
+                VALUES (%s, %s, %s, %s, 'BROKERAGE', %s, %s, %s, NULL, NULL, NULL, %s, %s, %s)
+                """,
+                (
+                    account_id,
+                    now,
+                    now,
+                    f"{fixture['username']}-{currency.lower()}-{suffix}",
+                    psycopg.Binary(b"2" * 12),
+                    psycopg.Binary(f"cipher-{currency.lower()}-{suffix}".encode("utf-8")),
+                    psycopg.Binary(fingerprint),
+                    currency,
+                    fixture["wallet_id"],
+                    fixture["bank_id"],
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO deposit_account_balances (
+                    account_id, created_at, updated_at, available, blocked
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (account_id, now, now, Decimal(opening_balance), Decimal("0.00")),
+            )
+            cursor.execute(
+                """
+                INSERT INTO brokerage_deposit_links (
+                    brokerage_account_id, deposit_account_id, currency
+                )
+                VALUES (%s, %s, %s)
+                """,
+                (brokerage_account_id, account_id, currency),
+            )
+
+    return account_id
 
 
 def _transaction_row(
@@ -952,6 +1081,1019 @@ class TestWalletTransactionApiLifecycle:
 @pytest.mark.db
 @allure.epic("System Tests")
 @allure.feature("Component")
+@allure.story("Brokerage event APIs preserve import, correction, and ownership behavior")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("wallet", "brokerage", "capital-gains", "import", "financial-data", "api-contract")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Exercises brokerage import and manual event endpoints with persisted wallet state. "
+    "Covers realized PnL without linked cash transactions, duplicate retry behavior, "
+    "missing holding diagnostics, split/adjustment holding updates, and ownership denial."
+)
+class TestWalletBrokerageEventImportApi:
+    @staticmethod
+    def _ensure_stock_instrument(
+        stock_url: str,
+        symbol: str,
+        name: str,
+        mic: str = "XWAR",
+        currency: str = "PLN",
+        instrument_type: str = "STOCK",
+    ) -> None:
+        response = httpx.post(
+            f"{stock_url}/stock/instruments",
+            json={
+                "market_mic": mic,
+                "symbol": symbol,
+                "shortname": symbol,
+                "name": name,
+                "type": instrument_type,
+                "status": "ACTIVE",
+                "currency": currency,
+                "historical_source": None,
+                "quote_source": None,
+                "popularity": 0,
+                "last_seen_at": None,
+            },
+            timeout=10.0,
+        )
+        assert response.status_code in {201, 409}, response.text
+
+    def _ensure_stock_instruments_for_rows(self, stock_url: str, rows: list[dict[str, str]]) -> None:
+        for row in rows:
+            self._ensure_stock_instrument(
+                stock_url,
+                symbol=row["instrument_symbol"],
+                name=row.get("instrument_name") or row["instrument_symbol"],
+                mic=row.get("instrument_mic", "XWAR"),
+                currency=row.get("currency", "PLN"),
+                instrument_type="ETF" if "." in row["instrument_symbol"] else "STOCK",
+            )
+            target_symbol = row.get("target_instrument_symbol")
+            if target_symbol:
+                self._ensure_stock_instrument(
+                    stock_url,
+                    symbol=target_symbol,
+                    name=row.get("target_instrument_name") or target_symbol,
+                    mic=row.get("target_instrument_mic", "XWAR"),
+                    currency=row.get("currency", "PLN"),
+                )
+
+    @staticmethod
+    def _event_row(
+        kind: str,
+        quantity: str,
+        price: str,
+        trade_at: str,
+        symbol: str = "PKOBP",
+        name: str = "PKO BP SA",
+        split_ratio: str = "0.00",
+        note: str | None = None,
+    ) -> dict[str, str]:
+        row = {
+            "instrument_symbol": symbol,
+            "instrument_mic": "XWAR",
+            "instrument_name": name,
+            "kind": kind,
+            "quantity": quantity,
+            "price": price,
+            "currency": "PLN",
+            "split_ratio": split_ratio,
+            "trade_at": trade_at,
+        }
+        if note is not None:
+            row["note"] = note
+        return row
+
+    def test_import_sell_realized_pnl_creates_capital_gain_without_transaction_id(self, wallet_url: str, stock_url: str) -> None:
+        fixture = _seed_wallet_account("brimp", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+
+        buy_row = self._event_row(
+            kind="BUY",
+            quantity="10.00",
+            price="9.00",
+            trade_at="2026-06-01T09:00:00+00:00",
+        )
+        sell_row = self._event_row(
+            kind="SELL",
+            quantity="4.00",
+            price="12.00",
+            trade_at="2026-06-02T09:00:00+00:00",
+        )
+        self._ensure_stock_instruments_for_rows(stock_url, [buy_row, sell_row])
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/events/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={
+                "brokerage_account_id": brokerage_account_id,
+                "events": [buy_row, sell_row],
+            },
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["total"] == 2
+        assert payload["created"] == 2
+        assert payload["skipped_duplicates"] == 0
+        assert payload["failed"] == 0
+        assert payload["errors"] == []
+        assert [row["status"] for row in payload["rows"]] == ["created", "created"]
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT kind, amount, currency, deposit_account_id, transaction_id
+                    FROM capital_gains
+                    WHERE deposit_account_id = %s
+                    """,
+                    (fixture["account_id"],),
+                )
+                gains = cursor.fetchall()
+
+        assert len(gains) == 1
+        kind, amount, currency, deposit_account_id, transaction_id = gains[0]
+        assert kind == "BROKER_REALIZED_PNL"
+        assert Decimal(str(amount)) == Decimal("12.00")
+        assert currency == "PLN"
+        assert str(deposit_account_id) == fixture["account_id"]
+        assert transaction_id is None
+
+    def test_import_retry_skips_existing_events_and_creates_missing_rows(self, wallet_url: str, stock_url: str) -> None:
+        fixture = _seed_wallet_account("brretry", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+        buy_row = self._event_row(
+            symbol="CDR",
+            name="CD Projekt SA",
+            kind="BUY",
+            quantity="10.00",
+            price="20.00",
+            trade_at="2026-06-01T09:00:00+00:00",
+        )
+        sell_row = self._event_row(
+            symbol="CDR",
+            name="CD Projekt SA",
+            kind="SELL",
+            quantity="4.00",
+            price="25.00",
+            trade_at="2026-06-02T09:00:00+00:00",
+        )
+        self._ensure_stock_instruments_for_rows(stock_url, [buy_row, sell_row])
+
+        first = httpx.post(
+            f"{wallet_url}/wallet/brokerage/events/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={"brokerage_account_id": brokerage_account_id, "events": [buy_row]},
+            timeout=10.0,
+        )
+        retry = httpx.post(
+            f"{wallet_url}/wallet/brokerage/events/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={"brokerage_account_id": brokerage_account_id, "events": [buy_row, sell_row]},
+            timeout=10.0,
+        )
+
+        assert first.status_code == 200, first.text
+        assert first.json()["created"] == 1
+        assert retry.status_code == 200, retry.text
+        payload = retry.json()
+        assert payload["total"] == 2
+        assert payload["created"] == 1
+        assert payload["skipped_duplicates"] == 1
+        assert payload["failed"] == 0
+        assert payload["errors"] == []
+        assert [row["status"] for row in payload["rows"]] == ["skipped_duplicate", "created"]
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM brokerage_events
+                    WHERE brokerage_account_id = %s
+                    """,
+                    (brokerage_account_id,),
+                )
+                event_count = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    SELECT quantity, avg_cost
+                    FROM holdings
+                    WHERE account_id = %s
+                    """,
+                    (brokerage_account_id,),
+                )
+                holding = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT amount, transaction_id
+                    FROM capital_gains
+                    WHERE deposit_account_id = %s
+                    """,
+                    (fixture["account_id"],),
+                )
+                gains = cursor.fetchall()
+
+        assert event_count == 2
+        assert holding is not None
+        assert Decimal(str(holding[0])) == Decimal("6.0000000000")
+        assert Decimal(str(holding[1])) == Decimal("20.0000000000")
+        assert len(gains) == 1
+        assert Decimal(str(gains[0][0])) == Decimal("20.00")
+        assert gains[0][1] is None
+
+    def test_import_reports_missing_holding_context_and_keeps_created_rows(self, wallet_url: str, stock_url: str) -> None:
+        fixture = _seed_wallet_account("brmiss", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+        buy_row = self._event_row(
+            symbol="CDR",
+            name="CD Projekt SA",
+            kind="BUY",
+            quantity="10.00",
+            price="20.00",
+            trade_at="2026-06-01T09:00:00+00:00",
+        )
+        missing_sell_row = self._event_row(
+            symbol="GIGRO",
+            name="GIGROUP SA",
+            kind="SELL",
+            quantity="1269.00",
+            price="1.00",
+            trade_at="2021-12-23T15:13:53+00:00",
+        )
+        self._ensure_stock_instruments_for_rows(stock_url, [buy_row, missing_sell_row])
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/events/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={"brokerage_account_id": brokerage_account_id, "events": [buy_row, missing_sell_row]},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["total"] == 2
+        assert payload["created"] == 1
+        assert payload["skipped_duplicates"] == 0
+        assert payload["failed"] == 1
+        rows_by_symbol = {row["instrument_symbol"]: row for row in payload["rows"]}
+        assert rows_by_symbol["CDR"]["status"] == "created"
+        assert rows_by_symbol["GIGRO"]["status"] == "failed"
+
+        failed = rows_by_symbol["GIGRO"]
+        assert failed["reason_code"] == "holding_quantity_exceeded"
+        assert failed["instrument_symbol"] == "GIGRO"
+        assert failed["instrument_name"] == "GIGROUP SA"
+        assert failed["kind"] == "SELL"
+        assert Decimal(str(failed["quantity"])) == Decimal("1269.00")
+        assert Decimal(str(failed["held_quantity"])) == Decimal("0")
+        assert Decimal(str(failed["missing_quantity"])) == Decimal("1269.00")
+        assert "GIGRO" in failed["message"]
+        assert "2021-12-23" in failed["message"]
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM brokerage_events
+                    WHERE brokerage_account_id = %s
+                    """,
+                    (brokerage_account_id,),
+                )
+                event_count = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    SELECT i.symbol, h.quantity, h.avg_cost
+                    FROM holdings h
+                    JOIN instruments i ON i.id = h.instrument_id
+                    WHERE h.account_id = %s
+                    ORDER BY i.symbol
+                    """,
+                    (brokerage_account_id,),
+                )
+                holdings = cursor.fetchall()
+
+        assert event_count == 1
+        assert holdings == [("CDR", Decimal("10.0000000000"), Decimal("20.0000000000"))]
+
+    def test_bossa_history_import_rejects_missing_currency_cash_link_before_writes(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account("bousd", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/history/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={
+                "brokerage_account_id": brokerage_account_id,
+                "rows": [
+                    {
+                        "row_number": 2,
+                        "operation_type": "TRANSFER",
+                        "trade_at": "2026-06-04T10:00:00+00:00",
+                        "currency": "USD",
+                        "amount": "100.00",
+                        "amount_after": "100.00",
+                        "description": "Przelew do DM BOŚ USD",
+                    }
+                ],
+            },
+            timeout=10.0,
+        )
+
+        assert response.status_code == 422, response.text
+        assert "USD" in response.text
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM transactions WHERE account_id = %s",
+                    (fixture["account_id"],),
+                )
+                transaction_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_events WHERE brokerage_account_id = %s",
+                    (brokerage_account_id,),
+                )
+                event_count = cursor.fetchone()[0]
+
+        assert transaction_count == 0
+        assert event_count == 0
+
+    def test_bossa_history_import_rejects_needs_review_before_writes(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account("boneeds", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/history/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={
+                "brokerage_account_id": brokerage_account_id,
+                "rows": [
+                    {
+                        "row_number": 13,
+                        "operation_type": "NEEDS_REVIEW",
+                        "trade_at": "2026-06-04T10:00:00+00:00",
+                        "currency": "USD",
+                        "amount": "-12.34",
+                        "amount_after": "0.00",
+                        "description": "Rozliczenie transakcji kupna WisdomTree Natural Gas",
+                        "instrument_name": "WisdomTree Natural Gas",
+                        "review_reason": "Nie znaleziono instrumentu WisdomTree Natural Gas (ISIN: IE00TEST0001), waluta USD.",
+                    }
+                ],
+            },
+            timeout=10.0,
+        )
+
+        assert response.status_code == 422, response.text
+        assert "WisdomTree Natural Gas" in response.text
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM transactions WHERE account_id = %s",
+                    (fixture["account_id"],),
+                )
+                transaction_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_events WHERE brokerage_account_id = %s",
+                    (brokerage_account_id,),
+                )
+                event_count = cursor.fetchone()[0]
+
+        assert transaction_count == 0
+        assert event_count == 0
+
+    def test_bossa_history_import_creates_cash_transaction_with_balance_validation(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account("bocash", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/history/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={
+                "brokerage_account_id": brokerage_account_id,
+                "rows": [
+                    {
+                        "row_number": 2,
+                        "operation_type": "TRANSFER",
+                        "trade_at": "2026-06-04T10:00:00+00:00",
+                        "currency": "PLN",
+                        "amount": "1000.00",
+                        "amount_after": "1000.00",
+                        "description": "Przelew do DM BOŚ PLN",
+                    }
+                ],
+            },
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["created"] == 1
+        assert payload["cash_transactions_created"] == 1
+        assert payload["failed"] == 0
+        assert payload["rows"][0]["status"] == "created"
+        assert payload["rows"][0]["transaction_id"]
+        assert _get_account_balance(fixture["account_id"]) == Decimal("1000.00")
+
+    def test_bossa_history_import_rejects_bad_cash_balance_chain_without_writes(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account("bobadbal", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/history/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={
+                "brokerage_account_id": brokerage_account_id,
+                "rows": [
+                    {
+                        "row_number": 1,
+                        "operation_type": "TRANSFER",
+                        "trade_at": "2026-06-01T10:00:00+00:00",
+                        "currency": "PLN",
+                        "amount": "100.00",
+                        "amount_after": "100.00",
+                        "description": "Przelew do DM BOŚ PLN",
+                    },
+                    {
+                        "row_number": 2,
+                        "operation_type": "TRANSFER",
+                        "trade_at": "2026-06-02T10:00:00+00:00",
+                        "currency": "PLN",
+                        "amount": "50.00",
+                        "amount_after": "999.00",
+                        "description": "Błędny łańcuch salda",
+                    },
+                ],
+            },
+            timeout=10.0,
+        )
+
+        assert response.status_code == 422, response.text
+        assert "999.00" in response.text or "Saldo" in response.text or "balance" in response.text
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM transactions WHERE account_id = %s",
+                    (fixture["account_id"],),
+                )
+                transaction_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_events WHERE brokerage_account_id = %s",
+                    (brokerage_account_id,),
+                )
+                event_count = cursor.fetchone()[0]
+
+        assert transaction_count == 0
+        assert event_count == 0
+        assert _get_account_balance(fixture["account_id"]) == Decimal("0.00")
+
+    def test_bossa_parser_generated_balances_import_to_linked_cash_accounts(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account("bomulti", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+        usd_account_id = _seed_brokerage_cash_account(fixture, brokerage_account_id, "USD")
+        eur_account_id = _seed_brokerage_cash_account(fixture, brokerage_account_id, "EUR")
+        csv_payload = "\r\n".join([
+            "data;tytuł operacji;szczegóły;kwota;Saldo po operacji;waluta",
+            "2026-06-04;Wypłata dywidendy TEST;;5,00;;PLN",
+            "2026-06-03;Wymiana waluty PLN/EUR 4.0000;;10,00;;EUR",
+            "2026-06-03;Wymiana waluty PLN/EUR 4.0000;;-40,00;;PLN",
+            "2026-06-03;Wymiana waluty PLN/USD 4.0000;;25,00;;USD",
+            "2026-06-03;Wymiana waluty PLN/USD 4.0000;;-100,00;;PLN",
+            "2026-06-02;Przelew do DM BOŚ;;200,00;;PLN",
+        ]).encode("cp1250")
+
+        parse_response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "BossaMakler CSV", "mode": "brokerage_history"},
+            files={"file": ("bossa.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+        assert parse_response.status_code == 200, parse_response.text
+        parsed_payload = parse_response.json()
+        assert [Decimal(str(row["amount_after"])) for row in parsed_payload["rows"]] == [
+            Decimal("65.00"),
+            Decimal("10.00"),
+            Decimal("60.00"),
+            Decimal("25.00"),
+            Decimal("100.00"),
+            Decimal("200.00"),
+        ]
+
+        import_response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/history/import",
+            headers=_auth_headers(fixture["user_id"]),
+            json={
+                "brokerage_account_id": brokerage_account_id,
+                "rows": parsed_payload["rows"],
+            },
+            timeout=10.0,
+        )
+
+        assert import_response.status_code == 200, import_response.text
+        payload = import_response.json()
+        assert payload["total"] == 6
+        assert payload["created"] == 6
+        assert payload["cash_transactions_created"] == 6
+        assert payload["failed"] == 0
+        assert _get_account_balance(fixture["account_id"]) == Decimal("65.00")
+        assert _get_account_balance(usd_account_id) == Decimal("25.00")
+        assert _get_account_balance(eur_account_id) == Decimal("10.00")
+
+    def test_manual_brokerage_event_rejects_invalid_split_ratio_without_event(self, wallet_url: str, stock_url: str) -> None:
+        fixture = _seed_wallet_account("brsplitbad", opening_balance="1000.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+        split = self._event_row(
+            kind="SPLIT",
+            quantity="0.00",
+            price="0.00",
+            split_ratio="0.0000000000",
+            trade_at="2026-06-02T09:00:00+00:00",
+        )
+        self._ensure_stock_instruments_for_rows(stock_url, [split])
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/event",
+            headers=_auth_headers(fixture["user_id"]),
+            json={"brokerage_account_id": brokerage_account_id, **split},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "Split ratio" in response.text
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_events WHERE brokerage_account_id = %s",
+                    (brokerage_account_id,),
+                )
+                event_count = cursor.fetchone()[0]
+
+        assert event_count == 0
+
+    def test_manual_conversion_rejects_missing_target_without_event(self, wallet_url: str, stock_url: str) -> None:
+        fixture = _seed_wallet_account("brconvbad", opening_balance="1000.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+        conversion = self._event_row(
+            symbol="WORK",
+            name="WORKSERV SA",
+            kind="CONVERSION",
+            quantity="100.00",
+            price="0.00",
+            split_ratio="0.2000000000",
+            note="WORKSERV -> missing target",
+            trade_at="2026-06-02T09:00:00+00:00",
+        )
+        self._ensure_stock_instruments_for_rows(stock_url, [conversion])
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/event",
+            headers=_auth_headers(fixture["user_id"]),
+            json={"brokerage_account_id": brokerage_account_id, **conversion},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "target instrument" in response.text
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_events WHERE brokerage_account_id = %s",
+                    (brokerage_account_id,),
+                )
+                event_count = cursor.fetchone()[0]
+
+        assert event_count == 0
+
+    def test_manual_split_and_adjustment_update_holding_without_extra_cash_rows(self, wallet_url: str, stock_url: str) -> None:
+        fixture = _seed_wallet_account("bradj", opening_balance="1000.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+        headers = _auth_headers(fixture["user_id"])
+
+        buy = self._event_row(
+            kind="BUY",
+            quantity="10.00",
+            price="20.00",
+            trade_at="2026-06-01T09:00:00+00:00",
+        )
+        split = self._event_row(
+            kind="SPLIT",
+            quantity="0.00",
+            price="0.00",
+            split_ratio="2.0000000000",
+            trade_at="2026-06-02T09:00:00+00:00",
+        )
+        adjustment = self._event_row(
+            kind="ADJUSTMENT",
+            quantity="25.00",
+            price="8.00",
+            note="Korekta po scaleniu, stara nazwa: ELZAB",
+            trade_at="2026-06-03T09:00:00+00:00",
+        )
+        self._ensure_stock_instruments_for_rows(stock_url, [buy, split, adjustment])
+
+        for payload in (buy, split, adjustment):
+            response = httpx.post(
+                f"{wallet_url}/wallet/brokerage/event",
+                headers=headers,
+                json={"brokerage_account_id": brokerage_account_id, **payload},
+                timeout=10.0,
+            )
+            assert response.status_code == 200, response.text
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT h.quantity, h.avg_cost
+                    FROM holdings h
+                    JOIN instruments i ON i.id = h.instrument_id
+                    WHERE h.account_id = %s
+                      AND i.symbol = 'PKOBP'
+                    """,
+                    (brokerage_account_id,),
+                )
+                holding = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT kind, split_ratio, note
+                    FROM brokerage_events
+                    WHERE brokerage_account_id = %s
+                    ORDER BY trade_at
+                    """,
+                    (brokerage_account_id,),
+                )
+                events = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM transactions
+                    WHERE account_id = %s
+                    """,
+                    (fixture["account_id"],),
+                )
+                cash_rows = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM capital_gains
+                    WHERE deposit_account_id = %s
+                    """,
+                    (fixture["account_id"],),
+                )
+                gain_rows = cursor.fetchone()[0]
+
+        assert holding is not None
+        assert Decimal(str(holding[0])) == Decimal("25.0000000000")
+        assert Decimal(str(holding[1])) == Decimal("8.0000000000")
+        assert [event[0] for event in events] == ["TRADE_BUY", "SPLIT", "ADJUSTMENT"]
+        assert Decimal(str(events[1][1])) == Decimal("2.0000000000")
+        assert events[2][2] == "Korekta po scaleniu, stara nazwa: ELZAB"
+        assert cash_rows == 1
+        assert gain_rows == 0
+
+    def test_manual_conversion_rebrands_instrument_and_preserves_cost_basis(self, wallet_url: str, stock_url: str) -> None:
+        fixture = _seed_wallet_account("brconv", opening_balance="5000.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+        headers = _auth_headers(fixture["user_id"])
+
+        buy = self._event_row(
+            symbol="WORK",
+            name="WORKSERV SA",
+            kind="BUY",
+            quantity="1000.00",
+            price="2.00",
+            trade_at="2026-06-01T09:00:00+00:00",
+        )
+        conversion = {
+            **self._event_row(
+                symbol="WORK",
+                name="WORKSERV SA",
+                kind="CONVERSION",
+                quantity="1000.00",
+                price="0.00",
+                split_ratio="0.2000000000",
+                note="WORKSERV -> GIGROUP, scalenie 1:5",
+                trade_at="2026-06-02T09:00:00+00:00",
+            ),
+            "target_instrument_symbol": "GIG",
+            "target_instrument_mic": "XWAR",
+            "target_instrument_name": "GIGROUP SA",
+        }
+        self._ensure_stock_instruments_for_rows(stock_url, [buy, conversion])
+
+        for payload in (buy, conversion):
+            response = httpx.post(
+                f"{wallet_url}/wallet/brokerage/event",
+                headers=headers,
+                json={"brokerage_account_id": brokerage_account_id, **payload},
+                timeout=10.0,
+            )
+            assert response.status_code == 200, response.text
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT i.symbol, h.quantity, h.avg_cost
+                    FROM holdings h
+                    JOIN instruments i ON i.id = h.instrument_id
+                    WHERE h.account_id = %s
+                    ORDER BY i.symbol
+                    """,
+                    (brokerage_account_id,),
+                )
+                holdings = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT e.id, e.kind, src.symbol, tgt.symbol, e.quantity, e.split_ratio, e.note
+                    FROM brokerage_events e
+                    JOIN instruments src ON src.id = e.instrument_id
+                    LEFT JOIN instruments tgt ON tgt.id = e.target_instrument_id
+                    WHERE e.brokerage_account_id = %s
+                    ORDER BY e.trade_at
+                    """,
+                    (brokerage_account_id,),
+                )
+                events = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM transactions
+                    WHERE account_id = %s
+                    """,
+                    (fixture["account_id"],),
+                )
+                cash_rows = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM capital_gains
+                    WHERE deposit_account_id = %s
+                    """,
+                    (fixture["account_id"],),
+                )
+                gain_rows = cursor.fetchone()[0]
+
+        assert holdings == [("GIG", Decimal("200.0000000000"), Decimal("10.0000000000"))]
+        assert [event[1] for event in events] == ["TRADE_BUY", "CONVERSION"]
+        assert events[1][2] == "WORK"
+        assert events[1][3] == "GIG"
+        assert Decimal(str(events[1][4])) == Decimal("1000.0000000000")
+        assert Decimal(str(events[1][5])) == Decimal("0.2000000000")
+        assert events[1][6] == "WORKSERV -> GIGROUP, scalenie 1:5"
+        assert cash_rows == 1
+        assert gain_rows == 0
+
+        delete_response = httpx.delete(
+            f"{wallet_url}/wallet/brokerage/events/{events[1][0]}",
+            headers=headers,
+            timeout=10.0,
+        )
+        assert delete_response.status_code == 200, delete_response.text
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT i.symbol, h.quantity, h.avg_cost
+                    FROM holdings h
+                    JOIN instruments i ON i.id = h.instrument_id
+                    WHERE h.account_id = %s
+                    ORDER BY i.symbol
+                    """,
+                    (brokerage_account_id,),
+                )
+                rebuilt_holdings = cursor.fetchall()
+
+        assert rebuilt_holdings == [("WORK", Decimal("1000.0000000000"), Decimal("2.0000000000"))]
+
+    def test_manual_brokerage_event_rejects_cross_user_account(self, wallet_url: str) -> None:
+        owner = _seed_wallet_account("brownevt", opening_balance="1000.00", currency="PLN")
+        other = _seed_wallet_account("broevtoth", opening_balance="1000.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(owner, currency="PLN")
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/event",
+            headers=_auth_headers(other["user_id"]),
+            json={
+                "brokerage_account_id": brokerage_account_id,
+                **self._event_row(
+                    kind="ADJUSTMENT",
+                    quantity="1.00",
+                    price="10.00",
+                    note="Nie powinno przejść",
+                    trade_at="2026-06-03T09:00:00+00:00",
+                ),
+            },
+            timeout=10.0,
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "Brokerage account not found."
+
+    def test_delete_brokerage_account_removes_dedicated_cash_account(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account(
+            "brdel",
+            opening_balance="123.45",
+            currency="PLN",
+            account_type="BROKERAGE",
+        )
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+
+        response = httpx.delete(
+            f"{wallet_url}/wallet/brokerage/{brokerage_account_id}",
+            headers=_auth_headers(fixture["user_id"]),
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["ok"] is True
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_accounts WHERE id = %s",
+                    (brokerage_account_id,),
+                )
+                brokerage_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_deposit_links WHERE brokerage_account_id = %s",
+                    (brokerage_account_id,),
+                )
+                link_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM deposit_accounts WHERE id = %s",
+                    (fixture["account_id"],),
+                )
+                cash_account_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM deposit_account_balances WHERE account_id = %s",
+                    (fixture["account_id"],),
+                )
+                cash_balance_count = cursor.fetchone()[0]
+
+        assert brokerage_count == 0
+        assert link_count == 0
+        assert cash_account_count == 0
+        assert cash_balance_count == 0
+
+    def test_delete_brokerage_account_denies_cross_user_and_preserves_cash_account(self, wallet_url: str) -> None:
+        owner = _seed_wallet_account(
+            "brdelown",
+            opening_balance="123.45",
+            currency="PLN",
+            account_type="BROKERAGE",
+        )
+        other = _seed_wallet_account("brdeloth", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(owner, currency="PLN")
+
+        response = httpx.delete(
+            f"{wallet_url}/wallet/brokerage/{brokerage_account_id}",
+            headers=_auth_headers(other["user_id"]),
+            timeout=10.0,
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "Account not found"
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_accounts WHERE id = %s",
+                    (brokerage_account_id,),
+                )
+                brokerage_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM brokerage_deposit_links WHERE brokerage_account_id = %s",
+                    (brokerage_account_id,),
+                )
+                link_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM deposit_accounts WHERE id = %s",
+                    (owner["account_id"],),
+                )
+                cash_account_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM deposit_account_balances WHERE account_id = %s",
+                    (owner["account_id"],),
+                )
+                cash_balance_count = cursor.fetchone()[0]
+
+        assert brokerage_count == 1
+        assert link_count == 1
+        assert cash_account_count == 1
+        assert cash_balance_count == 1
+
+    def test_ensure_brokerage_cash_link_creates_technical_usd_subaccount(
+        self,
+        wallet_url: str,
+        session_url: str,
+    ) -> None:
+        fixture = _seed_wallet_account(
+            "brcash",
+            opening_balance="0.00",
+            currency="PLN",
+            account_type="BROKERAGE",
+        )
+        _register_session_crypto_user(session_url, fixture)
+        brokerage_account_id = _seed_brokerage_account_link(fixture, currency="PLN")
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/{brokerage_account_id}/cash-links/ensure",
+            headers=_auth_headers(fixture["user_id"]),
+            json={
+                "cash_accounts": [
+                    {
+                        "currency": "USD",
+                        "account_number": "BOSSA-IKE-USD-ARTUR",
+                        "name": "BOSSA IKE Artur · USD",
+                    }
+                ]
+            },
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert len(payload) == 1
+        assert payload[0]["currency"] == "USD"
+        assert payload[0]["created"] is True
+        cash_account_id = payload[0]["deposit_account_id"]
+
+        with _wallet_db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT name, account_type, currency
+                    FROM deposit_accounts
+                    WHERE id = %s
+                    """,
+                    (cash_account_id,),
+                )
+                cash_account = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT currency
+                    FROM brokerage_deposit_links
+                    WHERE brokerage_account_id = %s
+                      AND deposit_account_id = %s
+                    """,
+                    (brokerage_account_id, cash_account_id),
+                )
+                link = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT available, blocked
+                    FROM deposit_account_balances
+                    WHERE account_id = %s
+                    """,
+                    (cash_account_id,),
+                )
+                balance = cursor.fetchone()
+
+        assert cash_account == ("BOSSA IKE Artur · USD", "BROKERAGE", "USD")
+        assert link == ("USD",)
+        assert balance == (Decimal("0.00"), Decimal("0.00"))
+
+    def test_import_rejects_brokerage_account_owned_by_another_user(self, wallet_url: str) -> None:
+        owner = _seed_wallet_account("browner", opening_balance="0.00", currency="PLN")
+        other = _seed_wallet_account("broother", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(owner, currency="PLN")
+
+        response = httpx.post(
+            f"{wallet_url}/wallet/brokerage/events/import",
+            headers=_auth_headers(other["user_id"]),
+            json={
+                "brokerage_account_id": brokerage_account_id,
+                "events": [
+                    self._event_row(
+                        kind="BUY",
+                        quantity="1.00",
+                        price="10.00",
+                        trade_at="2026-06-01T09:00:00+00:00",
+                    )
+                ],
+            },
+            timeout=10.0,
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "Brokerage account not found."
+
+
+@pytest.mark.component
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Component")
 @allure.story("Wallet transaction list filters return correctly scoped results")
 @allure.severity(allure.severity_level.CRITICAL)
 @allure.tag("wallet", "transactions", "filters", "api-contract", "database")
@@ -1068,6 +2210,100 @@ class TestWalletTransactionListFiltersApi:
         assert p2["total"] == 3
         assert len(p2["items"]) == 1
         assert p2["page"] == 2
+
+
+@pytest.mark.component
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Component")
+@allure.story("Wallet transaction list sort query parameters order paginated API results")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("wallet", "transactions", "sorting", "pagination", "api-contract", "database")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Exercises GET /wallet/transactions sort_by/sort_dir against persisted rows. "
+    "The scenario verifies date sorting and category sorting at the wallet API level, "
+    "so Next UI can request globally sorted pages instead of sorting only the visible page."
+)
+class TestWalletTransactionListSortingApi:
+    def test_sorting_by_date_and_category_returns_ordered_rows(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account("txsort", opening_balance="0.00", currency="PLN")
+        summary = _create_transactions(
+            wallet_url,
+            fixture["user_id"],
+            fixture["account_id"],
+            [
+                _transaction_row("2026-06-01T09:00:00+00:00", "10.00", "10.00", "First income"),
+                _transaction_row("2026-06-02T09:00:00+00:00", "10.00", "20.00", "Second income"),
+                _transaction_row("2026-06-03T09:00:00+00:00", "10.00", "30.00", "Third income"),
+            ],
+        )
+        first_id, second_id, third_id = summary["transaction_ids"]
+
+        httpx.patch(
+            f"{wallet_url}/wallet/transactions/batch",
+            headers=_auth_headers(fixture["user_id"]),
+            json={"items": [
+                {"id": first_id, "category": "ZUS_TAXES"},
+                {"id": third_id, "category": "FOOD"},
+                {"id": second_id, "category": "FUEL"},
+            ]},
+            timeout=10.0,
+        ).raise_for_status()
+
+        date_asc = httpx.get(
+            f"{wallet_url}/wallet/transactions",
+            headers=_auth_headers(fixture["user_id"]),
+            params={
+                "account_id": fixture["account_id"],
+                "sort_by": "date",
+                "sort_dir": "asc",
+                "size": 10,
+            },
+            timeout=10.0,
+        )
+        date_desc = httpx.get(
+            f"{wallet_url}/wallet/transactions",
+            headers=_auth_headers(fixture["user_id"]),
+            params={
+                "account_id": fixture["account_id"],
+                "sort_by": "date",
+                "sort_dir": "desc",
+                "size": 10,
+            },
+            timeout=10.0,
+        )
+        category_asc = httpx.get(
+            f"{wallet_url}/wallet/transactions",
+            headers=_auth_headers(fixture["user_id"]),
+            params={
+                "account_id": fixture["account_id"],
+                "sort_by": "category",
+                "sort_dir": "asc",
+                "size": 10,
+            },
+            timeout=10.0,
+        )
+
+        assert date_asc.status_code == 200, date_asc.text
+        assert date_desc.status_code == 200, date_desc.text
+        assert category_asc.status_code == 200, category_asc.text
+
+        assert [row["id"] for row in date_asc.json()["items"]] == [
+            first_id,
+            second_id,
+            third_id,
+        ]
+        assert [row["id"] for row in date_desc.json()["items"]] == [
+            third_id,
+            second_id,
+            first_id,
+        ]
+        assert [row["id"] for row in category_asc.json()["items"]] == [
+            third_id,
+            second_id,
+            first_id,
+        ]
 
 
 @pytest.mark.component

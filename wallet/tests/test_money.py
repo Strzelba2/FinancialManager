@@ -49,8 +49,10 @@ class MoneyUtilsTests(unittest.TestCase):
 
     def test_compute_cash_effect_for_non_cash_event_is_zero(self) -> None:
         result = compute_cash_effect(BrokerageEventKind.SPLIT, Decimal("3"), Decimal("2.50"))
+        adjustment = compute_cash_effect(BrokerageEventKind.ADJUSTMENT, Decimal("3"), Decimal("2.50"))
 
         self.assertEqual(result, Decimal("0"))
+        self.assertEqual(adjustment, Decimal("0"))
 
     def test_fx_convert_returns_none_when_rate_is_missing(self) -> None:
         result = fx_convert(Decimal("100"), "USD", "PLN", {})
@@ -66,6 +68,19 @@ class MoneyUtilsTests(unittest.TestCase):
         result = fx_convert(Decimal("100"), "PLN", "PLN", {})
 
         self.assertEqual(result, Decimal("100"))
+
+    def test_fx_convert_uses_chf_direct_rate_to_view_currency(self) -> None:
+        # CHF instruments convert to a view currency via the forward direct key
+        # supplied by the frontend FX map (CHF/PLN, CHF/USD, CHF/EUR).
+        rates = {"CHF/PLN": "4.50", "CHF/USD": "1.125", "CHF/EUR": "1.0227"}
+
+        self.assertEqual(fx_convert(Decimal("100"), "CHF", "PLN", rates), Decimal("450.00"))
+        self.assertEqual(fx_convert(Decimal("100"), "CHF", "USD", rates), Decimal("112.500"))
+
+    def test_fx_convert_returns_none_when_chf_rate_is_missing(self) -> None:
+        # Without the CHF key the snapshot leaves the amount unconverted (None),
+        # matching the pre-CHF behaviour for unknown currencies.
+        self.assertIsNone(fx_convert(Decimal("100"), "CHF", "PLN", {"USD/PLN": "4.0"}))
 
     def test_safe_ccy_prefers_enum_value(self) -> None:
         result = safe_ccy(SimpleNamespace(value="EUR"), "PLN")

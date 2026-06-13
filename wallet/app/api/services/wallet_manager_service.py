@@ -115,15 +115,15 @@ async def get_wallet_manager_tree_service(
         }
 
     links = await list_brokerage_deposit_links(session, brokerage_account_ids=bro_ids)
-    links_by_bro: dict[uuid.UUID, uuid.UUID] = {}
+    links_by_bro: dict[uuid.UUID, list[uuid.UUID]] = {}
     for ln in links:
-        links_by_bro.setdefault(ln.brokerage_account_id, ln.deposit_account_id)
+        links_by_bro.setdefault(ln.brokerage_account_id, []).append(ln.deposit_account_id)
 
     dep_map: dict[uuid.UUID, tuple[Any, Decimal]] = {}
     for acc in dep_rows:
         dep_map[acc.id] = (acc, dec(getattr(acc.balance, "available", 0)))
 
-    holding_rows = await list_holdings(session, account_ids=bro_ids, with_relations=True)
+    holding_rows = await list_holdings(session, account_ids=bro_ids, with_relations=True, limit=None)
     holdings_by_bro: dict[uuid.UUID, list[tuple[Any, Any]]] = {}
     all_symbols: list[str] = []
     for h in holding_rows:
@@ -168,7 +168,6 @@ async def get_wallet_manager_tree_service(
     for b in bro_accounts:
         defoult_ccy = base_by_wallet[b.wallet_id]
         items = holdings_by_bro.get(b.id, [])
-        logger.info(f"items: {items}")
         positions: list[dict] = []
         missing_quotes = 0
         positions_value = Decimal("0")
@@ -207,10 +206,11 @@ async def get_wallet_manager_tree_service(
 
         positions.sort(key=lambda p: p["value_default_ccy"], reverse=True)
 
-        dep_id = links_by_bro.get(b.id)
         cash_accounts: list[dict] = []
         sum_cash_default_ccy = Decimal("0")
-        if dep_id and dep_id in dep_map:
+        for dep_id in links_by_bro.get(b.id, []):
+            if dep_id not in dep_map:
+                continue
             dep_acc, dep_av = dep_map[dep_id]
             src_ccy = dep_acc.currency.value
             cash_accounts.append(
@@ -221,10 +221,9 @@ async def get_wallet_manager_tree_service(
                     "available": dep_av,
                 }
             )
-            
-        cv = fx_convert(dec(dep_av), src_ccy, defoult_ccy, fx_now)
-        if cv is not None:
-            sum_cash_default_ccy += cv
+            cv = fx_convert(dec(dep_av), src_ccy, defoult_ccy, fx_now)
+            if cv is not None:
+                sum_cash_default_ccy += cv
             
         bro_by_wallet[b.wallet_id].append(
             {
@@ -234,7 +233,7 @@ async def get_wallet_manager_tree_service(
                 "cash_accounts": cash_accounts,
                 "sum_cash_accounts": sum_cash_default_ccy,
                 "positions": positions,
-                "positions_count": len(positions),
+                "positions_count": len(items),
                 "positions_value": positions_value,
                 "events_per_month": ev_counts.get(b.id, 0),
                 "health": {
@@ -492,7 +491,7 @@ async def create_monthly_snapshot_for_user_service(
         for ln in links:
             links_by_bro.setdefault(ln.brokerage_account_id, []).append(ln)
 
-        holding_rows = await list_holdings(session, account_ids=bro_ids, with_relations=True)  
+        holding_rows = await list_holdings(session, account_ids=bro_ids, with_relations=True, limit=None)
         holdings_by_bro: dict[uuid.UUID, list[tuple[Any, Any]]] = {}
         symbols: list[str] = []
         for h in holding_rows:
@@ -629,4 +628,3 @@ async def create_monthly_snapshot_for_user_service(
             re_count += 1
 
         return mk, True, dep_count, bro_count, metal_count, re_count
-   

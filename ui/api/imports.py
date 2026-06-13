@@ -15,6 +15,8 @@ async def list_import_parsers() -> list[dict]:
             'accept': parser.accept,
             'upload_label': parser.upload_label,
             'supports_brokerage_events': getattr(parser, 'supports_brokerage_events', False),
+            'supports_brokerage_history': getattr(parser, 'supports_brokerage_history', False),
+            'supports_full_import': getattr(parser, 'supports_full_import', False),
         }
         for parser in PARSERS
     ]
@@ -42,6 +44,18 @@ async def parse_import_file(
 
             reader, _headers = parser.open_mb_dictreader_from_bytes(file_bytes)
             rows = await parser.parse_brokerage_events(reader, StockClient())
+            payload = [row.model_dump(mode='json') for row in rows]
+            return {'mode': mode, 'count': len(payload), 'rows': payload}
+
+        if mode == 'brokerage_history':
+            if not getattr(parser, 'supports_brokerage_history', False):
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Selected parser does not support brokerage full history')
+
+            if parser.kind != 'CSV':
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Brokerage full history import is available only for CSV formats')
+
+            reader, _headers = parser.open_mb_dictreader_from_bytes(file_bytes)
+            rows = await parser.parse_brokerage_history(reader, StockClient())
             payload = [row.model_dump(mode='json') for row in rows]
             return {'mode': mode, 'count': len(payload), 'rows': payload}
 

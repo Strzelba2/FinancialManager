@@ -83,6 +83,70 @@ def parse_int_pl(s: Optional[str]) -> Optional[int]:
         return None
     
     
+def parse_float_en(s: Optional[str]) -> Optional[float]:
+    """
+    Parse a US/English-formatted numeric string into a float.
+
+    Unlike ``parse_float_pl`` (comma = decimal separator), this helper treats the
+    comma as a thousands separator (it is removed) and the dot as the decimal
+    separator. Leading ``+`` and trailing ``%`` are stripped.
+
+    Examples:
+        "15.62"      -> 15.62
+        "76,738.00"  -> 76738.0
+        "+1.20%"     -> 1.2
+        "-3.78%"     -> -3.78
+        None / ""    -> None
+
+    Args:
+        s: Input string (possibly None) containing a number in EN formatting.
+
+    Returns:
+        Parsed float value, or None if parsing fails.
+    """
+    logger.info(f"parse_float_en: raw input={s!r}")
+
+    if not s:
+        return None
+    s = txt(s).replace(" ", "").replace("%", "").replace("+", "").replace(",", "")
+    s = re.sub(r"[^0-9.\-]", "", s)
+    if not s or s in {".", "-.", ".-", "-"}:
+        return None
+    try:
+        return float(s)
+    except ValueError as e:
+        logger.warning(f"parse_float_en: failed to parse as float: {e}")
+        return None
+
+
+def parse_int_en(s: Optional[str]) -> Optional[int]:
+    """
+    Parse a US/English-formatted numeric string into an int.
+
+    The value is parsed via ``parse_float_en`` (so thousands commas are removed and
+    a dot decimal is honoured), then truncated to an integer. This is the correct
+    parser for values like volume rendered as ``"76,738.00"`` (``parse_int_pl``
+    would wrongly yield ``7673800`` by stripping the dot too).
+
+    Examples:
+        "76,738.00"  -> 76738
+        "1,234.99"   -> 1234
+        None / ""    -> None
+
+    Args:
+        s: Input string (possibly None) containing an integer in EN formatting.
+
+    Returns:
+        Parsed int value, or None if parsing fails.
+    """
+    logger.info(f"parse_int_en: raw input={s!r}")
+
+    value = parse_float_en(s)
+    if value is None:
+        return None
+    return int(value)
+
+
 def dec(x) -> Decimal:
     """
     Safely convert any value to `Decimal`.

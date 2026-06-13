@@ -15,6 +15,8 @@ holdings, gains, and related personal finance records.
   persisting cash effects.
 - Create and import brokerage events, maintain holdings, record linked cash effects, and
   track realized capital gains.
+- Link brokerage accounts to one or more ordinary deposit-account cash ledgers so PLN,
+  USD, and EUR brokerage cash can be validated independently during import.
 - Own debts, recurring expenses, goals, notes, favorites, alerts, real estate, real
   estate prices, and metal holdings.
 - Call `stock` when wallet work needs market-facing quote or instrument information.
@@ -69,6 +71,9 @@ The FastAPI health surface is `/healthz`.
 - Dashboard flow aggregation keeps `TAXES` separate from `EXPENSE`; the frontend
   presents taxes as a separate burden when calculating visible profit.
 - `StockClient` calls `stock` for quotes, instrument resolution, and candle sync support.
+- Brokerage imports and manual events resolve instruments in `stock` before wallet
+  creates or updates its local instrument mirror. Wallet does not treat raw import text
+  as an authoritative instrument.
 - `AuthCryptoClient` calls `session` `/crypto/batch` for user-scoped crypto operations.
 - Wallet has Redis and Celery config modules, but current Compose does not run a wallet
   worker process.
@@ -164,6 +169,10 @@ remaining inside wallet-owned state.
 The detailed transaction rules, parser boundary, API contract, migration policy, and
 test expectations are described in
 [Wallet Transaction Lifecycle](../../design/wallet-transaction-lifecycle.md).
+
+Brokerage cash subaccounts, BoSSA all-or-nothing import, wallet instrument mirroring,
+and quote-source-driven foreign instruments are described in
+[Brokerage Account Import And Quotes](../../design/brokerage-account-import-and-quotes.md).
 
 ## Where to Start Reading
 

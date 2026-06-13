@@ -315,6 +315,147 @@ def seed_functional_wallet_account(user: dict[str, str], opening_balance: str = 
     }
 
 
+@keyword("Seed Functional Brokerage Account")
+def seed_functional_brokerage_account(wallet: dict[str, str], opening_balance: str = "10000.00") -> dict[str, str]:
+    suffix = uuid4().hex[:8]
+    now = datetime.now(timezone.utc)
+    brokerage_account_id = str(uuid4())
+    cash_account_id = str(uuid4())
+    brokerage_name = f"Functional Brokerage {suffix}"
+    cash_name = f"Functional Brokerage Cash {suffix}"
+    mic = f"F{suffix[:3]}".upper()
+    symbol = f"F{suffix[3:6]}".upper()
+    isin = f"PL{suffix[:10].upper():0<10}"[:12]
+
+    with psycopg.connect(
+        host=_env("FUNCTIONAL_WALLET_DB_HOST", "wallet-db"),
+        port=int(_env("FUNCTIONAL_WALLET_DB_PORT", "5432")),
+        dbname=_env("FUNCTIONAL_WALLET_DB_NAME", "Wallet_test"),
+        user=_env("FUNCTIONAL_WALLET_DB_USER", "myuser"),
+        password=_env("FUNCTIONAL_WALLET_DB_PASSWORD", "mypassword"),
+    ) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM banks ORDER BY name LIMIT 1")
+            bank_row = cursor.fetchone()
+            if bank_row is None:
+                bank_id = str(uuid4())
+                cursor.execute(
+                    "INSERT INTO banks (id, name, shortname, bic) VALUES (%s, %s, %s, %s)",
+                    (bank_id, f"Functional Broker {suffix}", f"B{suffix[:4]}".upper(), None),
+                )
+            else:
+                bank_id = str(bank_row[0])
+
+            cursor.execute(
+                """
+                INSERT INTO brokerage_accounts (id, created_at, updated_at, name, wallet_id, bank_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (brokerage_account_id, now, now, brokerage_name, wallet["wallet_id"], bank_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO deposit_accounts (
+                    id, created_at, updated_at, name, account_type,
+                    account_number_nonce, account_number_ct, account_number_fp,
+                    iban_nonce, iban_ct, iban_fp,
+                    currency, wallet_id, bank_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, %s, %s, %s)
+                """,
+                (
+                    cash_account_id,
+                    now,
+                    now,
+                    cash_name,
+                    "BROKERAGE",
+                    psycopg.Binary(b"2" * 12),
+                    psycopg.Binary(f"functional-brokerage-cipher-{suffix}".encode("utf-8")),
+                    psycopg.Binary(uuid4().bytes + uuid4().bytes),
+                    "PLN",
+                    wallet["wallet_id"],
+                    bank_id,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO deposit_account_balances (account_id, created_at, updated_at, available, blocked)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (cash_account_id, now, now, Decimal(opening_balance), Decimal("0.00")),
+            )
+            cursor.execute(
+                """
+                INSERT INTO brokerage_deposit_links (brokerage_account_id, deposit_account_id, currency)
+                VALUES (%s, %s, %s)
+                """,
+                (brokerage_account_id, cash_account_id, "PLN"),
+            )
+
+    with psycopg.connect(
+        host=_env("FUNCTIONAL_STOCK_DB_HOST", "stock-db"),
+        port=int(_env("FUNCTIONAL_STOCK_DB_PORT", "5432")),
+        dbname=_env("FUNCTIONAL_STOCK_DB_NAME", "stock_test"),
+        user=_env("FUNCTIONAL_STOCK_DB_USER", "myuser"),
+        password=_env("FUNCTIONAL_STOCK_DB_PASSWORD", "mypassword"),
+    ) as conn:
+        with conn.cursor() as cursor:
+            market_id = str(uuid4())
+            instrument_id = str(uuid4())
+            cursor.execute(
+                """
+                INSERT INTO market (id, mic, name, country, timezone, active, currency)
+                VALUES (%s, %s, %s, %s, %s, TRUE, %s)
+                """,
+                (market_id, mic, f"Functional Market {suffix}", "PL", "Europe/Warsaw", "PLN"),
+            )
+            cursor.execute(
+                """
+                INSERT INTO instrument (
+                    id, created_at, updated_at, isin, symbol, shortname, name,
+                    currency, type, status, historical_source, quote_source,
+                    popularity, last_seen_at, market_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, 0, %s, %s)
+                """,
+                (
+                    instrument_id,
+                    now,
+                    now,
+                    isin,
+                    symbol,
+                    symbol,
+                    f"Functional Instrument {suffix}",
+                    "PLN",
+                    "STOCK",
+                    "ACTIVE",
+                    now,
+                    market_id,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO quote_latest (
+                    instrument_id, last_price, change_pct, volume,
+                    last_trade_at, provider, href, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (instrument_id, Decimal("50.00"), Decimal("0.00"), 1000, now, "functional", None, now),
+            )
+
+    return {
+        "brokerage_account_id": brokerage_account_id,
+        "cash_account_id": cash_account_id,
+        "brokerage_name": brokerage_name,
+        "cash_name": cash_name,
+        "mic": mic,
+        "symbol": symbol,
+        "isin": isin,
+        "opening_balance": opening_balance,
+    }
+
+
 def _activate_user(email: str) -> None:
     with psycopg.connect(
         host=_env("FUNCTIONAL_SESSION_DB_HOST", "session-db"),

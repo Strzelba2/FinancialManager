@@ -561,6 +561,13 @@ def test_service_database_has_core_business_constraints(
                 ("wallets", "users"),
                 ("deposit_accounts", "wallets"),
                 ("transactions", "deposit_accounts"),
+                ("brokerage_accounts", "wallets"),
+                ("brokerage_events", "brokerage_accounts"),
+                ("brokerage_events", "instruments"),
+                ("brokerage_deposit_links", "brokerage_accounts"),
+                ("brokerage_deposit_links", "deposit_accounts"),
+                ("holdings", "brokerage_accounts"),
+                ("holdings", "instruments"),
                 ("favorite_lists", "users"),
                 ("favorite_items", "favorite_lists"),
                 ("favorite_items", "instruments"),
@@ -589,6 +596,65 @@ def test_service_database_has_required_foreign_keys(
         actual_edges = _database_foreign_key_edges(host, database)
 
     assert expected_edges <= actual_edges
+
+
+@pytest.mark.integration
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Integration")
+@allure.story("Brokerage and stock migrations expose required columns and enum values")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("database", "migration", "wallet", "stock", "brokerage", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+def test_brokerage_and_stock_database_schema_supports_current_import_contract() -> None:
+    with _wallet_db_connection() as wallet_connection:
+        with wallet_connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT enumlabel
+                FROM pg_enum
+                JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
+                WHERE pg_type.typname = 'brokerage_event_kind'
+                """
+            )
+            event_kinds = {row[0] for row in cursor.fetchall()}
+            cursor.execute(
+                """
+                SELECT column_name, numeric_precision, numeric_scale
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'brokerage_events'
+                  AND column_name IN ('target_instrument_id', 'split_ratio')
+                """
+            )
+            brokerage_columns = {row[0]: row[1:] for row in cursor.fetchall()}
+
+    assert {"ADJUSTMENT", "CONVERSION", "SPLIT"} <= event_kinds
+    assert "target_instrument_id" in brokerage_columns
+    assert brokerage_columns["split_ratio"][1] is not None
+    assert brokerage_columns["split_ratio"][1] >= 10
+
+    with psycopg.connect(
+        host="stock-db",
+        port=int(os.environ.get("TEST_POSTGRES_PORT", "5432")),
+        dbname="stock_test",
+        user=os.environ.get("TEST_POSTGRES_USER", "myuser"),
+        password=os.environ.get("TEST_POSTGRES_PASSWORD", "mypassword"),
+        connect_timeout=5,
+    ) as stock_connection:
+        with stock_connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'instrument'
+                  AND column_name IN ('quote_source', 'currency')
+                """
+            )
+            stock_columns = {row[0] for row in cursor.fetchall()}
+
+    assert {"quote_source", "currency"} <= stock_columns
 
 
 @pytest.mark.integration

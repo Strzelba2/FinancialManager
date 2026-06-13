@@ -12,13 +12,25 @@ class Currency(StrEnum):
     PLN = "PLN"
     USD = "USD"
     EUR = "EUR"
-    
+
+
+class InstrumentCurrency(StrEnum):
+    """Quote/trade currency of an instrument or brokerage event (superset of base Currency)."""
+    PLN = "PLN"
+    USD = "USD"
+    EUR = "EUR"
+    GBP = "GBP"
+    CHF = "CHF"
+
+
 
 class BrokerageEventKind(StrEnum):
     BUY = 'BUY'
     SELL = 'SELL'
     SPLIT = "SPLIT"
     DIV = "DIV"
+    ADJUSTMENT = "ADJUSTMENT"
+    CONVERSION = "CONVERSION"
    
     
 class CapitalGainKind(StrEnum):
@@ -365,13 +377,36 @@ class BrokerageEventImportRow(BaseModel):
     kind: BrokerageEventKind
     quantity: Decimal
     price: Decimal
-    currency: Currency
+    currency: InstrumentCurrency
     split_ratio: Decimal = 0
+    # Account/base settlement currency (PLN/USD/EUR) + FX rate
+    # (instrument currency -> settlement currency) from the broker statement.
+    settlement_currency: Optional[Currency] = None
+    fx_rate: Optional[Decimal] = None
 
 
 class BrokerageEventsImportRequest(BaseModel):
     brokerage_account_id: uuid.UUID
     events: List[BrokerageEventImportRow]
+
+
+class BrokerageHistoryImportRow(BaseModel):
+    row_number: int
+    operation_type: str
+    trade_at: datetime
+    currency: Currency
+    amount: Decimal
+    amount_after: Decimal
+    description: str
+    capital_gain_kind: Optional[str] = None
+    instrument_symbol: Optional[str] = None
+    instrument_mic: Optional[str] = None
+    instrument_name: Optional[str] = None
+    event_kind: Optional[BrokerageEventKind] = None
+    quantity: Optional[Decimal] = None
+    price: Optional[Decimal] = None
+    split_ratio: Decimal = Decimal("0")
+    review_reason: Optional[str] = None
 
 
 class RealEstateOut(BaseModel):
@@ -564,4 +599,3 @@ class PriceAlertResponse(BaseModel):
     expires_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime  
-

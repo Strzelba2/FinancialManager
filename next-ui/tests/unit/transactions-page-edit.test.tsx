@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 import { toast } from 'sonner'
 
 import { TransactionsPage } from '@/features/wallet/components/TransactionsPage'
@@ -49,23 +49,12 @@ function pageResponse(items: ReturnType<typeof makeRow>[]) {
   })
 }
 
-const server = setupServer()
-
 describe('TransactionsPage – delete', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     Element.prototype.scrollIntoView = vi.fn()
     server.resetHandlers()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('shows inline confirmation when the delete icon is clicked', async () => {
     await nextUiUnitStory('Wallet transactions delete icon click shows an inline confirmation', {
       severity: 'critical',
@@ -179,20 +168,11 @@ describe('TransactionsPage – delete', () => {
 })
 
 describe('TransactionsPage – loading states', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     Element.prototype.scrollIntoView = vi.fn()
     server.resetHandlers()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('shows empty state message when no transactions match the criteria', async () => {
     await nextUiUnitStory('Wallet transactions page shows empty state when no rows match the criteria', {
       severity: 'critical',
@@ -229,21 +209,12 @@ describe('TransactionsPage – loading states', () => {
 })
 
 describe('TransactionsPage – inline edit', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     // Radix UI Select calls scrollIntoView on the focused item; jsdom doesn't implement it.
     Element.prototype.scrollIntoView = vi.fn()
     server.resetHandlers()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('clicking a category cell opens inline editor and saves on Zapisz', async () => {
     await nextUiUnitStory('Wallet transactions clicking a category cell opens the inline editor and saves', {
       severity: 'critical',
@@ -313,20 +284,11 @@ describe('TransactionsPage – inline edit', () => {
 })
 
 describe('TransactionsPage – search and date filters', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     Element.prototype.scrollIntoView = vi.fn()
     server.resetHandlers()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('typing in the search box appends q param to the fetch URL', async () => {
     await nextUiUnitStory('Wallet transactions typing in the search box appends q param to the fetch URL', {
       severity: 'critical',

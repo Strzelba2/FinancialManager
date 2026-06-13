@@ -5,7 +5,7 @@ from sqlmodel import select, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import Instrument, Market
-from app.schemas.schemas import InstrumentCreate
+from app.schemas.schemas import InstrumentCreate, QuoteSourceInstrumentRow
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +126,10 @@ async def create_instrument(session: AsyncSession, data: InstrumentCreate) -> In
         ValueError: If an instrument with the same symbol or shortname already exists.
     """
     payload = data.model_dump(exclude_none=False)
+    if payload.get("currency") is None:
+        market = await session.get(Market, payload["market_id"])
+        if market is not None:
+            payload["currency"] = market.currency
 
     instrument = Instrument(**payload)
     
@@ -150,6 +154,34 @@ async def create_instrument(session: AsyncSession, data: InstrumentCreate) -> In
         f"symbol={instrument.symbol!r}, isin={instrument.isin!r}"
     )
     return instrument
+
+
+async def list_quote_source_instruments(
+    session: AsyncSession,
+) -> list[QuoteSourceInstrumentRow]:
+    stmt = (
+        select(
+            Instrument.id,
+            Instrument.symbol,
+            Instrument.shortname,
+            Instrument.quote_source,
+            Market.mic,
+        )
+        .join(Market, Market.id == Instrument.market_id)
+        .where(Instrument.quote_source.is_not(None), Instrument.quote_source != "")
+        .order_by(Market.mic.asc(), Instrument.symbol.asc())
+    )
+    result = await session.execute(stmt)
+    return [
+        QuoteSourceInstrumentRow(
+            id=row.id,
+            symbol=row.symbol,
+            shortname=row.shortname,
+            quote_source=row.quote_source,
+            mic=row.mic,
+        )
+        for row in result.all()
+    ]
 
 
 async def list_instruments(
@@ -219,6 +251,7 @@ async def search_instruments_by_shortname_or_name(
         .join(Market, Instrument.market_id == Market.id)
         .where(
             or_(
+                func.upper(Instrument.isin) == q.upper(),
                 Instrument.shortname.ilike(f"%{q}%"),
                 Instrument.name.ilike(f"%{q}%"),
             )

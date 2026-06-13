@@ -147,6 +147,14 @@ def _apply_tx_filters(
     return stmt
 
 
+_SORT_COLUMNS = {
+    "date": lambda: Transaction.date_transaction,
+    "account": lambda: DepositAccount.name,
+    "category": lambda: Transaction.category,
+    "status": lambda: Transaction.status,
+}
+
+
 async def list_transactions_page(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -158,6 +166,8 @@ async def list_transactions_page(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     q: Optional[str] = None,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
 ) -> tuple[list[tuple[Transaction, DepositAccount]], int, int, dict[str, Decimal]]:
     page = max(1, int(page))
     size = min(200, max(1, int(size)))
@@ -182,8 +192,10 @@ async def list_transactions_page(
     count_stmt = select(func.count()).select_from(base.subquery())
     total = int((await session.execute(count_stmt)).scalar_one())
 
+    sort_col = _SORT_COLUMNS.get(sort_by, _SORT_COLUMNS["date"])()
+    order_expr = sort_col.asc() if sort_dir == "asc" else sort_col.desc()
     rows = (
-        (await session.execute(base.order_by(Transaction.date_transaction.desc()).offset(offset).limit(size)))
+        (await session.execute(base.order_by(order_expr, Transaction.id.asc()).offset(offset).limit(size)))
         .all()
     )
 

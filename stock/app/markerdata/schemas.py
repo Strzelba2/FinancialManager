@@ -15,3 +15,14 @@ class IndexRow(BaseModel):
     last_trade_at: Optional[datetime] = None  
     href: Optional[str] = None              
     provider: str
+
+
+class QuoteSourcePage(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    symbol: str
+    source_url: str
+    last_price: Decimal
+    change_pct: Decimal
+    volume: Optional[int] = None
+    last_trade_at: datetime

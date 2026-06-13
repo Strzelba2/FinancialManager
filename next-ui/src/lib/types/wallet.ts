@@ -81,7 +81,7 @@ export type PositionPerformance = {
 export type BrokerageEventItem = {
   date: string        
   sym: string
-  type: string         // BrokerageEventKind: BUY | SELL | DIV | FEE | SPLIT …
+  type: string         // BrokerageEventKind: BUY | SELL | DIV | FEE | SPLIT | ADJUSTMENT …
   qty: string
   price: string
   value: string | null // total value; if null compute as qty × price

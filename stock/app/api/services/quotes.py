@@ -103,6 +103,7 @@ async def get_latest_quote_service(session: AsyncSession, mic: str, symbol: str)
         change_pct=ql.change_pct,
         volume=ql.volume,
         last_trade_at=ql.last_trade_at,
+        currency=getattr(ql.instrument, "currency", None),
     )
 
 
@@ -134,6 +135,7 @@ async def get_latest_bulk_service(session: AsyncSession, mic: str) -> Optional[B
             change_pct=ql.change_pct,
             volume=ql.volume,
             last_trade_at=ql.last_trade_at,
+            currency=getattr(ql.instrument, "currency", None),
         )
         for ql in rows
     }
@@ -177,12 +179,17 @@ async def get_latest_quotes_by_symbols(
                 f"Instrument id={inst.id} symbol={inst.symbol} has no QuoteLatest row"
             )
             continue
+        if inst.currency is None:
+            logger.warning(
+                f"Instrument id={inst.id} symbol={inst.symbol} has no quote currency"
+            )
+            continue
 
         out.append(
             LatestQuoteBySymbol(
                 symbol=inst.symbol,
                 price=ql.last_price,
-                currency=market.currency,
+                currency=inst.currency,
                 change_pct=ql.change_pct
             )
         )

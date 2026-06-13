@@ -20,6 +20,9 @@ const TransactionRowSchema = z.object({
 const CreateSchema = z.object({
   account_id: z.string().uuid(),
   transactions: z.array(TransactionRowSchema).min(1, { message: 'Dodaj co najmniej jedną transakcję' }),
+  // File imports set this so an already-imported row is skipped (idempotent
+  // re-import) instead of failing the whole batch. Manual entry omits it.
+  skip_duplicates: z.boolean().optional(),
 })
 
 export async function POST(req: Request) {
@@ -60,6 +63,8 @@ export async function GET(req: Request) {
     date_from: p.get('date_from') ?? undefined,
     date_to: p.get('date_to') ?? undefined,
     q: p.get('q') ?? undefined,
+    sort_by: p.get('sort_by') ?? undefined,
+    sort_dir: p.get('sort_dir') ?? undefined,
   }
 
   const result = await listTransactions(userId, params)

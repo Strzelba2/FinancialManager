@@ -18,6 +18,7 @@ from django.contrib.auth import login, logout
 
 from .serializers import RegisterSerializer, LoginSerializer, CryptoBatchRequest
 from .throttles import (
+    CryptoBatchThrottle,
     LoginIPThrottle,
     RegisterIPThrottle,
     TwoFactorManagementThrottle,
@@ -918,8 +919,9 @@ class CryptoBatchView(APIView):
     - executes requested crypto operations (AES-GCM or HMAC-SHA256)
     """
 
-    authentication_classes = [] 
-    permission_classes = [IPAllowlistPermission] 
+    authentication_classes = []
+    permission_classes = [IPAllowlistPermission]
+    throttle_classes = [CryptoBatchThrottle]
     serializer_class = CryptoBatchRequest
     renderer_classes = [JSONRenderer]
     

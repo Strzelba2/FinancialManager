@@ -63,6 +63,13 @@ def capture_test_screenshot() -> None:
         _built_in().log(f"Screenshot not available: {exc}", "WARN")
 
 
+@keyword("Reset Next Ui Browser Session")
+def reset_next_ui_browser_session() -> None:
+    _run("Delete All Cookies")
+    _run("LocalStorage Clear")
+    _run("SessionStorage Clear")
+
+
 @keyword("Go To Next Ui Path")
 def go_to_next_ui_path(path: str) -> None:
     base_url = _variable("${BASE_URL}", "http://next.localhost")

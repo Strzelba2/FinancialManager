@@ -19,6 +19,7 @@ export type EventRow = {
   notionalView: number
   notionalFmt: string
   splitRatio: number
+  note: string | null
 }
 
 export type EventsPageResult = {
@@ -28,7 +29,7 @@ export type EventsPageResult = {
   pageNotional: number  
   allNotional: number  
   viewCcy: string
-  fxRates: FxRates
+  fxRates: FxRates | null
 }
 
 export type EventsParams = {
@@ -42,15 +43,6 @@ export type EventsParams = {
   date_to?: string
   q?: string
   view_ccy?: string
-}
-
-const FALLBACK_FX: FxRates = {
-  'USD/PLN': 4,
-  'EUR/PLN': 4.2,
-  'PLN/USD': 0.25,
-  'PLN/EUR': 0.238,
-  'USD/EUR': 0.95,
-  'EUR/USD': 1.05,
 }
 
 function fmtMoney(v: number, ccy: string): string {
@@ -72,6 +64,11 @@ function fmtTradeAt(iso: string): string {
   }
 }
 
+function convertWithRates(amount: number, from: string, to: string, rates: FxRates | null): number {
+  if (from === to || !rates) return amount
+  return convertCurrency(amount, from, to, rates)
+}
+
 export async function fetchEventsPage(params: EventsParams): Promise<EventsPageResult> {
   const viewCcy = params.view_ccy ?? 'PLN'
 
@@ -89,8 +86,6 @@ export async function fetchEventsPage(params: EventsParams): Promise<EventsPageR
     getFxRates(),
   ])
 
-  const fx = fxRates ?? FALLBACK_FX
-
   if (!pageResult.ok) {
     return {
       rows: [],
@@ -99,7 +94,7 @@ export async function fetchEventsPage(params: EventsParams): Promise<EventsPageR
       pageNotional: 0,
       allNotional: 0,
       viewCcy,
-      fxRates: fx,
+      fxRates,
     }
   }
 
@@ -109,8 +104,8 @@ export async function fetchEventsPage(params: EventsParams): Promise<EventsPageR
     const qty = Number(r.quantity)
     const priceNative = Number(r.price)
     const ccy = r.currency
-    const priceView = convertCurrency(priceNative, ccy, viewCcy, fx)
-    const notionalView = convertCurrency(qty * priceNative, ccy, viewCcy, fx)
+    const priceView = convertWithRates(priceNative, ccy, viewCcy, fxRates)
+    const notionalView = convertWithRates(qty * priceNative, ccy, viewCcy, fxRates)
     return {
       id: r.id,
       tradeAt: fmtTradeAt(r.trade_at),
@@ -126,12 +121,13 @@ export async function fetchEventsPage(params: EventsParams): Promise<EventsPageR
       notionalView,
       notionalFmt: fmtMoney(notionalView, viewCcy),
       splitRatio: Number(r.split_ratio),
+      note: r.note ?? null,
     }
   })
 
   const pageNotional = rows.reduce((s, r) => s + r.notionalView, 0)
   const allNotional = Object.entries(pd.sum_by_ccy).reduce((s, [ccy, amt]) => {
-    return s + convertCurrency(Number(amt), ccy, viewCcy, fx)
+    return s + convertWithRates(Number(amt), ccy, viewCcy, fxRates)
   }, 0)
 
   return {
@@ -141,6 +137,6 @@ export async function fetchEventsPage(params: EventsParams): Promise<EventsPageR
     pageNotional,
     allNotional,
     viewCcy,
-    fxRates: fx,
+    fxRates,
   }
 }

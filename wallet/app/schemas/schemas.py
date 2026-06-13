@@ -2,6 +2,7 @@ from sqlmodel import SQLModel, Field
 from pydantic import ConfigDict, BaseModel
 from typing import Optional, Annotated, List
 from datetime import datetime
+from decimal import Decimal
 import uuid
 
 from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateMixin,  BankBase,
@@ -16,7 +17,7 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
-    Q2,  Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt
+    Q2, Q10Opt, Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt
 )
 
 from app.models.enums import (
@@ -66,16 +67,26 @@ class DepositAccountCreate(AccountBase):
     wallet_id: uuid.UUID
     bank_id: uuid.UUID
    
-    
+
+class BrokerageCashAccountCreate(SQLModel):
+    model_config = ConfigDict(from_attributes=False)
+
+    currency: Currency
+    account_number: str
+    name: Optional[str] = None
+    iban: IBANOpt = None
+
+
 class AccountCreation (SQLModel):
     model_config = ConfigDict(from_attributes=False)
-    
+
     name: str
-    account_type: AccountType 
+    account_type: AccountType
     currency: Currency
     account_number: str
     bank_id: uuid.UUID
     iban: IBANOpt = None
+    brokerage_cash_accounts: Optional[List[BrokerageCashAccountCreate]] = None
 
 
 class DepositAccountRead(AccountBase, UUIDMixin, TimestampMixin):
@@ -118,20 +129,30 @@ class BrokerageAccountUpdate(PartialUpdateMixin):
 
 class BrokerageEventCreate(BrokerageEventBase):
     model_config = ConfigDict(from_attributes=False)
-    
+
     brokerage_account_id: uuid.UUID
     instrument_symbol: str
-    instrument_mic: str  
+    instrument_mic: str
 
-    instrument_name: str 
- 
-    
+    instrument_name: str
+    target_instrument_symbol: Optional[str] = None
+    target_instrument_mic: Optional[str] = None
+    target_instrument_name: Optional[str] = None
+    # Cash settlement currency (account/base currency, PLN/USD/EUR) and FX rate
+    # (instrument currency -> settlement currency) for cash effect / capital gain.
+    # When None, the event currency is used (legacy / same-currency behavior).
+    settlement_currency: Optional[Currency] = None
+    fx_rate: Optional[Decimal] = None
+
+
 class BrokerageEventImportRow(BrokerageEventBase):
     model_config = ConfigDict(from_attributes=False)
-    
+
     instrument_symbol: str
     instrument_mic: str
     instrument_name: Optional[str] = None
+    settlement_currency: Optional[Currency] = None
+    fx_rate: Optional[Decimal] = None
 
 
 class BrokerageEventsImportRequest(BaseModel):
@@ -139,12 +160,41 @@ class BrokerageEventsImportRequest(BaseModel):
     brokerage_account_id: uuid.UUID
     events: List[BrokerageEventImportRow]
  
+
+class BrokerageHistoryImportRow(BaseModel):
+    model_config = ConfigDict(from_attributes=False)
+
+    row_number: int
+    operation_type: str
+    trade_at: datetime
+    currency: Currency
+    amount: Q2
+    amount_after: Q2
+    description: str
+    capital_gain_kind: Optional[CapitalGainKind] = None
+    instrument_symbol: Optional[str] = None
+    instrument_mic: Optional[str] = None
+    instrument_name: Optional[str] = None
+    event_kind: Optional[BrokerageEventKind] = None
+    quantity: Optional[Q2] = None
+    price: Optional[Q2] = None
+    split_ratio: Q10Opt = None
+    review_reason: Optional[str] = None
+
+
+class BrokerageHistoryImportRequest(BaseModel):
+    brokerage_account_id: uuid.UUID
+    rows: List[BrokerageHistoryImportRow]
+
+
+class BrokerageCashLinksEnsureRequest(BaseModel):
+    cash_accounts: List[BrokerageCashAccountCreate]
     
 class CapitalGainCreate(CapitalGainBase):
     model_config = ConfigDict(from_attributes=False)
     
     deposit_account_id: uuid.UUID
-    transaction_id: uuid.UUID
+    transaction_id: Optional[uuid.UUID] = None
     
 
 class BrokerageEventRead(BrokerageEventBase, UUIDMixin):
@@ -160,10 +210,11 @@ class BrokerageEventUpdate(PartialUpdateMixin):
     quantity: Optional[Q2] = None
     price: Optional[Q2] = None
     currency: Optional[Currency] = None
-    split_ratio: Optional[Q2] = None
+    split_ratio: Q10Opt = None
+    note: NoneIfEmpty = None
     trade_at: Optional[datetime] = None  
     
-    __update_require_any__ = {"kind", "quantity", "price", "currency", "split_ratio", "trade_at"}
+    __update_require_any__ = {"kind", "quantity", "price", "currency", "split_ratio", "note", "trade_at"}
     
     
 class BrokerageDepositLinkCreate(BrokerageDepositLinkBase):
@@ -265,6 +316,7 @@ class CreateTransactionsRequest(SQLModel):
     model_config = ConfigDict(from_attributes=False)
     account_id: uuid.UUID
     transactions: Annotated[List[TransactionIn], Field(min_length=1)]
+    skip_duplicates: bool = False
     
     
 class TransactionRead(TransactionBase, UUIDMixin, TimestampMixin):

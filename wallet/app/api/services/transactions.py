@@ -335,6 +335,7 @@ async def create_transactions_rebalance_service(
     user_id: uuid.UUID,
     payload: CreateTransactionsRequest,
     verify_amount_after: bool = False,
+    skip_duplicates: bool = False,
 ) -> dict:
     """
     Create a list of transactions and rebalance the balance chain from the first inserted datetime.
@@ -402,6 +403,7 @@ async def create_transactions_rebalance_service(
         baseline_running = Decimal(str(bal.available or 0))
 
     created = 0
+    skipped = 0
     inserted_ids: list[uuid.UUID] = []
     running = baseline_running
 
@@ -436,6 +438,15 @@ async def create_transactions_rebalance_service(
 
         dup = await find_duplicate_transaction(session, tx_data)
         if dup is not None:
+            if skip_duplicates:
+                # Row already exists (idempotent re-import): skip inserting it but
+                # advance the running balance as if applied, so the file's balance
+                # chain still validates for subsequent rows. The final rebalance pass
+                # below recomputes balances over the full DB chain authoritatively.
+                logger.info("create_transactions_rebalance_service: skipping duplicate")
+                skipped += 1
+                running = after
+                continue
             logger.info(f"create_transactions_rebalance_service duplicate detected")
             raise DuplicateTransactionError(
                 f"Duplicate transaction detected for account={acc_id}, date={dt_base}, amount={amount}, description={tx_data.description!r}"
@@ -487,6 +498,7 @@ async def create_transactions_rebalance_service(
 
     return {
         "created": created,
+        "skipped_duplicates": skipped,
         "final_balance": running,
         "account_id": str(acc_id),
         "transaction_ids": [str(tid) for tid in inserted_ids],

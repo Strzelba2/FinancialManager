@@ -38,7 +38,7 @@ async def get_brokerage_deposit_link(
         (BrokerageDepositLink.brokerage_account_id == brokerage_account_id)
         & (BrokerageDepositLink.deposit_account_id == deposit_account_id)
     )
-    return (await session.execute(stmt)).first()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def get_link_by_ba_and_currency(
@@ -50,7 +50,7 @@ async def get_link_by_ba_and_currency(
         (BrokerageDepositLink.brokerage_account_id == brokerage_account_id)
         & (BrokerageDepositLink.currency == currency)
     )
-    return (await session.execute(stmt)).first()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def get_link_with_relations(
@@ -69,7 +69,7 @@ async def get_link_with_relations(
             & (BrokerageDepositLink.deposit_account_id == deposit_account_id)
         )
     )
-    return (await session.execute(stmt)).first()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def list_brokerage_deposit_links(
@@ -78,7 +78,7 @@ async def list_brokerage_deposit_links(
     brokerage_account_ids: Optional[list[uuid.UUID]] = None,
     deposit_account_id: Optional[uuid.UUID] = None,
     currency: Optional[Currency] = None,
-    limit: int = 50,
+    limit: Optional[int] = 50,
     offset: int = 0,
     with_relations: bool = False,
 ) -> List[BrokerageDepositLink]:
@@ -98,7 +98,9 @@ async def list_brokerage_deposit_links(
             selectinload(BrokerageDepositLink.deposit_account),
         )
 
-    stmt = stmt.offset(offset).limit(limit)
+    stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
     result = await session.execute(stmt)
     return result.scalars().all()
 

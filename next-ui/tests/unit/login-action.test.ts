@@ -1,6 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { setupServer } from 'msw/node'
+import { server } from '../msw-server'
 
 import { nextUiUnitStory } from '../allure'
 
@@ -76,13 +76,7 @@ async function loadLoginAction() {
   return (await import('@/features/auth/actions/login')).loginAction
 }
 
-const server = setupServer()
-
 describe('loginAction', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
-  })
-
   beforeEach(() => {
     mocks.cookieSet.mockReset()
     mocks.headerGet.mockReset()
@@ -108,11 +102,6 @@ describe('loginAction', () => {
     vi.unstubAllEnvs()
     vi.resetModules()
   })
-
-  afterAll(() => {
-    server.close()
-  })
-
   it('stores only allowed auth cookies with secure transport settings', async () => {
     await nextUiUnitStory('Login action stores auth cookies with secure flags', {
       severity: 'critical',

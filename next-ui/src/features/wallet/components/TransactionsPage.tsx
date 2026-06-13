@@ -98,26 +98,6 @@ export type TxRow = {
   ccy: string
 }
 
-export function sortRows(rows: TxRow[], field: SortField, dir: SortDir): TxRow[] {
-  return [...rows].sort((a, b) => {
-    let av: string, bv: string
-    switch (field) {
-      case 'date': av = a.dateRaw; bv = b.dateRaw; break
-      case 'account': av = a.accountName; bv = b.accountName; break
-      case 'category':
-        av = CATEGORY_MAP[a.category ?? ''] ?? a.category ?? ''
-        bv = CATEGORY_MAP[b.category ?? ''] ?? b.category ?? ''
-        break
-      case 'status':
-        av = STATUS_MAP[a.status ?? ''] ?? a.status ?? ''
-        bv = STATUS_MAP[b.status ?? ''] ?? b.status ?? ''
-        break
-    }
-    const cmp = av.localeCompare(bv, 'pl')
-    return dir === 'asc' ? cmp : -cmp
-  })
-}
-
 function SortIcon({ field, current, dir }: { field: SortField; current: SortField | null; dir: SortDir }) {
   if (field !== current) return <Minus className="w-3 h-3 text-white/20" />
   return dir === 'asc'
@@ -335,10 +315,7 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
   const allCategoryKeys = Object.keys(CATEGORY_MAP) as string[]
   const allStatusKeys = Object.keys(STATUS_MAP) as string[]
 
-  const sortedRows = useMemo(() => {
-    if (!sortField) return rows
-    return sortRows(rows, sortField, sortDir)
-  }, [rows, sortField, sortDir])
+  const sortedRows = rows
 
   function handleSort(field: SortField) {
     if (sortField === field) {
@@ -347,6 +324,7 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
       setSortField(field)
       setSortDir('asc')
     }
+    setPage(1)
   }
 
   const load = useCallback(async () => {
@@ -362,6 +340,8 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
     if (selectedCategories.length) selectedCategories.forEach((c) => qs.append('category', c))
     if (selectedStatuses.length) selectedStatuses.forEach((s) => qs.append('status', s))
     if (q.trim()) qs.set('q', q.trim())
+    if (sortField) qs.set('sort_by', sortField)
+    if (sortField) qs.set('sort_dir', sortDir)
 
     const dates = dateRange === 'CUSTOM'
       ? { from: customFrom ? customFrom.slice(0, 10) : undefined, to: customTo ? customTo.slice(0, 10) : undefined }
@@ -393,7 +373,7 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
       }
     }
     setPageSumByCcy(ps)
-  }, [page, size, selectedAccountIds, selectedCategories, selectedStatuses, dateRange, customFrom, customTo, q])
+  }, [page, size, selectedAccountIds, selectedCategories, selectedStatuses, dateRange, customFrom, customTo, q, sortField, sortDir])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

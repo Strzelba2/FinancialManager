@@ -21,10 +21,10 @@ from app.crud.transaction_crud import (
     create_transaction_uow,
     delete_transaction_for_user_rebalance,
 )
-from app.models.enums import AccountType, CapitalGainKind
+from app.models.enums import AccountType, CapitalGainKind, Currency
 from app.models.models import DepositAccount, Transaction, Wallet
 from app.schemas.response import BatchUpdateTransactionsRequest, TransactionPatchIn
-from app.schemas.schemas import CreateTransactionsRequest, TransactionCreate, TransactionIn
+from app.schemas.schemas import CapitalGainCreate, CreateTransactionsRequest, TransactionCreate, TransactionIn
 
 pytestmark = pytest.mark.unit
 
@@ -91,6 +91,18 @@ class TransactionInputTests(unittest.TestCase):
                         id="11111111-1111-4111-8111-111111111111",
                         **{field: "-1.00"},
                     )
+
+    def test_capital_gain_create_allows_missing_transaction_for_brokerage_import(self) -> None:
+        gain = CapitalGainCreate(
+            kind=CapitalGainKind.BROKER_REALIZED_PNL,
+            amount=Decimal("123.45"),
+            currency=Currency.PLN,
+            occurred_at=datetime(2026, 6, 3, 10, 0, tzinfo=timezone.utc),
+            deposit_account_id=uuid4(),
+            transaction_id=None,
+        )
+
+        self.assertIsNone(gain.transaction_id)
 
     def test_import_order_keeps_ascending_rows_as_is(self) -> None:
         first = _tx_row(datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc), description="first")
