@@ -45,6 +45,7 @@ type EditableGoalRow = {
   currency: 'PLN' | 'USD' | 'EUR'
   rev_target_year: string
   exp_budget_year: string
+  capital_gain_target_year: string
 }
 
 const CURRENCIES = ['PLN', 'USD', 'EUR'] as const
@@ -79,6 +80,7 @@ function AddGoalForm({
   const [currency, setCurrency] = useState<'PLN' | 'USD' | 'EUR'>('PLN')
   const [revTarget, setRevTarget] = useState('')
   const [expBudget, setExpBudget] = useState('')
+  const [capTarget, setCapTarget] = useState('')
   const [error, setError] = useState<string>()
 
   function submit(e: React.SyntheticEvent<HTMLFormElement>) {
@@ -88,8 +90,10 @@ function AddGoalForm({
     if (!expBudget.trim()) { setError('Podaj budżet wydatków'); return }
     const rev = parseFloat(revTarget.replace(',', '.'))
     const exp = parseFloat(expBudget.replace(',', '.'))
+    const cap = capTarget.trim() ? parseFloat(capTarget.replace(',', '.')) : 0
     if (!Number.isFinite(rev) || rev <= 0) { setError('Cel przychodów musi być liczbą > 0'); return }
     if (!Number.isFinite(exp) || exp <= 0) { setError('Budżet wydatków musi być liczbą > 0'); return }
+    if (!Number.isFinite(cap) || cap < 0) { setError('Cel zysku kapitałowego musi być liczbą ≥ 0'); return }
     setError(undefined)
 
     startTransition(async () => {
@@ -98,6 +102,7 @@ function AddGoalForm({
         year,
         rev_target_year: rev.toFixed(2),
         exp_budget_year: exp.toFixed(2),
+        capital_gain_target_year: cap.toFixed(2),
         currency,
       })
       if (!ok) { setError(err || 'Nie udało się zapisać celu'); return }
@@ -155,7 +160,7 @@ function AddGoalForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         <div className="space-y-1">
           <Label className="text-white/70 text-xs">Cel przychodów *</Label>
           <Input
@@ -172,6 +177,16 @@ function AddGoalForm({
             value={expBudget}
             onChange={(e) => setExpBudget(e.target.value)}
             placeholder="np. 80000"
+            inputMode="decimal"
+            className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-white/70 text-xs">Cel zysku kap.</Label>
+          <Input
+            value={capTarget}
+            onChange={(e) => setCapTarget(e.target.value)}
+            placeholder="np. 24000"
             inputMode="decimal"
             className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
           />
@@ -215,6 +230,7 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
           currency: g.currency,
           rev_target_year: g.rev_target_year,
           exp_budget_year: g.exp_budget_year,
+          capital_gain_target_year: g.capital_gain_target_year ?? '0.00',
         })),
     [initialGoals, walletNameById],
   )
@@ -246,14 +262,19 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
     refresh()
   }
 
-  function updateRow(id: string, patch: Partial<Pick<EditableGoalRow, 'rev_target_year' | 'exp_budget_year'>>) {
+  function updateRow(
+    id: string,
+    patch: Partial<Pick<EditableGoalRow, 'rev_target_year' | 'exp_budget_year' | 'capital_gain_target_year'>>,
+  ) {
     setRows((cur) => cur.map((r) => r.id === id ? { ...r, ...patch } : r))
   }
 
   function isRowDirty(row: EditableGoalRow): boolean {
     const orig = originalById[row.id]
     if (!orig) return false
-    return row.rev_target_year !== orig.rev_target_year || row.exp_budget_year !== orig.exp_budget_year
+    return row.rev_target_year !== orig.rev_target_year
+      || row.exp_budget_year !== orig.exp_budget_year
+      || row.capital_gain_target_year !== (orig.capital_gain_target_year ?? '0.00')
   }
 
   function handleSave(id: string) {
@@ -261,8 +282,10 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
     if (!row) return
     const rev = parseFloat(row.rev_target_year.replace(',', '.'))
     const exp = parseFloat(row.exp_budget_year.replace(',', '.'))
+    const cap = parseFloat(row.capital_gain_target_year.replace(',', '.'))
     if (!Number.isFinite(rev) || rev <= 0) { setRowError({ id, msg: 'Cel przychodów musi być > 0' }); return }
     if (!Number.isFinite(exp) || exp <= 0) { setRowError({ id, msg: 'Budżet wydatków musi być > 0' }); return }
+    if (!Number.isFinite(cap) || cap < 0) { setRowError({ id, msg: 'Cel zysku kapitałowego musi być ≥ 0' }); return }
     setRowError(null)
 
     startTransition(async () => {
@@ -272,6 +295,7 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
         currency: row.currency,
         rev_target_year: rev.toFixed(2),
         exp_budget_year: exp.toFixed(2),
+        capital_gain_target_year: cap.toFixed(2),
       })
       if (!ok) { setRowError({ id, msg: error || 'Nie udało się zaktualizować celu' }); return }
       toast.success('Cel zaktualizowany')
@@ -293,7 +317,7 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-slate-900/95 backdrop-blur-md border-white/10 text-white sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-slate-900/95 backdrop-blur-md border-white/10 text-white sm:max-w-4xl max-h-[85vh] overflow-y-auto">
         {view.mode === 'add' ? (
           <AddGoalForm
             wallets={wallets}
@@ -310,7 +334,7 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
                 <div>
                   <DialogTitle className="text-white text-lg">Cele roczne</DialogTitle>
                   <DialogDescription className="text-white/50 text-sm">
-                    Zarządzaj celami przychodów i budżetami wydatków
+                    Zarządzaj celami przychodów, budżetami wydatków i zyskiem kapitałowym
                     {viewCurrency ? ` · widok: ${viewCurrency}` : ''}
                   </DialogDescription>
                 </div>
@@ -341,8 +365,8 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
                   Brak celów. Kliknij &quot;Dodaj&quot; aby ustawić cel.
                 </p>
               ) : (
-                <div className="bg-slate-800/40 border border-white/10 rounded-xl overflow-hidden">
-                  <table className="w-full text-sm">
+                <div className="bg-slate-800/40 border border-white/10 rounded-xl overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-sm">
                     <thead>
                       <tr className="border-b border-white/10">
                         <th className="text-left px-3 py-2 text-xs text-white/40 font-medium">Portfel</th>
@@ -350,6 +374,7 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
                         <th className="text-center px-2 py-2 text-xs text-white/40 font-medium">Waluta</th>
                         <th className="text-right px-2 py-2 text-xs text-white/40 font-medium">Cel przychodu</th>
                         <th className="text-right px-2 py-2 text-xs text-white/40 font-medium">Budżet wydatków</th>
+                        <th className="text-right px-2 py-2 text-xs text-white/40 font-medium">Cel zysku kap.</th>
                         <th className="w-20" />
                       </tr>
                     </thead>
@@ -393,6 +418,14 @@ export function GoalsDialog({ open, onOpenChange, initialGoals, wallets, viewCur
                               <Input
                                 value={row.exp_budget_year}
                                 onChange={(e) => updateRow(row.id, { exp_budget_year: e.target.value })}
+                                inputMode="decimal"
+                                className="bg-transparent border-transparent h-7 px-1 text-sm text-white text-right focus-visible:border-white/20 focus-visible:bg-slate-700/50 max-w-[110px] ml-auto"
+                              />
+                            </td>
+                            <td className="px-2 py-1.5 align-middle">
+                              <Input
+                                value={row.capital_gain_target_year}
+                                onChange={(e) => updateRow(row.id, { capital_gain_target_year: e.target.value })}
                                 inputMode="decimal"
                                 className="bg-transparent border-transparent h-7 px-1 text-sm text-white text-right focus-visible:border-white/20 focus-visible:bg-slate-700/50 max-w-[110px] ml-auto"
                               />

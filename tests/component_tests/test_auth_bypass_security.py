@@ -23,14 +23,13 @@ BROWSER_USER_AGENT = (
 
 def _create_active_user(session_url: str) -> dict[str, str]:
     suffix = uuid4().hex[:8]
-    ip_tail = int(suffix[:2], 16)
     user = {
         "first_name": "Component",
         "last_name": "Tester",
         "username": f"auth{suffix}"[:12],
         "email": f"auth.{suffix}@example.com",
         "password": PASSWORD,
-        "client_ip": f"10.220.{ip_tail}.10",
+        "client_ip": f"10.220.{int(suffix[:2], 16)}.{(int(suffix[2:4], 16) % 253) + 1}",
     }
 
     response = httpx.post(

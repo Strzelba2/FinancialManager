@@ -164,6 +164,6 @@ export function computeDashFlowProfit(data: DashFlowData): number[] {
     const e = data.exp[i] ?? 0
     const t = data.tax[i] ?? 0
     const c = data.cap[i] ?? 0
-    return inc - Math.abs(e) - Math.abs(t) + c
+    return inc + c - Math.abs(e) - Math.abs(t)
   })
 }

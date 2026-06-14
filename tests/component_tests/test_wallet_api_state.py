@@ -409,6 +409,118 @@ class TestWalletApiPersistedState:
 @pytest.mark.db
 @allure.epic("System Tests")
 @allure.feature("Component")
+@allure.story("Wallet goals API persists annual money targets and enforces ownership")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("wallet", "goals", "money", "financial-data", "api-contract", "ownership")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Exercises public wallet goal endpoints against the test database. "
+    "Covers capital gain target persistence, update semantics, validation, and cross-user denial."
+)
+class TestWalletGoalsApi:
+    @staticmethod
+    def _payload(wallet_id: str, capital_gain_target_year: str = "60000.00") -> dict[str, object]:
+        return {
+            "wallet_id": wallet_id,
+            "year": 2026,
+            "rev_target_year": "200000.00",
+            "exp_budget_year": "90000.00",
+            "capital_gain_target_year": capital_gain_target_year,
+            "currency": "PLN",
+        }
+
+    def test_upsert_persists_capital_gain_target_and_list_returns_it(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account("goal", opening_balance="0.00", currency="PLN")
+        headers = _auth_headers(fixture["user_id"])
+
+        create_response = httpx.post(
+            f"{wallet_url}/wallet/goals/upsert",
+            headers=headers,
+            json=self._payload(fixture["wallet_id"]),
+            timeout=10.0,
+        )
+
+        assert create_response.status_code == 200, create_response.text
+        created = create_response.json()
+        assert Decimal(str(created["rev_target_year"])) == Decimal("200000.00")
+        assert Decimal(str(created["exp_budget_year"])) == Decimal("90000.00")
+        assert Decimal(str(created["capital_gain_target_year"])) == Decimal("60000.00")
+
+        update_payload = self._payload(fixture["wallet_id"], capital_gain_target_year="75000.00")
+        update_payload["rev_target_year"] = "210000.00"
+        update_response = httpx.post(
+            f"{wallet_url}/wallet/goals/upsert",
+            headers=headers,
+            json=update_payload,
+            timeout=10.0,
+        )
+
+        assert update_response.status_code == 200, update_response.text
+        updated = update_response.json()
+        assert updated["id"] == created["id"]
+        assert Decimal(str(updated["rev_target_year"])) == Decimal("210000.00")
+        assert Decimal(str(updated["capital_gain_target_year"])) == Decimal("75000.00")
+
+        list_response = httpx.get(
+            f"{wallet_url}/wallet/{fixture['wallet_id']}/goals/all",
+            headers=headers,
+            timeout=10.0,
+        )
+
+        assert list_response.status_code == 200, list_response.text
+        goals = list_response.json()
+        assert len(goals) == 1
+        assert goals[0]["id"] == created["id"]
+        assert Decimal(str(goals[0]["capital_gain_target_year"])) == Decimal("75000.00")
+
+    def test_negative_capital_gain_target_is_rejected_without_persisting(self, wallet_url: str) -> None:
+        fixture = _seed_wallet_account("goalneg", opening_balance="0.00", currency="PLN")
+        headers = _auth_headers(fixture["user_id"])
+
+        rejected = httpx.post(
+            f"{wallet_url}/wallet/goals/upsert",
+            headers=headers,
+            json=self._payload(fixture["wallet_id"], capital_gain_target_year="-1.00"),
+            timeout=10.0,
+        )
+
+        assert rejected.status_code == 422, rejected.text
+
+        list_response = httpx.get(
+            f"{wallet_url}/wallet/{fixture['wallet_id']}/goals/all",
+            headers=headers,
+            timeout=10.0,
+        )
+
+        assert list_response.status_code == 200, list_response.text
+        assert list_response.json() == []
+
+    def test_cross_user_goal_reads_and_writes_are_denied(self, wallet_url: str) -> None:
+        owner = _seed_wallet_account("goalown", opening_balance="0.00", currency="PLN")
+        other = _seed_wallet_account("goaloth", opening_balance="0.00", currency="PLN")
+
+        denied_list = httpx.get(
+            f"{wallet_url}/wallet/{owner['wallet_id']}/goals/all",
+            headers=_auth_headers(other["user_id"]),
+            timeout=10.0,
+        )
+        denied_upsert = httpx.post(
+            f"{wallet_url}/wallet/goals/upsert",
+            headers=_auth_headers(other["user_id"]),
+            json=self._payload(owner["wallet_id"]),
+            timeout=10.0,
+        )
+
+        assert denied_list.status_code == 404
+        assert "Wallet not found" in denied_list.text
+        assert denied_upsert.status_code == 404
+        assert "Wallet not found" in denied_upsert.text
+
+
+@pytest.mark.component
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Component")
 @allure.story("Wallet favorites API persists lists and prevents duplicate names")
 @allure.severity(allure.severity_level.CRITICAL)
 @allure.tag("wallet", "favorites", "api-contract", "database")

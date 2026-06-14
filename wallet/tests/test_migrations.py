@@ -26,6 +26,11 @@ def _brokerage_conversion_migration_source() -> str:
     return migration.read_text(encoding="utf-8")
 
 
+def _year_goal_capital_target_migration_source() -> str:
+    migration = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "4f2b8c1d9a0e_add_capital_gain_target_to_year_goals.py"
+    return migration.read_text(encoding="utf-8")
+
+
 def _upgrade_execute_statements(source: str) -> list[str]:
     module = ast.parse(source)
     upgrade = next(
@@ -83,3 +88,11 @@ class WalletMigrationTests(unittest.TestCase):
         self.assertIn('sa.Column("target_instrument_id", pg.UUID(as_uuid=True), nullable=True)', source)
         self.assertIn('"fk_brokerage_events_target_instrument_id"', source)
         self.assertIn('ondelete="SET NULL"', source)
+
+    def test_year_goal_migration_adds_capital_gain_target_with_default(self) -> None:
+        source = _year_goal_capital_target_migration_source()
+
+        self.assertIn('"capital_gain_target_year"', source)
+        self.assertIn("sa.Numeric(precision=20, scale=2)", source)
+        self.assertIn('server_default=sa.text("0.00")', source)
+        self.assertIn("nullable=False", source)

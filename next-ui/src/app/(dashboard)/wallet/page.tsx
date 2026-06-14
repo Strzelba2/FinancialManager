@@ -26,6 +26,7 @@ import { AssetsLineCard } from '@/features/wallet/components/AssetsLineCard'
 import type { AssetsChartData } from '@/features/wallet/components/AssetsLineCard'
 import { DashFlowCard } from '@/features/wallet/components/DashFlowCard'
 import type { DashFlowData } from '@/features/wallet/components/DashFlowCard'
+import { MarketDataNotice } from '@/features/wallet/components/MarketDataNotice'
 import { NoWalletState } from '@/features/wallet/components/NoWalletState'
 import { NoAccountState } from '@/features/wallet/components/NoAccountState'
 import { WalletToolbar } from '@/features/wallet/components/WalletToolbar'
@@ -43,6 +44,7 @@ import type {
   TransactionBrokerageAccountOpt,
 } from '@/features/wallet/components/TransactionsDialog'
 import { logger } from '@/lib/logger'
+import { getStockServiceStatus } from '@/lib/api/stock'
 import {
   convertDecimalCurrency as conv,
   dec,
@@ -206,7 +208,7 @@ function computeCapitalGainsSeries(wallets: WalletListItem[], ccy: Currency, rat
     .sort((a, b) => b.value - a.value)
 }
 
-function computeGoalsProgress(
+export function computeGoalsProgress(
   allGoals: YearGoalOut[],
   selectedWallets: WalletListItem[],
   currentYear: number,
@@ -221,9 +223,11 @@ function computeGoalsProgress(
 
   let revTarget = new Decimal(0)
   let expBudget = new Decimal(0)
+  let capTarget = new Decimal(0)
   for (const goal of currentGoals) {
     revTarget = revTarget.plus(conv(dec(goal.rev_target_year), goal.currency, ccy, rates))
     expBudget = expBudget.plus(conv(dec(goal.exp_budget_year), goal.currency, ccy, rates))
+    capTarget = capTarget.plus(conv(dec(goal.capital_gain_target_year ?? '0'), goal.currency, ccy, rates))
   }
 
   let revActual = new Decimal(0)
@@ -238,8 +242,10 @@ function computeGoalsProgress(
   return {
     revActual: revActual.toNumber(),
     revTarget: revTarget.mul(monthFraction).toNumber(),
-    expActual: expActual.toNumber(),
+    expActual: expActual.abs().toNumber(),
     expBudget: expBudget.mul(monthFraction).toNumber(),
+    capActual: computeCapitalGains(selectedWallets, ccy, rates).toNumber(),
+    capTarget: capTarget.mul(monthFraction).toNumber(),
     currency: ccy,
   }
 }
@@ -444,7 +450,7 @@ export function computeDashFlowData(wallets: WalletListItem[], ccy: Currency, ra
         capView = capView.plus(conv(dec(a), c, ccy, rates))
     }
 
-    inc.push(incomeView.minus(capView).toNumber())
+    inc.push(incomeView.toNumber())
     exp.push(expenseView.toNumber())
     tax.push(taxView.toNumber())
     cap.push(capView.toNumber())
@@ -464,10 +470,11 @@ export default async function WalletPage({
   const email = headerStore.get('x-email') ?? ''
   const existingUserId = headerStore.get('x-user-id') ?? ''
 
-  const [data, params, rates] = await Promise.all([
+  const [data, params, rates, stockStatus] = await Promise.all([
     syncUser({ username, first_name, email }),
     searchParams,
     getFxRates(),
+    getStockServiceStatus(),
   ])
 
   const currentYear = new Date().getFullYear()
@@ -566,6 +573,8 @@ export default async function WalletPage({
 
   const assetsChartData = computeAssetsChartData(data.assets_8m_total ?? null, data.cpi_8m ?? null, 'PLN')
   const dashFlowData = computeDashFlowData(selected, viewCurrency, rates)
+  const hasBrokerageExposure = selected.some((wallet) => wallet.brokerage_accounts.length > 0)
+  const showMarketDataNotice = hasBrokerageExposure && !stockStatus.available
 
   const cash = computeCash(selected, viewCurrency, rates)
   const brokerage = computeBrokerage(selected, viewCurrency, rates)
@@ -718,6 +727,10 @@ export default async function WalletPage({
       <div className="max-w-screen-2xl mx-auto">
 
         <WalletToolbar walletNames={walletNames} currencies={['PLN', 'USD', 'EUR']} />
+
+        {showMarketDataNotice && (
+          <MarketDataNotice scope="dashboard" />
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
 

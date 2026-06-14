@@ -16,6 +16,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.clients.gpw_client import GpwListingsClient
+from app.crud.quote_latest import get_latest_trade_date_by_symbol, trade_date_in_market_timezone
 from app.markerdata.config import MarketConfig, TableLayout
 from app.markerdata.historical_browser import (
     build_history_page_url,
@@ -125,6 +126,70 @@ class MarketDataParserTests(unittest.TestCase):
         self.assertEqual(rows[0].close, Decimal("10.50"))
         self.assertEqual(rows[0].volume, None)
         self.assertEqual(rows[1].volume, 1000)
+
+
+@allure.epic("Unit Tests")
+@allure.feature("Stock Market Data")
+@allure.story("Latest quote trade dates use the market calendar for candle sync")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("market-data", "quotes", "stock")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+class QuoteLatestTradeDateTests(unittest.TestCase):
+    def test_trade_date_uses_market_timezone_for_date_only_quotes(self) -> None:
+        trade_at = datetime(2026, 6, 11, 22, 0, tzinfo=timezone.utc)
+
+        result = trade_date_in_market_timezone(trade_at, "Europe/Warsaw")
+
+        self.assertEqual(result, date(2026, 6, 12))
+
+    def test_trade_date_falls_back_to_utc_for_invalid_market_timezone(self) -> None:
+        trade_at = datetime(2026, 6, 11, 22, 0, tzinfo=timezone.utc)
+
+        result = trade_date_in_market_timezone(trade_at, "Not/AZone")
+
+        self.assertEqual(result, date(2026, 6, 11))
+
+    def test_trade_date_treats_naive_timestamps_and_blank_timezone_as_utc(self) -> None:
+        trade_at = datetime(2026, 6, 12, 0, 15)
+
+        result = trade_date_in_market_timezone(trade_at, "  ")
+
+        self.assertEqual(result, date(2026, 6, 12))
+
+
+@allure.epic("Unit Tests")
+@allure.feature("Stock Market Data")
+@allure.story("Latest quote lookup resolves market-local trade dates for candle sync")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("market-data", "quotes", "stock")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+class QuoteLatestCrudTests(unittest.IsolatedAsyncioTestCase):
+    async def test_latest_trade_date_by_symbol_returns_none_without_quote_row(self) -> None:
+        session = SimpleNamespace(
+            execute=AsyncMock(return_value=SimpleNamespace(one_or_none=lambda: None)),
+        )
+
+        result = await get_latest_trade_date_by_symbol(session, "PKN")
+
+        self.assertIsNone(result)
+        session.execute.assert_awaited_once()
+
+    async def test_latest_trade_date_by_symbol_uses_joined_market_timezone(self) -> None:
+        session = SimpleNamespace(
+            execute=AsyncMock(
+                return_value=SimpleNamespace(
+                    one_or_none=lambda: (
+                        datetime(2026, 6, 11, 22, 0, tzinfo=timezone.utc),
+                        "Europe/Warsaw",
+                    ),
+                ),
+            ),
+        )
+
+        result = await get_latest_trade_date_by_symbol(session, "PKN")
+
+        self.assertEqual(result, date(2026, 6, 12))
+        session.execute.assert_awaited_once()
 
 
 @allure.epic("Unit Tests")

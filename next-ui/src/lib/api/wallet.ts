@@ -748,6 +748,7 @@ export async function upsertWalletGoal(
     year: number
     rev_target_year: string
     exp_budget_year: string
+    capital_gain_target_year: string
     currency: string
   },
 ): Promise<ApiResult<YearGoalOut>> {

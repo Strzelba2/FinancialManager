@@ -344,6 +344,46 @@ describe('wallet API client', () => {
     await expect(requests[1]?.json()).resolves.toEqual(cashPayload)
   })
 
+  it('upserts annual goals with a separate capital gain target', async () => {
+    await nextUiUnitStory('Wallet API client sends annual capital gain targets separately from income goals', {
+      severity: 'critical',
+      tags: ['wallet', 'goals', 'api-client', 'financial-data'],
+    })
+    const payload = {
+      wallet_id: '11111111-1111-4111-8111-111111111111',
+      year: 2026,
+      rev_target_year: '200000.00',
+      exp_budget_year: '90000.00',
+      capital_gain_target_year: '60000.00',
+      currency: 'PLN',
+    }
+    const responsePayload = {
+      id: 'goal-1',
+      ...payload,
+      created_at: '2026-06-13T08:00:00Z',
+      updated_at: '2026-06-13T08:00:00Z',
+    }
+    const requests: Request[] = []
+    server.use(http.post('http://wallet:8001/wallet/goals/upsert', async ({ request }) => {
+      requests.push(request.clone())
+      return HttpResponse.json(responsePayload)
+    }))
+    process.env.WALLET_API_URL = 'http://wallet:8001'
+    const { upsertWalletGoal } = await import('@/lib/api/wallet')
+
+    await expect(upsertWalletGoal('user-1', payload)).resolves.toEqual({
+      ok: true,
+      data: responsePayload,
+      status: 200,
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.method).toBe('POST')
+    expect(requests[0]?.headers.get('Content-Type')).toBe('application/json')
+    expect(requests[0]?.headers.get('X-User-Id')).toBe('user-1')
+    await expect(requests[0]?.json()).resolves.toEqual(payload)
+  })
+
   it('returns safe defaults when wallet service is unavailable', async () => {
     await nextUiUnitStory('Wallet API client returns safe defaults on service outage', {
       severity: 'critical',
@@ -492,6 +532,36 @@ describe('stock API client', () => {
     expect(result.ok).toBe(true)
     expect(urls).toHaveLength(1)
     expect(new URL(urls[0]!).searchParams.get('only_with_instruments')).toBe('true')
+  })
+
+  it('reports stock service health from the health endpoint', async () => {
+    await nextUiUnitStory('Stock API client exposes stock service health for quote outage notices', {
+      severity: 'critical',
+      tags: ['stock', 'health', 'api-client', 'error-state'],
+    })
+    const urls: string[] = []
+    server.use(http.get('http://stock:8001/healthz', ({ request }) => {
+      urls.push(request.url)
+      return HttpResponse.json({ ok: true })
+    }))
+    process.env.STOCK_API_URL = 'http://stock:8001'
+    const { getStockServiceStatus } = await import('@/lib/api/stock')
+
+    await expect(getStockServiceStatus()).resolves.toEqual({ available: true })
+
+    expect(urls).toEqual(['http://stock:8001/healthz'])
+  })
+
+  it('marks stock service unavailable when the health check cannot be reached', async () => {
+    await nextUiUnitStory('Stock API client marks quote service unavailable on health-check failure', {
+      severity: 'critical',
+      tags: ['stock', 'health', 'api-client', 'error-state'],
+    })
+    server.use(http.get('http://stock:8001/healthz', () => HttpResponse.error()))
+    process.env.STOCK_API_URL = 'http://stock:8001'
+    const { getStockServiceStatus } = await import('@/lib/api/stock')
+
+    await expect(getStockServiceStatus()).resolves.toEqual({ available: false })
   })
 
   it('returns empty quote maps on stock API failures', async () => {

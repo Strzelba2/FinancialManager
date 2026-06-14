@@ -57,6 +57,7 @@ async def create_year_goal(session: AsyncSession, payload: YearGoalCreate) -> Ye
     obj = YearGoal(**payload.model_dump())
     session.add(obj)
     await session.flush()
+    await session.refresh(obj)
     return obj
 
 
@@ -64,7 +65,8 @@ async def upsert_year_goal(session: AsyncSession, payload: YearGoalCreate) -> Ye
     """
     Upsert (insert or update) a year goal by (wallet_id, year).
 
-    If goal exists -> updates rev_target_year, exp_budget_year, currency.
+    If goal exists -> updates rev_target_year, exp_budget_year,
+    capital_gain_target_year, currency.
     If missing -> creates a new row.
 
     Args:
@@ -80,9 +82,11 @@ async def upsert_year_goal(session: AsyncSession, payload: YearGoalCreate) -> Ye
 
     obj.rev_target_year = payload.rev_target_year
     obj.exp_budget_year = payload.exp_budget_year
+    obj.capital_gain_target_year = payload.capital_gain_target_year
     obj.currency = payload.currency
     session.add(obj)
     await session.flush()
+    await session.refresh(obj)
     return obj
 
 
@@ -108,6 +112,7 @@ async def update_year_goal(session: AsyncSession, goal_id: uuid.UUID, patch: Yea
 
     session.add(obj)
     await session.flush()
+    await session.refresh(obj)
     return obj
 
 

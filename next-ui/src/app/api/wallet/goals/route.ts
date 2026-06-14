@@ -8,6 +8,7 @@ const Schema = z.object({
   year: z.number().int().min(2000).max(2100),
   rev_target_year: z.string().min(1, { message: 'Podaj cel przychodów' }).trim(),
   exp_budget_year: z.string().min(1, { message: 'Podaj budżet wydatków' }).trim(),
+  capital_gain_target_year: z.string().min(1, { message: 'Podaj cel zysku kapitałowego' }).trim().default('0.00'),
   currency: z.enum(['PLN', 'USD', 'EUR']),
 })
 

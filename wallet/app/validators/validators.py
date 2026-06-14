@@ -119,6 +119,12 @@ def require_nonnegative_opt(v: Optional[Decimal]) -> Optional[Decimal]:
     return v
 
 
+def require_nonnegative(v: Decimal) -> Decimal:
+    if v < 0:
+        raise ValueError("must be ≥ 0")
+    return v
+
+
 def require_iso2_opt(v: Optional[str]) -> Optional[str]:
     if v is None:
         return None
@@ -168,6 +174,7 @@ BytesNonEmpty = Annotated[bytes, AfterValidator(require_bytes_nonempty)]
 BytesLen32 = Annotated[bytes, AfterValidator(require_bytes_len_32)]
 
 Q2 = Annotated[Decimal, AfterValidator(q2)]
+Q2NonNeg = Annotated[Decimal, AfterValidator(require_nonnegative), AfterValidator(q2)]
 Q2OptNonNeg = Annotated[Optional[Decimal], AfterValidator(require_nonnegative_opt), AfterValidator(q2)]
 Q6Pos = Annotated[Decimal, AfterValidator(q6), AfterValidator(require_positive)]
 Q10 = Annotated[Decimal, AfterValidator(q10)]

@@ -17,7 +17,7 @@ from .enums import (
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, 
     Shortname, BICOpt, NonEmptyStr,
-    BytesLen32, Q2, Q10, Q6Pos, AreaQ2OptPos,
+    BytesLen32, Q2, Q2NonNeg, Q10, Q6Pos, AreaQ2OptPos,
     CountryISO2Opt, CityOpt, NoneIfEmpty,
     MICCode, Symbol12
 )
@@ -416,8 +416,16 @@ class UserNoteBase(SQLModel):
 class YearGoalBase(SQLModel):
     year: int = Field(sa_column=sa.Column(sa.Integer, nullable=False, index=True))
 
-    rev_target_year: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
-    exp_budget_year: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
+    rev_target_year: Q2NonNeg = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
+    exp_budget_year: Q2NonNeg = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False))
+    capital_gain_target_year: Q2NonNeg = Field(
+        default=Decimal("0.00"),
+        sa_column=sa.Column(
+            sa.Numeric(20, 2),
+            nullable=False,
+            server_default=sa.text("0.00"),
+        ),
+    )
 
     currency: Currency = Field(
         sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False)

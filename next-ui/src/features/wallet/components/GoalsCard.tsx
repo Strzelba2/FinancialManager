@@ -8,6 +8,8 @@ export type GoalsProgressData = {
   revTarget: number   // pro-rated annual revenue target (× month fraction) in view ccy
   expActual: number   // actual YTD expenses in view ccy
   expBudget: number   // pro-rated annual expense budget (× month fraction) in view ccy
+  capActual: number   // actual YTD capital gains in view ccy
+  capTarget: number   // pro-rated annual capital gain target (× month fraction) in view ccy
   currency: string
 }
 
@@ -19,13 +21,15 @@ type Props = {
 type TooltipParam = {
   axisValue?: string | number
   seriesName?: string
-  value?: number
+  value?: number | null
 }
 
 function fmtShort(v: number): string {
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${Math.round(v / 1_000)}k`
-  return Math.round(v).toFixed(0)
+  const abs = Math.abs(v)
+  const sign = v < 0 ? '-' : ''
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(1)}M`
+  if (abs >= 1_000) return `${sign}${Math.round(abs / 1_000)}k`
+  return `${sign}${Math.round(abs).toFixed(0)}`
 }
 
 function CardShell({
@@ -82,21 +86,32 @@ export function GoalsCard({ data, href }: Props) {
 
   const revColor = data.revActual >= data.revTarget ? '#22c55e' : '#f59e0b'
   const expColor = data.expActual <= data.expBudget ? '#22c55e' : '#ef4444'
+  const capColor = data.capActual < 0 ? '#ef4444' : data.capActual >= data.capTarget ? '#22c55e' : '#f59e0b'
   const ccy = data.currency
 
-  const xMax = Math.max(data.revTarget, data.revActual, data.expBudget, data.expActual) * 1.35 || 1
+  const xMax = Math.max(
+    data.revTarget,
+    data.revActual,
+    data.expBudget,
+    data.expActual,
+    data.capTarget,
+    Math.abs(data.capActual),
+    1,
+  ) * 1.35
+  const xMin = data.capActual < 0 ? data.capActual * 1.35 : 0
 
   const option = {
     backgroundColor: 'transparent',
-    grid: { left: 80, right: 68, top: 18, bottom: 18 },
+    grid: { left: 88, right: 68, top: 18, bottom: 18 },
     xAxis: {
       type: 'value',
       max: xMax,
+      min: xMin,
       show: false,
     },
     yAxis: {
       type: 'category',
-      data: ['Wydatki', 'Przychody'],
+      data: ['Wydatki', 'Przychody', 'Zysk kap.'],
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: { color: 'rgba(255,255,255,0.45)', fontSize: 10 },
@@ -112,18 +127,20 @@ export function GoalsCard({ data, href }: Props) {
         const label = (params[0]?.axisValue ?? '') as string
         const cel = params.find((p) => p.seriesName === 'Cel YTD')
         const stan = params.find((p) => p.seriesName === 'Stan YTD')
-        if (!cel || !stan) return ''
-        const celVal = cel.value ?? 0
+        if (!stan) return ''
         const stanVal = stan.value ?? 0
-        const pct = celVal > 0 ? Math.round((stanVal / celVal) * 100) : 0
+        const celVal = cel?.value ?? null
+        const pct = typeof celVal === 'number' && celVal > 0 ? Math.round((stanVal / celVal) * 100) : 0
         return `<div style="font-size:11px;min-width:150px">
           <div style="margin-bottom:4px;color:rgba(255,255,255,0.45)">${label}</div>
           <div style="display:flex;justify-content:space-between;gap:14px;margin-bottom:2px">
             <span>Stan YTD</span><b>${fmtShort(stanVal)} ${ccy}</b>
           </div>
-          <div style="display:flex;justify-content:space-between;gap:14px;color:rgba(255,255,255,0.4)">
-            <span>Cel YTD</span><span>${fmtShort(celVal)} ${ccy} &nbsp;(${pct}%)</span>
-          </div>
+          ${typeof celVal === 'number'
+            ? `<div style="display:flex;justify-content:space-between;gap:14px;color:rgba(255,255,255,0.4)">
+                <span>Cel YTD</span><span>${fmtShort(celVal)} ${ccy} &nbsp;(${pct}%)</span>
+              </div>`
+            : ''}
         </div>`
       },
     },
@@ -131,7 +148,7 @@ export function GoalsCard({ data, href }: Props) {
       {
         name: 'Cel YTD',
         type: 'bar',
-        data: [data.expBudget, data.revTarget],
+        data: [data.expBudget, data.revTarget, data.capTarget],
         barMaxWidth: 20,
         itemStyle: { color: 'rgba(255,255,255,0.13)', borderRadius: [0, 3, 3, 0] },
         z: 1,
@@ -143,6 +160,7 @@ export function GoalsCard({ data, href }: Props) {
         data: [
           { value: data.expActual, itemStyle: { color: expColor, borderRadius: [0, 3, 3, 0] } },
           { value: data.revActual, itemStyle: { color: revColor, borderRadius: [0, 3, 3, 0] } },
+          { value: data.capActual, itemStyle: { color: capColor, borderRadius: [0, 3, 3, 0] } },
         ],
         barMaxWidth: 13,
         barGap: '-100%',

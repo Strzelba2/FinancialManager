@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +13,34 @@ from app.models.enums import InstrumentStatus
 from app.schemas.schemas import QuoteLatesInput
 
 logger = logging.getLogger(__name__)
+
+
+def trade_date_in_market_timezone(
+    last_trade_at: datetime,
+    market_timezone: str | None,
+) -> date:
+    """
+    Resolve the session date using the market calendar instead of the UTC date.
+
+    Some quote sources publish a date-only "last trade" value. For GPW,
+    midnight on 2026-06-12 in Europe/Warsaw is stored as 2026-06-11 22:00 UTC,
+    so taking `.date()` in UTC would incorrectly cap candle sync at 2026-06-11.
+    """
+    trade_at = last_trade_at
+    if trade_at.tzinfo is None:
+        trade_at = trade_at.replace(tzinfo=timezone.utc)
+
+    timezone_name = (market_timezone or "UTC").strip() or "UTC"
+    try:
+        market_tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "Invalid market timezone %r for latest quote; falling back to UTC",
+            timezone_name,
+        )
+        market_tz = timezone.utc
+
+    return trade_at.astimezone(market_tz).date()
 
 
 async def upsert_quote_latest(session: AsyncSession, instrument_id, qin: QuoteLatesInput) -> QuoteLatest:
@@ -117,14 +146,19 @@ async def get_latest_trade_date_by_symbol(
     our DB.
     """
     stmt = (
-        select(QuoteLatest.last_trade_at)
+        select(QuoteLatest.last_trade_at, Market.timezone)
         .join(Instrument, Instrument.id == QuoteLatest.instrument_id)
+        .join(Market, Market.id == Instrument.market_id)
         .where(Instrument.symbol == symbol)
         .limit(1)
     )
     res = await session.execute(stmt)
-    last_trade_at = res.scalar_one_or_none()
-    return last_trade_at.date() if last_trade_at is not None else None
+    row = res.one_or_none()
+    if row is None:
+        return None
+
+    last_trade_at, market_timezone = row
+    return trade_date_in_market_timezone(last_trade_at, market_timezone)
 
 
 async def fetch_latest_for_mic(session: AsyncSession, mic: str) -> List[QuoteLatest]:

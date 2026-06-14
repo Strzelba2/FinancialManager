@@ -76,6 +76,15 @@ type ObservedCardProps = {
   href: string
 }
 
+function fmtObservedPct(value: number): string {
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  const formatted = Math.abs(value).toLocaleString('pl-PL', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  return `${sign}${formatted}%`
+}
+
 export function ObservedStocksCard({ items, viewCurrency, href }: ObservedCardProps) {
   const rows = items.slice(0, 5)
 
@@ -103,10 +112,10 @@ export function ObservedStocksCard({ items, viewCurrency, href }: ObservedCardPr
             </thead>
             <tbody>
               {rows.map((item, i) => {
-                const pct = Number(item.pl_pct) * 100
+                const pct = Number(item.pl_pct)
                 const abs = Number(item.pl_abs)
                 const up  = pct >= 0
-                const pctFmt = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`
+                const pctFmt = fmtObservedPct(pct)
                 const absFmt = `${abs >= 0 ? '+' : ''}${Math.abs(abs).toFixed(2)} ${viewCurrency}`
                 return (
                   <tr key={item.sym} className="border-b border-white/5 last:border-0 hover:bg-white/[0.03] transition-colors">

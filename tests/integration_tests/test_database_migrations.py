@@ -661,6 +661,37 @@ def test_brokerage_and_stock_database_schema_supports_current_import_contract() 
 @pytest.mark.db
 @allure.epic("System Tests")
 @allure.feature("Integration")
+@allure.story("Wallet goals migration exposes capital gain target column with money precision")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("database", "migration", "wallet", "goals", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+def test_wallet_year_goals_schema_has_capital_gain_target_default() -> None:
+    with _wallet_db_connection() as wallet_connection:
+        with wallet_connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT is_nullable, numeric_precision, numeric_scale, column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'year_goals'
+                  AND column_name = 'capital_gain_target_year'
+                """
+            )
+            row = cursor.fetchone()
+
+    assert row is not None
+    is_nullable, numeric_precision, numeric_scale, column_default = row
+    assert is_nullable == "NO"
+    assert numeric_precision == 20
+    assert numeric_scale == 2
+    assert column_default is not None
+    assert Decimal(str(column_default.split("::", maxsplit=1)[0].strip("'"))) == Decimal("0.00")
+
+
+@pytest.mark.integration
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Integration")
 @allure.story("Wallet database allows negative balances only for credit accounts")
 @allure.severity(allure.severity_level.BLOCKER)
 @allure.tag("database", "migration", "wallet", "money", "financial-data")

@@ -83,8 +83,17 @@ function walletNode(): WalletManagerNode {
   }
 }
 
-function renderManager(wallets: WalletManagerNode[] = [walletNode()]) {
-  return render(<WalletManagerPage wallets={wallets} fxRates={fxRates} />)
+function renderManager(
+  wallets: WalletManagerNode[] = [walletNode()],
+  options: { marketDataUnavailable?: boolean } = {},
+) {
+  return render(
+    <WalletManagerPage
+      wallets={wallets}
+      fxRates={fxRates}
+      marketDataUnavailable={options.marketDataUnavailable}
+    />,
+  )
 }
 
 function openBrokerageActionsMenu() {
@@ -105,6 +114,25 @@ describe('WalletManagerPage', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
+
+  it('warns when market quotes are unavailable for brokerage valuation', async () => {
+    await nextUiUnitStory('Wallet manager warns when unavailable quotes can understate portfolio value', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'wallet-manager', 'quotes', 'financial-data', 'next-ui'],
+    })
+    const node = walletNode()
+    node.brokerage_accounts![0]!.health = { missing_quotes: 2 }
+    node.brokerage_accounts![0]!.positions_value = '0'
+
+    renderManager([node], { marketDataUnavailable: true })
+
+    expect(screen.getByText('Dane rynkowe są tymczasowo niedostępne')).toBeInTheDocument()
+    expect(screen.getAllByText('2 pozycji nie ma aktualnego notowania.')).toHaveLength(2)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Dane rynkowe niedostępne')).toBeInTheDocument()
+    expect(within(dialog).getByText(/wartość majątku, inwestycje/)).toBeInTheDocument()
+  })
+
   it('shows brokerage cash, positions and total with converted cash subaccounts', async () => {
     await nextUiUnitStory('Wallet manager shows brokerage cash and positions as separate financial values', {
       severity: 'critical',

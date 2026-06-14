@@ -25,7 +25,7 @@ export function GoalsDialogWrapper({ open, initialGoals, wallets, viewCurrency }
 
   return (
     <GoalsDialog
-      key={initialGoals.map((g) => `${g.id}:${g.rev_target_year}:${g.exp_budget_year}`).join('|')}
+      key={initialGoals.map((g) => `${g.id}:${g.rev_target_year}:${g.exp_budget_year}:${g.capital_gain_target_year}`).join('|')}
       open={isOpen}
       onOpenChange={handleOpenChange}
       initialGoals={initialGoals}

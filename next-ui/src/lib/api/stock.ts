@@ -261,6 +261,10 @@ export type CeleryStatus = {
   detail: string
 }
 
+export type StockServiceStatus = {
+  available: boolean
+}
+
 export type ManualIngestStart = {
   ok: boolean
   detail?: string
@@ -291,6 +295,24 @@ export type EquityReportResult = {
 
 export async function getCeleryStatus(): Promise<RequestResult<CeleryStatus>> {
   return requestWithMeta<CeleryStatus>('/stock/celery/status')
+}
+
+export async function getStockServiceStatus(timeoutMs = 1500): Promise<StockServiceStatus> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch(`${BASE}/healthz`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+    return { available: res.ok }
+  } catch (err) {
+    logger.warn({ err }, 'stock service health check failed')
+    return { available: false }
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export async function startManualIngest(): Promise<RequestResult<ManualIngestStart>> {

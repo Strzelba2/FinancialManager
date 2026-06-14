@@ -17,7 +17,7 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
-    Q2, Q10Opt, Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt
+    Q2, Q2NonNeg, Q10Opt, Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt
 )
 
 from app.models.enums import (
@@ -501,12 +501,13 @@ class YearGoalRead(YearGoalBase, UUIDMixin, TimestampMixin):
 
 
 class YearGoalUpdate(PartialUpdateMixin):
-    rev_target_year: Optional[Q2] = None
-    exp_budget_year: Optional[Q2] = None
+    rev_target_year: Optional[Q2NonNeg] = None
+    exp_budget_year: Optional[Q2NonNeg] = None
+    capital_gain_target_year: Optional[Q2NonNeg] = None
     currency: Optional[Currency] = None
     
     __update_require_any__ = {
-        "rev_target_year", "exp_budget_year", "currency", 
+        "rev_target_year", "exp_budget_year", "capital_gain_target_year", "currency",
     }
     
     

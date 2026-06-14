@@ -139,12 +139,13 @@ export type YearGoalOut = {
   year: number
   rev_target_year: string
   exp_budget_year: string
+  capital_gain_target_year: string
   currency: Currency
 }
 
 export type FavoriteItem = {
   sym: string
-  pl_pct: string   // decimal fraction, e.g. "0.0423" = 4.23%
+  pl_pct: string   // percentage points from quote change_pct, e.g. "4.23" = 4.23%
   pl_abs: string   // absolute P/L in item currency
   currency: string
 }

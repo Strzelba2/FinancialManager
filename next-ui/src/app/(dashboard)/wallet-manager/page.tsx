@@ -2,6 +2,7 @@ import { headers } from 'next/headers'
 import { syncUser, getWalletManagerTree } from '@/lib/api/wallet'
 import { saveWalletUserId } from '@/lib/api/session'
 import { getFxRates } from '@/lib/api/nbp'
+import { getStockServiceStatus } from '@/lib/api/stock'
 import type { FxRates } from '@/lib/api/nbp'
 import { WalletManagerPage } from '@/features/wallet/components/WalletManagerPage'
 import type { WalletManagerNode } from '@/lib/api/wallet'
@@ -13,9 +14,10 @@ export default async function WalletManagerRoute() {
   const email = headerStore.get('x-email') ?? ''
   const existingUserId = headerStore.get('x-user-id') ?? ''
 
-  const [data, rates] = await Promise.all([
+  const [data, rates, stockStatus] = await Promise.all([
     syncUser({ username, first_name, email }),
     getFxRates(),
+    getStockServiceStatus(),
   ])
 
   if (data && !existingUserId) {
@@ -43,6 +45,7 @@ export default async function WalletManagerRoute() {
     <WalletManagerPage
       wallets={wallets}
       fxRates={rates as FxRates | null}
+      marketDataUnavailable={!stockStatus.available}
     />
   )
 }

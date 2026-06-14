@@ -15,6 +15,7 @@ import type {
   ManagerHealth,
 } from '@/lib/api/wallet'
 import type { FxRates } from '@/lib/api/nbp'
+import { MarketDataNotice } from '@/features/wallet/components/MarketDataNotice'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -176,6 +177,24 @@ function HealthChips({ health }: { health?: ManagerHealth }) {
       ))}
     </>
   )
+}
+
+function countMissingMarketQuotes(wallets: WalletManagerNode[]): number {
+  return wallets.reduce((total, wallet) => {
+    const brokerageMissing = (wallet.brokerage_accounts ?? []).reduce(
+      (sum, account) => sum + (account.health?.missing_quotes ?? 0),
+      0,
+    )
+    const metalsMissing = wallet.metals?.health?.missing_quotes ?? 0
+    return total + brokerageMissing + metalsMissing
+  }, 0)
+}
+
+function hasMarketPricedAssets(wallets: WalletManagerNode[]): boolean {
+  return wallets.some((wallet) => (
+    (wallet.brokerage_accounts?.length ?? 0) > 0 ||
+    (wallet.metals?.count ?? 0) > 0
+  ))
 }
 
 function AllocationBar({ cashPct, stocksPct, metalsPct, rePct }: {
@@ -906,9 +925,10 @@ function WalletCard({
 type Props = {
   wallets: WalletManagerNode[]
   fxRates: FxRates | null
+  marketDataUnavailable?: boolean
 }
 
-export function WalletManagerPage({ wallets, fxRates }: Props) {
+export function WalletManagerPage({ wallets, fxRates, marketDataUnavailable = false }: Props) {
   const router = useRouter()
   const [viewCcy, setViewCcy] = useState<ViewCcy>('PLN')
   const [snapshotLoading, setSnapshotLoading] = useState(false)
@@ -940,6 +960,11 @@ export function WalletManagerPage({ wallets, fxRates }: Props) {
   }
 
   const totalAll = wallets.reduce((s, w) => s + walletBreakdown(w, viewCcy, conv).total, 0)
+  const missingMarketQuotes = countMissingMarketQuotes(wallets)
+  const showMarketDataNotice = (
+    missingMarketQuotes > 0 ||
+    (marketDataUnavailable && hasMarketPricedAssets(wallets))
+  )
 
   return (
     <div className="px-4 py-4">
@@ -988,6 +1013,13 @@ export function WalletManagerPage({ wallets, fxRates }: Props) {
             </button>
           </div>
         </div>
+
+        {showMarketDataNotice && (
+          <MarketDataNotice
+            affectedPositions={missingMarketQuotes || undefined}
+            scope="manager"
+          />
+        )}
 
         {/* Snapshot message */}
         {snapshotMsg && (
