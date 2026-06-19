@@ -16,6 +16,12 @@ def q2(v: Optional[Decimal]) -> Optional[Decimal]:
     return v.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def q3(v: Optional[Decimal]) -> Optional[Decimal]:
+    if v is None:
+        return None
+    return v.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+
+
 def q6(v: Optional[Decimal]) -> Optional[Decimal]:
     if v is None:
         return None
@@ -176,6 +182,9 @@ BytesLen32 = Annotated[bytes, AfterValidator(require_bytes_len_32)]
 Q2 = Annotated[Decimal, AfterValidator(q2)]
 Q2NonNeg = Annotated[Decimal, AfterValidator(require_nonnegative), AfterValidator(q2)]
 Q2OptNonNeg = Annotated[Optional[Decimal], AfterValidator(require_nonnegative_opt), AfterValidator(q2)]
+Q3 = Annotated[Decimal, AfterValidator(q3)]
+Q3NonNeg = Annotated[Decimal, AfterValidator(require_nonnegative), AfterValidator(q3)]
+Q3OptNonNeg = Annotated[Optional[Decimal], AfterValidator(require_nonnegative_opt), AfterValidator(q3)]
 Q6Pos = Annotated[Decimal, AfterValidator(q6), AfterValidator(require_positive)]
 Q10 = Annotated[Decimal, AfterValidator(q10)]
 Q10Opt = Annotated[Optional[Decimal], AfterValidator(q10)]

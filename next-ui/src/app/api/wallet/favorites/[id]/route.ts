@@ -4,6 +4,26 @@ import { listFavoriteItemsWithAlerts, deleteFavoriteList } from '@/lib/api/walle
 import { getQuotesBulk } from '@/lib/api/stock'
 import type { FavoriteItemWithAlert } from '@/lib/api/wallet'
 
+/**
+ * Resolve the display name for a favorite row.
+ *
+ * Many favorites were stored with `name` equal to the symbol (add-time fallback),
+ * so we prefer the live instrument name from the quote feed and only fall back to
+ * the stored name, then the symbol.
+ */
+export function resolveFavoriteName(
+  symbol: string,
+  storedName: string | null | undefined,
+  quoteName: string | null | undefined,
+): string {
+  const sym = symbol.toUpperCase()
+  const qn = (quoteName ?? '').trim()
+  if (qn && qn.toUpperCase() !== sym) return qn
+  const sn = (storedName ?? '').trim()
+  if (sn && sn.toUpperCase() !== sym) return sn
+  return '—'
+}
+
 export type FavoriteItemRow = {
   symbol: string
   name: string
@@ -63,7 +83,7 @@ export async function GET(
 
     return {
       symbol: sym || '—',
-      name: (it.name ?? '').trim() || '—',
+      name: resolveFavoriteName(sym, it.name, q?.name),
       mic: (it.mic ?? 'XWAR').trim(),
       price: q?.last_price_fmt ?? (q?.last_price != null ? String(q.last_price) : null),
       changePct: q?.change_pct != null ? Number(q.change_pct) : null,

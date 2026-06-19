@@ -7,10 +7,35 @@ import { toast } from 'sonner'
 import {
   BarChart2, TrendingUp, RefreshCw, Search, X, ChevronDown,
   CandlestickChart, LineChart, MousePointer2, Minus, Layers,
-  Undo2, Save, Trash2, Upload, Check, Crosshair, Maximize2, Minimize2,
+  Undo2, Save, Trash2, Upload, Check, Crosshair, Maximize2, Minimize2, Info,
 } from 'lucide-react'
-import type { CandleDay, SyncCandlesResult } from '@/lib/api/stock'
+import type { CandleDay, SyncCandlesResult, VolumeZonesResponse } from '@/lib/api/stock'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  buildDateIndexResolver,
+  buildDirectionalEpisodeBoxSeries,
+  buildDirectionalEpisodeOutcomeSeries,
+  buildEvidenceBalanceSeries,
+  buildVolumeZoneMarkArea,
+  buildVolumeZoneMarkLine,
+  buildZoneLevelMarkLine,
+  buildZoneHoverSeries,
+  buildPhaseHoverSeries,
+  buildVolumeZoneProfileSeries,
+  evidenceLabel,
+  behaviorLabel,
+  lifecycleLabel,
+  marketRoleLabel,
+  priceRelationLabel,
+  qualityFailLabel,
+  stateLabel,
+  VOLUME_PROFILE_MODE_LABELS,
+  type PhaseVisibility,
+  type VolumeProfileToggle,
+  type ZoneVisibility,
+  type VolumeZoneChartOptions,
+} from './volume-zones'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -116,6 +141,50 @@ function bollingerBands(closes: number[], period = 20, k = 2) {
   })
 }
 
+function emaSeries(values: number[], period: number): number[] {
+  if (!values.length) return []
+  const k = 2.0 / (period + 1.0)
+  const r: number[] = [values[0]!]
+  for (let i = 1; i < values.length; i++) r.push((values[i]! - r[i - 1]!) * k + r[i - 1]!)
+  return r
+}
+
+function rsiSeries(values: number[], period = 14): (number | null)[] {
+  const out: (number | null)[] = new Array(period).fill(null)
+  if (values.length <= period) return out
+  let avgGain = 0, avgLoss = 0
+  for (let i = 1; i <= period; i++) {
+    const d = values[i]! - values[i - 1]!
+    if (d > 0) avgGain += d; else avgLoss -= d
+  }
+  avgGain /= period; avgLoss /= period
+  const calc = () => avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
+  out.push(calc())
+  for (let i = period + 1; i < values.length; i++) {
+    const d = values[i]! - values[i - 1]!
+    avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period
+    avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period
+    out.push(calc())
+  }
+  return out
+}
+
+type MacdResult = { macdLine: (number | null)[]; signalLine: (number | null)[]; histogram: (number | null)[] }
+
+function macdSeries(values: number[], fast = 12, slow = 26, signal = 9): MacdResult {
+  const nullArr = (): (number | null)[] => new Array(values.length).fill(null)
+  if (values.length < slow) return { macdLine: nullArr(), signalLine: nullArr(), histogram: nullArr() }
+  const fastEma = emaSeries(values, fast)
+  const slowEma = emaSeries(values, slow)
+  const rawMacd = fastEma.map((f, i) => f - slowEma[i]!)
+  const rawSignal = emaSeries(rawMacd, signal)
+  const mask = slow - 1
+  const macdLine   = rawMacd.map((v, i) => i < mask ? null : v)
+  const signalLine = rawSignal.map((v, i) => i < mask ? null : v)
+  const histogram  = macdLine.map((m, i) => { const s = signalLine[i]; return m == null || s == null ? null : m - s })
+  return { macdLine, signalLine, histogram }
+}
+
 function aggregateCandles(candles: CandleDay[], interval: AggInterval): CandleDay[] {
   if (interval === 'D') return candles
   const groups = new Map<string, CandleDay[]>()
@@ -137,6 +206,8 @@ function aggregateCandles(candles: CandleDay[], interval: AggInterval): CandleDa
     low: Math.min(...g.map((c) => c.low)),
     close: g[g.length - 1]!.close,
     volume: g.some((c) => c.volume != null) ? g.reduce((s, c) => s + (c.volume ?? 0), 0) : null,
+    period_start: g[0]!.date_quote,
+    period_end: g[g.length - 1]!.date_quote,
   }))
 }
 
@@ -415,6 +486,8 @@ function tooltipFormatter(params: any[]): string {
   const date = params[0]?.axisValue ?? ''
   let html = `<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px">${date}</div>`
   for (const p of params) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((p as any).componentType === 'markLine') continue
     const v = p.value
     let display: string | null = null
 
@@ -433,7 +506,7 @@ function tooltipFormatter(params: any[]): string {
       continue
     } else if (p.seriesType === 'bar') {
       const n = Number(v)
-      if (Number.isFinite(n) && n !== 0) display = VOL_LABEL_FMT(n)
+      if (Number.isFinite(n) && n !== 0) display = p.seriesName === 'MACD Hist' ? n.toFixed(4) : VOL_LABEL_FMT(n)
     } else {
       // line / scatter etc.
       if (v == null) continue
@@ -457,66 +530,240 @@ const TOOLTIP_STYLE = {
   textStyle: { color: '#e2e8f0', fontSize: 12 },
   formatter: tooltipFormatter,
 }
-const dataZoomOpt = (hasVol: boolean) => [
-  { type: 'inside', xAxisIndex: hasVol ? [0, 1] : [0], start: 60, end: 100 },
-  { type: 'slider', xAxisIndex: hasVol ? [0, 1] : [0], height: 20, bottom: 4, borderColor: 'rgba(255,255,255,0.1)', fillerColor: 'rgba(59,130,246,0.15)', handleStyle: { color: '#3b82f6' }, textStyle: { color: 'rgba(255,255,255,0.35)', fontSize: 9 } },
-]
+
+// Item-trigger tooltip used when the crosshair is OFF: overlay series (zones,
+// phases, profile) show their own descriptions; series without a formatter
+// (candles) show nothing. No cross axis pointer.
+const ITEM_TOOLTIP_STYLE = {
+  trigger: 'item', confine: true,
+  backgroundColor: 'rgba(15,23,42,0.9)', borderColor: 'rgba(255,255,255,0.1)',
+  textStyle: { color: '#e2e8f0', fontSize: 12 },
+  formatter: () => '',
+}
+type GridLayout = {
+  grids: object[]
+  xAxisCount: number
+  rsiGridIndex:  number | null
+  macdGridIndex: number | null
+  evidenceGridIndex: number | null
+  volGridIndex:  number | null
+  rsiYIndex:     number | null
+  macdYIndex:    number | null
+  evidenceYIndex: number | null
+  volYIndex:     number | null
+}
+
+function buildGridLayout(showRsi: boolean, showMacd: boolean, showVolume: boolean, showEvidence = false): GridLayout {
+  const H = { rsi: 17, macd: 17, evidence: 14, volume: 15 } as const
+  const GAP = 2
+  const subPanels = ([showRsi && 'rsi', showMacd && 'macd', showEvidence && 'evidence', showVolume && 'volume'] as const).filter(Boolean) as string[]
+  const totalSubH = subPanels.reduce((a, p) => a + H[p as keyof typeof H], 0)
+  const priceH = Math.max(30, 87 - totalSubH - subPanels.length * GAP)
+
+  const grids: object[] = []
+  const LEFT = 60, RIGHT = 16
+  grids.push(subPanels.length === 0
+    ? { left: LEFT, right: RIGHT, top: 40, bottom: 60 }
+    : { left: LEFT, right: RIGHT, top: 40, height: `${priceH}%` })
+
+  let topPct = 5 + priceH + GAP
+  let gridIdx = 1
+  let yIdx = 1
+
+  let rsiGridIndex:  number | null = null, rsiYIndex:  number | null = null
+  let macdGridIndex: number | null = null, macdYIndex: number | null = null
+  let evidenceGridIndex: number | null = null, evidenceYIndex: number | null = null
+  let volGridIndex:  number | null = null, volYIndex:  number | null = null
+
+  if (showRsi) {
+    rsiGridIndex = gridIdx++; rsiYIndex = yIdx++
+    grids.push({ left: LEFT, right: RIGHT, top: `${Math.round(topPct)}%`, height: `${H.rsi}%` })
+    topPct += H.rsi + GAP
+  }
+  if (showMacd) {
+    macdGridIndex = gridIdx++; macdYIndex = yIdx++
+    grids.push({ left: LEFT, right: RIGHT, top: `${Math.round(topPct)}%`, height: `${H.macd}%` })
+    topPct += H.macd + GAP
+  }
+  if (showEvidence) {
+    evidenceGridIndex = gridIdx++; evidenceYIndex = yIdx++
+    grids.push({ left: LEFT, right: RIGHT, top: `${Math.round(topPct)}%`, height: `${H.evidence}%` })
+    topPct += H.evidence + GAP
+  }
+  if (showVolume) {
+    volGridIndex = gridIdx++; volYIndex = yIdx++
+    grids.push({ left: LEFT, right: RIGHT, top: `${Math.round(topPct)}%`, height: `${H.volume}%` })
+  }
+
+  return { grids, xAxisCount: gridIdx, rsiGridIndex, rsiYIndex, macdGridIndex, macdYIndex, evidenceGridIndex, evidenceYIndex, volGridIndex, volYIndex }
+}
+
+const dataZoomOpt = (xAxisCount: number) => {
+  const idx = Array.from({ length: xAxisCount }, (_, i) => i)
+  return [
+    { type: 'inside', xAxisIndex: idx, start: 60, end: 100 },
+    { type: 'slider', xAxisIndex: idx, height: 20, bottom: 4, borderColor: 'rgba(255,255,255,0.1)', fillerColor: 'rgba(59,130,246,0.15)', handleStyle: { color: '#3b82f6' }, textStyle: { color: 'rgba(255,255,255,0.35)', fontSize: 9 } },
+  ]
+}
 
 function buildCandlestickOption(
-  symbol: string, candles: CandleDay[], showVolume: boolean, indicators: Set<string>,
+  symbol: string,
+  candles: CandleDay[],
+  showVolume: boolean,
+  indicators: Set<string>,
+  volumeZones: VolumeZonesResponse | null = null,
+  volumeZoneOptions: VolumeZoneChartOptions = { showZones: false, showProfile: false, profileOpacity: 0.14 },
+  crosshairOn = true,
 ): object {
-  const xs = candles.map((c) => c.date_quote)
+  // Crosshair ON -> axis tooltip (cross + price). OFF -> item tooltips so the
+  // overlay descriptions appear and overlays become hoverable; no cross.
+  const interactiveOverlays = !crosshairOn
+  const xs     = candles.map((c) => c.date_quote)
   const closes = candles.map((c) => Number(c.close))
+
+  const showRsi  = indicators.has('rsi')
+  const showMacd = indicators.has('macd')
+  const showEvidence = Boolean(volumeZones?.timeline.length && volumeZoneOptions.showZones)
+  const layout   = buildGridLayout(showRsi, showMacd, showVolume, showEvidence)
+  const { rsiGridIndex, rsiYIndex, macdGridIndex, macdYIndex, evidenceGridIndex, evidenceYIndex, volGridIndex, volYIndex } = layout
+
+  const xAxis: object[] = layout.grids.map((_, gi) => ({
+    type: 'category', gridIndex: gi, data: xs, boundaryGap: true,
+    axisLabel: gi === layout.grids.length - 1 ? { ...AXIS_LABEL_STYLE, hideOverlap: true } : { show: false },
+    axisPointer: { label: { show: gi === layout.grids.length - 1 } },
+  }))
+  // Hidden x-axis on the price grid for the volume profile. It is NOT listed in
+  // the dataZoom, so the profile stays pinned to the right edge and never gets
+  // filtered out when the visible window excludes the latest candle.
+  const profileXAxisIndex = xAxis.length
+  xAxis.push({
+    type: 'category', gridIndex: 0, data: xs, boundaryGap: true,
+    show: false, axisLabel: { show: false }, axisTick: { show: false },
+    axisLine: { show: false }, axisPointer: { show: false },
+  })
+
+  const yAxis: object[] = [
+    { gridIndex: 0, scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: AXIS_LABEL_STYLE },
+  ]
+  if (rsiGridIndex !== null)  yAxis.push({ gridIndex: rsiGridIndex,  min: 0, max: 100, splitNumber: 2, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9 }, splitLine: SPLIT_LINE_STYLE })
+  if (macdGridIndex !== null) yAxis.push({ gridIndex: macdGridIndex, scale: true,      splitNumber: 2, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9 }, splitLine: SPLIT_LINE_STYLE })
+  if (evidenceGridIndex !== null) {
+    const tl = volumeZones?.timeline ?? []
+    const evidenceName = tl.length
+      ? `Bilans dowodów — ${tl[0]!.date}–${tl[tl.length - 1]!.date}`
+      : 'Bilans dowodów'
+    yAxis.push({ gridIndex: evidenceGridIndex, min: -1, max: 1, splitNumber: 2, name: evidenceName, nameLocation: 'start', nameGap: 2, nameTextStyle: { color: 'rgba(255,255,255,0.35)', fontSize: 9, align: 'left' }, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9 }, splitLine: SPLIT_LINE_STYLE })
+  }
+  if (volGridIndex  !== null) yAxis.push({ gridIndex: volGridIndex,  splitNumber: 2, scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9, formatter: VOL_LABEL_FMT } })
+
+  const zoneDateResolver = buildDateIndexResolver(candles)
+  const volumeZoneMarkArea = buildVolumeZoneMarkArea(volumeZones, volumeZoneOptions, zoneDateResolver, candles.length - 1)
+  const volumeZoneMarkLine = buildVolumeZoneMarkLine(volumeZones)
 
   const series: Record<string, unknown>[] = [
     {
       name: symbol, type: 'candlestick',
+      xAxisIndex: 0, yAxisIndex: 0,
+      z: 5,
       data: candles.map((c) => [c.open, c.close, c.low, c.high]),
       itemStyle: { color: '#10b981', color0: '#ef4444', borderColor: '#10b981', borderColor0: '#ef4444' },
+      ...(volumeZoneMarkArea ? { markArea: volumeZoneMarkArea } : {}),
+      ...(volumeZoneMarkLine ? { markLine: volumeZoneMarkLine } : {}),
     },
   ]
+
   for (const p of SMA_PERIODS) {
     if (!indicators.has(`sma-${p}`)) continue
-    series.push({ name: `SMA ${p}`, type: 'line', data: sma(closes, p), smooth: true, showSymbol: false, lineStyle: { width: 1.5, opacity: 0.9 } })
+    series.push({ name: `SMA ${p}`, type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: sma(closes, p), smooth: true, showSymbol: false, lineStyle: { width: 1.5, opacity: 0.9 } })
   }
   if (indicators.has('bb')) {
     const bb = bollingerBands(closes)
     series.push(
-      { name: 'BB Upper', type: 'line', data: bb.map((b) => b.upper), showSymbol: false, lineStyle: { width: 1, opacity: 0.6 }, color: '#f59e0b' },
-      { name: 'BB Mid',   type: 'line', data: bb.map((b) => b.mid),   showSymbol: false, lineStyle: { width: 1, type: 'dashed', opacity: 0.5 }, color: '#f59e0b' },
-      { name: 'BB Lower', type: 'line', data: bb.map((b) => b.lower), showSymbol: false, lineStyle: { width: 1, opacity: 0.6 }, color: '#f59e0b' },
+      { name: 'BB Upper', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: bb.map((b) => b.upper), showSymbol: false, lineStyle: { width: 1, opacity: 0.6 }, color: '#f59e0b' },
+      { name: 'BB Mid',   type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: bb.map((b) => b.mid),   showSymbol: false, lineStyle: { width: 1, type: 'dashed', opacity: 0.5 }, color: '#f59e0b' },
+      { name: 'BB Lower', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: bb.map((b) => b.lower), showSymbol: false, lineStyle: { width: 1, opacity: 0.6 }, color: '#f59e0b' },
     )
   }
-  if (showVolume) {
-    series.push({ name: 'Volume', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: candles.map((c) => c.volume ?? 0), itemStyle: { color: 'rgba(99,102,241,0.4)' } })
+
+  if (showRsi && rsiGridIndex !== null && rsiYIndex !== null) {
+    series.push({
+      name: 'RSI (14)', type: 'line',
+      xAxisIndex: rsiGridIndex, yAxisIndex: rsiYIndex,
+      data: rsiSeries(closes, 14),
+      showSymbol: false,
+      lineStyle: { width: 1.5, color: '#a78bfa' }, color: '#a78bfa',
+      markLine: {
+        silent: true, symbol: 'none',
+        lineStyle: { type: 'dashed', color: 'rgba(255,255,255,0.18)', width: 1 },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        label: { show: true, formatter: (p: any) => String((p as { value: number }).value), color: 'rgba(255,255,255,0.25)', fontSize: 9 },
+        data: [{ yAxis: 70 }, { yAxis: 30 }],
+      },
+    })
   }
+
+  if (showMacd && macdGridIndex !== null && macdYIndex !== null) {
+    const { macdLine, signalLine, histogram } = macdSeries(closes)
+    series.push(
+      {
+        name: 'MACD Hist', type: 'bar',
+        xAxisIndex: macdGridIndex, yAxisIndex: macdYIndex,
+        data: histogram,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        itemStyle: { color: (params: any) => { const v = (params as { value: number | null }).value; return v != null && v >= 0 ? 'rgba(16,185,129,0.7)' : 'rgba(239,68,68,0.7)' } },
+      },
+      { name: 'MACD',   type: 'line', xAxisIndex: macdGridIndex, yAxisIndex: macdYIndex, data: macdLine,   showSymbol: false, lineStyle: { width: 1.2, color: '#3b82f6' }, color: '#3b82f6' },
+      { name: 'Signal', type: 'line', xAxisIndex: macdGridIndex, yAxisIndex: macdYIndex, data: signalLine, showSymbol: false, lineStyle: { width: 1.2, color: '#f97316' }, color: '#f97316' },
+    )
+  }
+
+  if (showVolume && volGridIndex !== null && volYIndex !== null) {
+    series.push({ name: 'Volume', type: 'bar', xAxisIndex: volGridIndex, yAxisIndex: volYIndex, data: candles.map((c) => c.volume ?? 0), itemStyle: { color: 'rgba(99,102,241,0.4)' } })
+  }
+  const profileSeries = buildVolumeZoneProfileSeries(volumeZones, volumeZoneOptions, candles.length - 1, profileXAxisIndex, interactiveOverlays)
+  if (profileSeries) series.push(profileSeries as Record<string, unknown>)
+  // Dashed zone-level lines extending past the formation box (own overlay
+  // series; the candlestick series already carries the confirm/invalidate line).
+  const zoneLevelMarkLine = buildZoneLevelMarkLine(volumeZones, volumeZoneOptions, zoneDateResolver, candles.length - 1)
+  if (zoneLevelMarkLine) {
+    series.push({ name: 'Poziomy stref', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: [], showSymbol: false, silent: true, markLine: zoneLevelMarkLine })
+  }
+  const evidenceSeries = buildEvidenceBalanceSeries(candles, volumeZones, evidenceGridIndex, evidenceYIndex)
+  if (evidenceSeries) series.push(evidenceSeries as Record<string, unknown>)
+  // Directional A/D phases ride on their own overlay series (the candlestick
+  // series already carries the zone markArea, and a series has only one).
+  const phaseBoxes = buildDirectionalEpisodeBoxSeries(
+    volumeZones,
+    volumeZoneOptions,
+    zoneDateResolver,
+    candles.length - 1,
+    candles,
+    interactiveOverlays,
+  )
+  if (phaseBoxes) series.push(phaseBoxes as Record<string, unknown>)
+  const phaseOutcome = buildDirectionalEpisodeOutcomeSeries(volumeZones, volumeZoneOptions, zoneDateResolver, candles)
+  if (phaseOutcome) series.push(phaseOutcome as Record<string, unknown>)
+  // Transparent hover overlays that provide per-zone / per-phase tooltips.
+  const zoneHover = buildZoneHoverSeries(volumeZones, volumeZoneOptions, zoneDateResolver, candles.length - 1, interactiveOverlays)
+  if (zoneHover) series.push(zoneHover as Record<string, unknown>)
+  const phaseHover = buildPhaseHoverSeries(volumeZones, volumeZoneOptions, zoneDateResolver, candles.length - 1, interactiveOverlays, candles)
+  if (phaseHover) series.push(phaseHover as Record<string, unknown>)
 
   return {
     backgroundColor: 'transparent', animation: false,
-    tooltip: TOOLTIP_STYLE, legend: { show: false },
-    axisPointer: { link: [{ xAxisIndex: 'all' }] },
-    dataZoom: dataZoomOpt(showVolume),
-    grid: showVolume
-      ? [{ left: 60, right: 16, top: 40, height: '55%' }, { left: 60, right: 16, top: '74%', height: '16%' }]
-      : [{ left: 60, right: 16, top: 40, bottom: 60 }],
-    xAxis: showVolume
-      ? [
-          { type: 'category', data: xs, axisLabel: { show: false }, boundaryGap: true },
-          { type: 'category', gridIndex: 1, data: xs, boundaryGap: true, axisLabel: { ...AXIS_LABEL_STYLE, hideOverlap: true } },
-        ]
-      : [{ type: 'category', data: xs, boundaryGap: true, axisLabel: { ...AXIS_LABEL_STYLE, hideOverlap: true } }],
-    yAxis: showVolume
-      ? [
-          { scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: AXIS_LABEL_STYLE },
-          { gridIndex: 1, splitNumber: 2, scale: true, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9, formatter: VOL_LABEL_FMT } },
-        ]
-      : [{ scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: AXIS_LABEL_STYLE }],
+    tooltip: crosshairOn ? TOOLTIP_STYLE : ITEM_TOOLTIP_STYLE, legend: { show: false },
+    axisPointer: { link: [{ xAxisIndex: 'all' }], show: crosshairOn },
+    dataZoom: dataZoomOpt(layout.xAxisCount),
+    grid: layout.grids,
+    xAxis,
+    yAxis,
     series,
   }
 }
 
 function buildLineOption(
   seriesMap: Map<string, CandleDay[]>, showVolume: boolean, indicators: Set<string>,
+  crosshairOn = true,
 ): object {
   const allDates = [...new Set([...seriesMap.values()].flatMap((c) => c.map((d) => d.date_quote)))].sort()
   const series: Record<string, unknown>[] = []
@@ -546,36 +793,87 @@ function buildLineOption(
     }
   }
 
-  const hasVol = showVolume && seriesMap.size === 1
-  if (hasVol) {
+  const isSingle = seriesMap.size === 1
+  const hasVol   = showVolume && isSingle
+  const showRsi  = indicators.has('rsi')  && isSingle
+  const showMacd = indicators.has('macd') && isSingle
+  const layout   = buildGridLayout(showRsi, showMacd, hasVol)
+  const { rsiGridIndex, rsiYIndex, macdGridIndex, macdYIndex, volGridIndex, volYIndex } = layout
+
+  if (hasVol && volGridIndex !== null && volYIndex !== null) {
     const first = [...seriesMap][0]
     if (first) {
       const byDate = new Map(first[1].map((c) => [c.date_quote, c]))
-      series.push({ name: 'Volume', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: allDates.map((d) => byDate.get(d)?.volume ?? 0), itemStyle: { color: 'rgba(99,102,241,0.4)' } })
+      series.push({ name: 'Volume', type: 'bar', xAxisIndex: volGridIndex, yAxisIndex: volYIndex, data: allDates.map((d) => byDate.get(d)?.volume ?? 0), itemStyle: { color: 'rgba(99,102,241,0.4)' } })
     }
   }
 
+  if (showRsi && rsiGridIndex !== null && rsiYIndex !== null) {
+    const first = [...seriesMap.values()][0]
+    if (first) {
+      const rsiCloses = first.map((c) => Number(c.close))
+      const rsiVals   = rsiSeries(rsiCloses, 14)
+      const dateToIdx = new Map(first.map((c, i) => [c.date_quote, i]))
+      const rsiAligned = allDates.map((d) => { const i = dateToIdx.get(d); return i !== undefined ? rsiVals[i] ?? null : null })
+      series.push({
+        name: 'RSI (14)', type: 'line',
+        xAxisIndex: rsiGridIndex, yAxisIndex: rsiYIndex,
+        data: rsiAligned, showSymbol: false,
+        lineStyle: { width: 1.5, color: '#a78bfa' }, color: '#a78bfa',
+        markLine: {
+          silent: true, symbol: 'none',
+          lineStyle: { type: 'dashed', color: 'rgba(255,255,255,0.18)', width: 1 },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          label: { show: true, formatter: (p: any) => String((p as { value: number }).value), color: 'rgba(255,255,255,0.25)', fontSize: 9 },
+          data: [{ yAxis: 70 }, { yAxis: 30 }],
+        },
+      })
+    }
+  }
+
+  if (showMacd && macdGridIndex !== null && macdYIndex !== null) {
+    const first = [...seriesMap.values()][0]
+    if (first) {
+      const macdCloses = first.map((c) => Number(c.close))
+      const { macdLine, signalLine, histogram } = macdSeries(macdCloses)
+      const dateToIdx = new Map(first.map((c, i) => [c.date_quote, i]))
+      const align = (arr: (number | null)[]) => allDates.map((d) => { const i = dateToIdx.get(d); return i !== undefined ? arr[i] ?? null : null })
+      series.push(
+        {
+          name: 'MACD Hist', type: 'bar',
+          xAxisIndex: macdGridIndex, yAxisIndex: macdYIndex,
+          data: align(histogram),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          itemStyle: { color: (params: any) => { const v = (params as { value: number | null }).value; return v != null && v >= 0 ? 'rgba(16,185,129,0.7)' : 'rgba(239,68,68,0.7)' } },
+        },
+        { name: 'MACD',   type: 'line', xAxisIndex: macdGridIndex, yAxisIndex: macdYIndex, data: align(macdLine),   showSymbol: false, lineStyle: { width: 1.2, color: '#3b82f6' }, color: '#3b82f6' },
+        { name: 'Signal', type: 'line', xAxisIndex: macdGridIndex, yAxisIndex: macdYIndex, data: align(signalLine), showSymbol: false, lineStyle: { width: 1.2, color: '#f97316' }, color: '#f97316' },
+      )
+    }
+  }
+
+  const xAxis = layout.grids.map((_, gi) => ({
+    type: 'category', gridIndex: gi, data: allDates, boundaryGap: false,
+    axisLabel: gi === layout.grids.length - 1 ? { ...AXIS_LABEL_STYLE, hideOverlap: true } : { show: false },
+    axisPointer: { label: { show: gi === layout.grids.length - 1 } },
+  }))
+
+  const yAxis: object[] = [
+    { gridIndex: 0, scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: AXIS_LABEL_STYLE },
+  ]
+  if (rsiGridIndex  !== null) yAxis.push({ gridIndex: rsiGridIndex,  min: 0, max: 100, splitNumber: 2, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9 }, splitLine: SPLIT_LINE_STYLE })
+  if (macdGridIndex !== null) yAxis.push({ gridIndex: macdGridIndex, scale: true,      splitNumber: 2, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9 }, splitLine: SPLIT_LINE_STYLE })
+  if (volGridIndex  !== null) yAxis.push({ gridIndex: volGridIndex,  splitNumber: 2, scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9, formatter: VOL_LABEL_FMT } })
+
   return {
     backgroundColor: 'transparent', animation: false,
-    tooltip: TOOLTIP_STYLE,
+    tooltip: crosshairOn ? TOOLTIP_STYLE : { show: false },
     legend: seriesMap.size > 1 ? { top: 8, textStyle: { color: 'rgba(255,255,255,0.6)', fontSize: 11 } } : { show: false },
-    axisPointer: { link: [{ xAxisIndex: 'all' }] },
-    dataZoom: dataZoomOpt(hasVol),
-    grid: hasVol
-      ? [{ left: 60, right: 16, top: 40, height: '55%' }, { left: 60, right: 16, top: '74%', height: '16%' }]
-      : [{ left: 60, right: 16, top: 40, bottom: 60 }],
-    xAxis: hasVol
-      ? [
-          { type: 'category', data: allDates, axisLabel: { show: false }, boundaryGap: false },
-          { type: 'category', gridIndex: 1, data: allDates, boundaryGap: false, axisLabel: { ...AXIS_LABEL_STYLE, hideOverlap: true } },
-        ]
-      : [{ type: 'category', data: allDates, boundaryGap: false, axisLabel: { ...AXIS_LABEL_STYLE, hideOverlap: true } }],
-    yAxis: hasVol
-      ? [
-          { scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: AXIS_LABEL_STYLE },
-          { gridIndex: 1, splitNumber: 2, scale: true, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9, formatter: VOL_LABEL_FMT } },
-        ]
-      : [{ scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: AXIS_LABEL_STYLE }],
+    axisPointer: { link: [{ xAxisIndex: 'all' }], show: crosshairOn },
+    dataZoom: dataZoomOpt(layout.xAxisCount),
+    grid: layout.grids,
+    xAxis,
+    yAxis,
     series,
   }
 }
@@ -585,6 +883,17 @@ function gridRect(chart: ChartLike): GridRect | null {
     const grid = chart.getModel().getComponent('grid', 0)
     return grid.coordinateSystem.getRect()
   } catch { return null }
+}
+
+function getAllGridRects(chart: ChartLike): GridRect[] {
+  const r: GridRect[] = []
+  for (let i = 0; ; i++) {
+    try {
+      const g = chart.getModel().getComponent('grid', i) as { coordinateSystem: { getRect(): GridRect } }
+      r.push(g.coordinateSystem.getRect())
+    } catch { break }
+  }
+  return r
 }
 
 function toData(chart: ChartLike, px: [number, number]): [number, number] | null {
@@ -688,7 +997,30 @@ function renderGraphic(st: EngineState): void {
   if (!rectOrNull) return
   const rect: { x: number; y: number; width: number; height: number } = rectOrNull
 
-  const els: unknown[] = []
+  const allRects = getAllGridRects(chart)
+  const topY    = allRects[0]?.y ?? rect.y
+  const lastR   = allRects[allRects.length - 1] ?? rect
+  const bottomY = lastR.y + lastR.height
+
+  // Vline stops before the volume grid (volume is always last if present).
+  // Query the current option to find the Volume series and its xAxisIndex.
+  const vlineBottomY = (() => {
+    if (allRects.length <= 1) return bottomY
+    try {
+      const opt = (chart.getOption?.() ?? {}) as Record<string, unknown>
+      let series = opt.series
+      if (Array.isArray(series) && series.length > 0 && Array.isArray(series[0])) series = series[0]
+      if (!Array.isArray(series)) return bottomY
+      const volS = (series as Array<Record<string, unknown>>).find(s => s.name === 'Volume')
+      if (!volS || typeof volS.xAxisIndex !== 'number' || volS.xAxisIndex <= 0) return bottomY
+      const prev = allRects[volS.xAxisIndex - 1]
+      return prev ? prev.y + prev.height : bottomY
+    } catch { return bottomY }
+  })()
+
+  const els: unknown[]      = []
+  const vlineEls: unknown[] = []
+  const labelEls: unknown[] = []
 
   function addLine(
     x1: number, y1: number, x2: number, y2: number,
@@ -724,7 +1056,7 @@ function renderGraphic(st: EngineState): void {
     if (!p) return
     const stl: Record<string, unknown> = { stroke: style.stroke, lineWidth: style.lineWidth, opacity: style.opacity }
     if (dashed) stl.lineDash = [6, 4]
-    els.push({ id: `${id}:vline`, type: 'line', silent: true, shape: { x1: p[0], y1: rect.y, x2: p[0], y2: rect.y + rect.height }, style: stl })
+    vlineEls.push({ id: `${id}:vline`, type: 'line', silent: true, shape: { x1: p[0], y1: topY, x2: p[0], y2: vlineBottomY }, style: stl })
   }
 
   for (const a of st.annos) {
@@ -736,9 +1068,58 @@ function renderGraphic(st: EngineState): void {
       if (x1 != null && x2 != null) addLine(x1, a.y1, x2, a.y2, stl, false, sel, a.id, 'trend')
     } else if (a.type === 'hline') {
       addHLine(a.y, stl, false, a.id)
+      const midH = toData(chart, [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5])
+      if (midH) {
+        const pxH = toPx(chart, [midH[0], a.y])
+        if (pxH) {
+          const LH = 18, LW = 72
+          labelEls.push({
+            id: `${a.id}:hlabel`,
+            type: 'group',
+            x: rect.x - LW - 2,
+            y: Math.round(pxH[1] - LH / 2),
+            children: [
+              { type: 'rect', shape: { x: 0, y: 0, width: LW, height: LH, r: 3 }, style: { fill: 'rgba(15,23,42,0.95)', stroke: stl.stroke, lineWidth: 1 } },
+              { type: 'text', x: LW / 2, y: LH / 2, style: { text: a.y.toFixed(2), fill: '#e2e8f0', fontSize: 11, textAlign: 'center', textVerticalAlign: 'middle' } },
+            ],
+          })
+        }
+      }
     } else if (a.type === 'vline') {
       const x = resolveXCoord(a.x, st.xScale)
-      if (x != null) addVLine(x, stl, false, a.id)
+      if (x != null) {
+        const midV = toData(chart, [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5])
+        if (midV) {
+          const pxV = toPx(chart, [x, midV[1]])
+          if (pxV) {
+            const vstl: Record<string, unknown> = { stroke: stl.stroke, lineWidth: stl.lineWidth, opacity: stl.opacity }
+            const LH = 18, LW = 84, LGAP = 3
+            // Label sits just below the price chart — same position as original crosshair label
+            const labelY = rect.y + rect.height + 4
+
+            if (labelY < vlineBottomY) {
+              // Label falls within the vline span — draw two segments with a gap
+              vlineEls.push({ id: `${a.id}:vline_top`, type: 'line', silent: true, shape: { x1: pxV[0], y1: topY, x2: pxV[0], y2: labelY - LGAP }, style: vstl })
+              vlineEls.push({ id: `${a.id}:vline_bot`, type: 'line', silent: true, shape: { x1: pxV[0], y1: labelY + LH + LGAP, x2: pxV[0], y2: vlineBottomY }, style: vstl })
+            } else {
+              vlineEls.push({ id: `${a.id}:vline`, type: 'line', silent: true, shape: { x1: pxV[0], y1: topY, x2: pxV[0], y2: vlineBottomY }, style: vstl })
+            }
+
+            if (isXAnchor(a.x)) {
+              labelEls.push({
+                id: `${a.id}:vlabel`,
+                type: 'group',
+                x: Math.round(pxV[0] - LW / 2),
+                y: labelY,
+                children: [
+                  { type: 'rect', shape: { x: 0, y: 0, width: LW, height: LH, r: 3 }, style: { fill: 'rgba(15,23,42,0.95)', stroke: stl.stroke, lineWidth: 1 } },
+                  { type: 'text', x: LW / 2, y: LH / 2, style: { text: a.x.date, fill: '#e2e8f0', fontSize: 11, textAlign: 'center', textVerticalAlign: 'middle' } },
+                ],
+              })
+            }
+          }
+        }
+      }
     } else if (a.type === 'channel') {
       const x1 = resolveXCoord(a.x1, st.xScale)
       const x2 = resolveXCoord(a.x2, st.xScale)
@@ -784,27 +1165,35 @@ function renderGraphic(st: EngineState): void {
   chart.setOption(
     {
       graphic: {
-        elements: [{
-          id: '__ng_draw_layer__',
-          type: 'group',
-          x: 0, y: 0,
-          silent: true,
-          clipPath: { type: 'rect', shape: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } },
-          children: els,
-        }],
+        elements: [
+          {
+            id: '__ng_draw_layer__',
+            type: 'group',
+            x: 0, y: 0,
+            silent: true,
+            clipPath: { type: 'rect', shape: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } },
+            children: els,
+          },
+          {
+            id: '__ng_vline_layer__',
+            type: 'group',
+            x: 0, y: 0,
+            silent: true,
+            clipPath: { type: 'rect', shape: { x: rect.x, y: topY, width: rect.width, height: vlineBottomY - topY } },
+            children: vlineEls,
+          },
+          {
+            id: '__ng_label_layer__',
+            type: 'group',
+            x: 0, y: 0,
+            silent: true,
+            children: labelEls,
+          },
+        ],
       },
     },
     { lazyUpdate: true, replaceMerge: ['graphic'] },
   )
-}
-
-function applyCrosshair(st: EngineState): void {
-  if (st.crosshairOn) {
-    if (st._origTooltip) st.chart.setOption({ tooltip: deepClone(st._origTooltip) }, { lazyUpdate: true })
-    if (st._origAxisPointer) st.chart.setOption({ axisPointer: deepClone(st._origAxisPointer) }, { lazyUpdate: true })
-  } else {
-    st.chart.setOption({ tooltip: { show: false }, axisPointer: { link: [] } }, { lazyUpdate: true })
-  }
 }
 
 let _ctxMenu: HTMLDivElement | null = null
@@ -1150,13 +1539,22 @@ function InstrumentSearch({ instruments, selected, onAdd }: { instruments: Instr
 
 const INDICATOR_ITEMS = [
   ...SMA_PERIODS.map((p) => ({ key: `sma-${p}`, label: `SMA ${p}` })),
-  { key: 'bb', label: 'Bollinger Bands (20)' },
+  { key: 'bb',   label: 'Bollinger Bands (20)' },
+  { key: 'rsi',  label: 'RSI (14)' },
+  { key: 'macd', label: 'MACD (12,26,9)' },
 ]
 
-function IndicatorDropdown({ indicators, onChange }: { indicators: Set<string>; onChange: (key: string) => void }) {
+type ZoneLayerItem = { key: string; label: string; checked: boolean; onToggle: () => void; disabled?: boolean }
+
+function IndicatorDropdown({ indicators, onChange, zoneLayers }: {
+  indicators: Set<string>
+  onChange: (key: string) => void
+  zoneLayers?: ZoneLayerItem[]
+}) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const activeCount = INDICATOR_ITEMS.filter((i) => indicators.has(i.key)).length
+    + (zoneLayers?.filter((z) => z.checked).length ?? 0)
 
   return (
     <div ref={ref} className="relative">
@@ -1180,6 +1578,22 @@ function IndicatorDropdown({ indicators, onChange }: { indicators: Set<string>; 
               {item.label}
             </button>
           ))}
+          {zoneLayers && zoneLayers.length > 0 && (
+            <>
+              <div className="my-1 border-t border-white/10" />
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-white/30">Strefy wolumenowe</div>
+              {zoneLayers.map((item) => (
+                <button key={item.key} disabled={item.disabled}
+                  onMouseDown={(e) => { e.preventDefault(); if (!item.disabled) item.onToggle() }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors text-white/70 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed">
+                  <span className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${item.checked ? 'bg-emerald-600 border-emerald-500' : 'border-white/20'}`}>
+                    {item.checked && <Check className="w-2.5 h-2.5 text-white" />}
+                  </span>
+                  {item.label}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -1262,11 +1676,30 @@ type ChartPanelProps = {
   color: string
   candles?: CandleDay[]
   seriesMap?: Map<string, CandleDay[]>
+  volumeZones?: VolumeZonesResponse | null
+  volumeZoneOptions: VolumeZoneChartOptions
+  zoneLayers?: ZoneLayerItem[]
+  zoneControls?: ZoneControls
 }
 
-function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMap }: ChartPanelProps) {
+type ZoneControls = {
+  showZones: boolean
+  showProfile: boolean
+  singleSymbol: boolean
+  visibility: ZoneVisibility
+  setVisibility: (v: ZoneVisibility) => void
+  phaseVisibility: PhaseVisibility
+  setPhaseVisibility: (v: PhaseVisibility) => void
+  profileMode: VolumeProfileToggle
+  setProfileMode: (m: VolumeProfileToggle) => void
+  opacity: number
+  setOpacity: (o: number) => void
+}
+
+function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMap, volumeZones, volumeZoneOptions, zoneLayers, zoneControls }: ChartPanelProps) {
   const [interval, setIntervalState] = useState<AggInterval>('D')
   const [indicators, setIndicators] = useState<Set<string>>(new Set())
+  const [zoneDetailsOpen, setZoneDetailsOpen] = useState(false)
   const [drawMode, setDrawMode] = useState<DrawMode>('cursor')
   const [stage, setStage] = useState(0)
   const [crosshairOn, setCrosshairOn] = useState(true)
@@ -1312,12 +1745,12 @@ function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMa
 
   const option = useMemo(() => {
     if (aggCandles && chartType === 'candlestick') {
-      return buildCandlestickOption(sym, aggCandles, showVolume, indicators)
+      return buildCandlestickOption(sym, aggCandles, showVolume, indicators, volumeZones ?? null, volumeZoneOptions, crosshairOn)
     }
     const sm = aggSeriesMap ?? (aggCandles ? new Map([[sym, aggCandles]]) : null)
     if (!sm) return null
-    return buildLineOption(sm, showVolume, indicators)
-  }, [aggCandles, aggSeriesMap, chartType, showVolume, indicators, sym])
+    return buildLineOption(sm, showVolume, indicators, crosshairOn)
+  }, [aggCandles, aggSeriesMap, chartType, showVolume, indicators, sym, volumeZones, volumeZoneOptions, crosshairOn])
 
   const setMode = useCallback((mode: DrawMode) => {
     setDrawMode(mode)
@@ -1331,11 +1764,14 @@ function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMa
   }, [])
 
   const toggleCrosshair = useCallback(() => {
-    const eng = engineRef.current
-    if (!eng) return
-    eng.crosshairOn = !eng.crosshairOn
-    setCrosshairOn(eng.crosshairOn)
-    applyCrosshair(eng)
+    // Crosshair drives the built option (tooltip + axis pointer + overlay
+    // hoverability), so toggling state triggers a rebuild.
+    setCrosshairOn((v) => {
+      const next = !v
+      const eng = engineRef.current
+      if (eng) eng.crosshairOn = next
+      return next
+    })
   }, [])
 
   const handleUndo = useCallback(() => {
@@ -1409,7 +1845,63 @@ function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMa
           <span className="text-sm font-semibold text-white">{sym !== 'combined' ? sym : 'Porównanie'}</span>
           {name && name !== sym && <span className="text-xs text-white/40 truncate max-w-[200px]">{name}</span>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Volume-zone controls (left of D/W/M) */}
+          {chartType === 'candlestick' && zoneControls?.showZones && zoneControls.singleSymbol && (
+            <>
+              <div className="flex rounded-lg overflow-hidden border border-white/10" role="group" aria-label="Widoczność stref">
+                {([['all', 'Wszystkie'], ['significant', 'Istotne'], ['active', 'Aktywne']] as const).map(([m, l]) => (
+                  <button key={m} type="button" aria-pressed={zoneControls.visibility === m}
+                    onClick={() => zoneControls.setVisibility(m)}
+                    className={`px-2 py-1 text-[11px] font-medium transition-colors ${zoneControls.visibility === m ? 'bg-emerald-700 text-white' : 'text-white/50 hover:text-white hover:bg-white/5'}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+              <div className="flex rounded-lg overflow-hidden border border-white/10" role="group" aria-label="Widoczność faz A/D">
+                {([
+                  ['significant', 'A/D historyczne'],
+                  ['current', 'A/D bieżąca'],
+                  ['debug', 'A/D debug'],
+                ] as const).map(([m, l]) => (
+                  <button key={m} type="button" aria-pressed={zoneControls.phaseVisibility === m}
+                    onClick={() => zoneControls.setPhaseVisibility(m)}
+                    className={`px-2 py-1 text-[11px] font-medium transition-colors ${zoneControls.phaseVisibility === m ? 'bg-cyan-700 text-white' : 'text-white/50 hover:text-white hover:bg-white/5'}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+              {zoneControls.showProfile && (
+                <div className="flex rounded-lg overflow-hidden border border-white/10" role="group" aria-label="Tryb profilu wolumenowego">
+                  {([
+                    ['raw', 'Est. wolumen'],
+                    ['active', 'Aktywność'],
+                    ['structural', 'Akceptacja'],
+                  ] as const).map(([m, l]) => (
+                    <button key={m} type="button" aria-pressed={zoneControls.profileMode === m}
+                      onClick={() => zoneControls.setProfileMode(m)}
+                      className={`px-2 py-1 text-[11px] font-medium transition-colors ${zoneControls.profileMode === m ? 'bg-slate-700 text-white' : 'text-white/50 hover:text-white hover:bg-white/5'}`}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {zoneControls.showProfile && (
+                <label className="flex items-center gap-1 text-[11px] text-white/40" title="Krycie profilu i stref">
+                  <span>Krycie</span>
+                  <input type="range" min="0.08" max="0.34" step="0.02" value={zoneControls.opacity}
+                    onChange={(e) => zoneControls.setOpacity(Number(e.target.value))}
+                    className="w-16 accent-emerald-500" aria-label="Krycie profilu i stref" />
+                </label>
+              )}
+              {volumeZones && (
+                <button onClick={() => setZoneDetailsOpen(true)}
+                  className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded-lg border border-white/10 bg-slate-900/40 text-white/60 hover:text-white hover:border-white/20 transition-colors">
+                  <Info className="w-3.5 h-3.5" />Opis
+                </button>
+              )}
+            </>
+          )}
           {/* Interval D/W/M */}
           <div className="flex rounded-lg overflow-hidden border border-white/10">
             {(['D', 'W', 'M'] as AggInterval[]).map((iv) => (
@@ -1420,7 +1912,7 @@ function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMa
             ))}
           </div>
           {/* Indicators dropdown */}
-          <IndicatorDropdown indicators={indicators} onChange={toggleIndicator} />
+          <IndicatorDropdown indicators={indicators} onChange={toggleIndicator} zoneLayers={zoneLayers} />
           {/* Candle count */}
           {aggCount > 0 && <span className="text-xs text-white/25">{aggCount} {intervalLabel}</span>}
           {/* Fullscreen toggle */}
@@ -1454,7 +1946,102 @@ function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMa
           />
         </div>
       </div>
+      {volumeZones && chartType === 'candlestick' && (
+        <ZoneDetailsDialog
+          open={zoneDetailsOpen}
+          onOpenChange={setZoneDetailsOpen}
+          vz={volumeZones}
+          profileMode={volumeZoneOptions.profileMode ?? 'raw'}
+        />
+      )}
     </div>
+  )
+}
+
+function ZoneDetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex justify-between gap-4 py-1 border-b border-white/5">
+      <span className="text-white/40">{label}</span>
+      <span className="text-white/80 text-right">{value}</span>
+    </div>
+  )
+}
+
+function ZoneDetailsDialog({ open, onOpenChange, vz, profileMode }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  vz: VolumeZonesResponse
+  profileMode: VolumeProfileToggle
+}) {
+  const az = vz.active_zone
+  const meta = profileMode === 'active' ? vz.active_profile_metadata : vz.structural_profile_metadata
+  const sourceLabel = (s: string | null | undefined) =>
+    s === 'BOTH' ? 'Strukturalny + aktywny' : s === 'STRUCTURAL' ? 'Strukturalny' : s === 'ACTIVE' ? 'Aktywny' : '—'
+  const Row = ZoneDetailRow
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-slate-900/95 backdrop-blur-md border-white/10 text-white sm:max-w-md max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="text-white text-base">
+            {az ? `Strefa ${az.price_low.toFixed(2)}–${az.price_high.toFixed(2)}` : 'Brak aktywnej strefy'}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="text-xs">
+          {az ? (
+            <>
+              <Row label="Bieżący stan" value={stateLabel(vz.current_state.state)} />
+              <Row label="Status epizodu" value={lifecycleLabel(az.lifecycle_status)} />
+              {vz.current_state.price_relation && <Row label="Relacja ceny" value={priceRelationLabel(vz.current_state.price_relation)} />}
+              {vz.current_state.current_market_role && <Row label="Rola" value={marketRoleLabel(vz.current_state.current_market_role)} />}
+              <Row label="Historyczny podpis" value={behaviorLabel(az.episode_signature ?? az.behavior)} />
+              <Row label="Źródło profilu" value={sourceLabel(az.source_profile)} />
+              <Row label="Spójność" value={`${Math.round(az.consistency * 100)}%`} />
+              <Row label="Aktywność" value={`${az.activity_equivalent_sessions.toFixed(1)} sesji`} />
+              {az.confirmation_price != null && <Row label="Potwierdzenie" value={az.confirmation_price.toFixed(2)} />}
+              {az.invalidation_price != null && <Row label="Unieważnienie" value={az.invalidation_price.toFixed(2)} />}
+              {az.current_free_float_turnover != null && <Row label="Obrót FF" value={`${az.current_free_float_turnover.toFixed(2)}%`} />}
+              <Row label="Wykryta" value={az.first_detected_at} />
+              {az.quality_gate === 'FAILED' ? (
+                <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-200/70">
+                  Wynik kierunkowy: {az.raw_directional_score ?? az.evidence_score}/100 · jakość próbki niewystarczająca
+                  {az.quality_fail_reasons && az.quality_fail_reasons.length > 0 && (
+                    <ul className="mt-1 list-disc list-inside text-amber-200/50">
+                      {az.quality_fail_reasons.map((reason) => <li key={reason}>{qualityFailLabel(reason)}</li>)}
+                    </ul>
+                  )}
+                </div>
+              ) : (
+                <Row label="Siła dowodów" value={`${az.raw_directional_score ?? az.evidence_score}/100`} />
+              )}
+              {az.evidence.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {az.evidence.slice(0, 6).map((item) => (
+                    <span key={`${item.code}:${item.value}`} className="rounded border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/55">
+                      {evidenceLabel(item.code)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <Row label="Bieżący stan" value={stateLabel(vz.current_state.state)} />
+              {vz.nearest_zone_above && <Row label="Najbliższy opór" value={`${vz.nearest_zone_above.price_low.toFixed(2)}–${vz.nearest_zone_above.price_high.toFixed(2)} (${lifecycleLabel(vz.nearest_zone_above.lifecycle_status)})`} />}
+              {vz.nearest_zone_below && <Row label="Najbliższe wsparcie" value={`${vz.nearest_zone_below.price_low.toFixed(2)}–${vz.nearest_zone_below.price_high.toFixed(2)} (${lifecycleLabel(vz.nearest_zone_below.lifecycle_status)})`} />}
+            </>
+          )}
+          <Row label="Free float" value={vz.data_quality.current_free_float_used && vz.data_quality.current_free_float_pct != null
+            ? `${vz.data_quality.current_free_float_pct.toFixed(2)}%`
+            : 'Brak w snapshotach raportu'} />
+          <p className="mt-3 text-[10px] leading-relaxed text-white/30">
+            Profil: {VOLUME_PROFILE_MODE_LABELS[profileMode]}
+            {meta?.bin_count != null ? ` · ${meta.bin_count} binów` : ''}
+            {meta?.history_start && meta?.history_end ? ` · ${meta.history_start}–${meta.history_end}` : ''}
+            {' · '}alokacja: zakres dzienny low–high. Wolumen po cenie jest estymowany na podstawie dziennych świec OHLCV.
+          </p>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1609,6 +2196,15 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
   const [customTo, setCustomTo]     = useState('')
   const [syncing, setSyncing]       = useState(false)
   const [seriesData, setSeriesData] = useState<Map<string, SeriesData>>(new Map())
+  const [volumeZonesBySymbol, setVolumeZonesBySymbol] = useState<Map<string, VolumeZonesResponse>>(new Map())
+  const [volumeZoneError, setVolumeZoneError] = useState<string | null>(null)
+  // Volume-zone indicators are opt-in (off when a chart opens).
+  const [showVolumeZones, setShowVolumeZones] = useState(false)
+  const [showZoneProfile, setShowZoneProfile] = useState(false)
+  const [zoneProfileOpacity, setZoneProfileOpacity] = useState(0.14)
+  const [profileMode, setProfileMode] = useState<VolumeProfileToggle>('raw')
+  const [zoneVisibility, setZoneVisibility] = useState<ZoneVisibility>('significant')
+  const [phaseVisibility, setPhaseVisibility] = useState<PhaseVisibility>('significant')
   const [status, setStatus]         = useState<string | null>(null)
   const [showCsvModal, setShowCsvModal] = useState(false)
 
@@ -1622,6 +2218,7 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
   const removeSymbol = (sym: string) => {
     setSelectedSymbols((p) => p.filter((s) => s !== sym))
     setSeriesData((p) => { const m = new Map(p); m.delete(sym); return m })
+    setVolumeZonesBySymbol((p) => { const m = new Map(p); m.delete(sym); return m })
   }
 
   const getRange = useCallback((): { from: string | null; to: string | null } => {
@@ -1638,11 +2235,91 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
     setShowCsvModal(true)
   }, [selectedSymbols])
 
+  const volumeZoneOptions = useMemo<VolumeZoneChartOptions>(() => ({
+    showZones: showVolumeZones,
+    showProfile: showVolumeZones && showZoneProfile,
+    profileOpacity: zoneProfileOpacity,
+    profileMode,
+    zoneVisibility,
+    phaseVisibility,
+    showPhases: showVolumeZones && phaseVisibility !== 'off',
+  }), [showVolumeZones, showZoneProfile, zoneProfileOpacity, profileMode, zoneVisibility, phaseVisibility])
+
+  // Volume-zone layers are toggled from the Wskaźniki dropdown (per chart).
+  const singleSymbol = selectedSymbols.length === 1
+
+  const zoneControls = useMemo<ZoneControls>(() => ({
+    showZones: showVolumeZones,
+    showProfile: showVolumeZones && showZoneProfile,
+    singleSymbol,
+    visibility: zoneVisibility,
+    setVisibility: setZoneVisibility,
+    phaseVisibility,
+    setPhaseVisibility,
+    profileMode,
+    setProfileMode,
+    opacity: zoneProfileOpacity,
+    setOpacity: setZoneProfileOpacity,
+  }), [showVolumeZones, showZoneProfile, singleSymbol, zoneVisibility, phaseVisibility, profileMode, zoneProfileOpacity])
+
+  const fetchVolumeZonesForSymbol = useCallback(async (sym: string, from: string | null, to: string | null): Promise<VolumeZonesResponse | null> => {
+    const qs = new URLSearchParams({
+      mic,
+      symbol: sym,
+      // Full page chart: return every detected zone (history); the backend still
+      // marks up to three via highlighted_zone_ids.
+      mode: 'full',
+      include_timeline: 'true',
+      max_zones: '3',
+    })
+    if (from) qs.set('date_from', from)
+    if (to) qs.set('date_to', to)
+
+    try {
+      const res = await fetch(`/api/stock/analysis/volume-zones?${qs.toString()}`, {
+        headers: { Accept: 'application/json' },
+      })
+      const payload = await res.json().catch(() => ({})) as VolumeZonesResponse & { error?: string }
+      if (!res.ok) {
+        const msg = payload.error ?? 'Nie udało się policzyć stref wolumenowych'
+        setVolumeZoneError(msg)
+        toast.error(`${sym}: ${msg}`)
+        return null
+      }
+      setVolumeZoneError(null)
+      return payload
+    } catch {
+      const msg = 'Nie można połączyć się z analizą stref wolumenowych'
+      setVolumeZoneError(msg)
+      toast.error(`${sym}: ${msg}`)
+      return null
+    }
+  }, [mic])
+
+  // Zones are opt-in; fetch them lazily from the toggle (event handler, not an
+  // effect) the first time the layer is enabled for an already-loaded symbol.
+  const ensureZonesFetched = useCallback(() => {
+    if (selectedSymbols.length !== 1) return
+    const sym = selectedSymbols[0]!
+    if (volumeZonesBySymbol.has(sym) || !seriesData.has(sym)) return
+    const { from, to } = getRange()
+    void fetchVolumeZonesForSymbol(sym, from, to).then((analysis) => {
+      if (analysis) setVolumeZonesBySymbol((prev) => new Map(prev).set(sym, analysis))
+    })
+  }, [selectedSymbols, volumeZonesBySymbol, seriesData, getRange, fetchVolumeZonesForSymbol])
+
+  const zoneLayers = useMemo<ZoneLayerItem[]>(() => [
+    { key: 'vz-zones', label: 'Strefa wolumenowa', checked: showVolumeZones, disabled: !singleSymbol, onToggle: () => { if (!showVolumeZones) ensureZonesFetched(); setShowVolumeZones((v) => !v) } },
+    { key: 'vz-profile', label: 'Profil ceny', checked: showZoneProfile, disabled: !singleSymbol || !showVolumeZones, onToggle: () => setShowZoneProfile((v) => !v) },
+    { key: 'vz-phases', label: 'Fazy A/D', checked: phaseVisibility !== 'off', disabled: !singleSymbol || !showVolumeZones, onToggle: () => setPhaseVisibility((v) => v === 'off' ? 'significant' : 'off') },
+  ], [showVolumeZones, showZoneProfile, phaseVisibility, singleSymbol, ensureZonesFetched])
+
   const syncAndRender = useCallback(async () => {
     if (!selectedSymbols.length) { toast.warning('Wybierz przynajmniej jeden instrument'); return }
     setSyncing(true); setStatus('Synchronizacja danych…')
     const { from, to } = getRange()
     const newData = new Map<string, SeriesData>()
+    const newVolumeZones = new Map<string, VolumeZonesResponse>()
 
     for (const sym of selectedSymbols) {
       setStatus(`Pobieranie: ${sym}…`)
@@ -1665,10 +2342,21 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
       }
     }
 
+    const pointCount = [...newData.values()].reduce((a, d) => a + d.candles.length, 0)
     setSeriesData(newData)
+    setVolumeZonesBySymbol(new Map())
     setSyncing(false)
-    setStatus(newData.size > 0 ? `Gotowe — ${[...newData.values()].reduce((a, d) => a + d.candles.length, 0)} punktów` : 'Brak danych')
-  }, [selectedSymbols, getRange])
+    setStatus(newData.size > 0 ? `Dane gotowe — ${pointCount} punktów` : 'Brak danych')
+
+    if (showVolumeZones && newData.size === 1 && selectedSymbols.length === 1) {
+      const sym = selectedSymbols[0]!
+      setStatus(`Dane gotowe — analiza stref: ${sym}…`)
+      const analysis = await fetchVolumeZonesForSymbol(sym, from, to)
+      if (analysis) newVolumeZones.set(sym, analysis)
+      setVolumeZonesBySymbol(newVolumeZones)
+      setStatus(newData.size > 0 ? `Gotowe — ${pointCount} punktów` : 'Brak danych')
+    }
+  }, [selectedSymbols, getRange, fetchVolumeZonesForSymbol, showVolumeZones])
 
   const stableSyncRef = useRef<() => Promise<void>>(async () => {})
 
@@ -1691,7 +2379,11 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
     setSeriesData(new Map([[result.symbol, { result, candles }]]))
     setSelectedSymbols([result.symbol])
     setStatus(`Zaimportowano ${result.upserted_rows} wierszy dla ${result.symbol}`)
-  }, [])
+    const { from, to } = getRange()
+    void fetchVolumeZonesForSymbol(result.symbol, from, to).then((analysis) => {
+      setVolumeZonesBySymbol(analysis ? new Map([[result.symbol, analysis]]) : new Map())
+    })
+  }, [fetchVolumeZonesForSymbol, getRange])
 
   const effectiveChartType: ChartType =
     chartType === 'candlestick' && layout === 'combined' && selectedSymbols.length > 1 ? 'line' : chartType
@@ -1812,6 +2504,11 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
               Tryb nakładany ze świecami jest dostępny tylko dla jednego symbolu — przełączono na liniowy.
             </p>
           )}
+          {volumeZoneError && (
+            <p className="text-xs text-amber-300/80 bg-amber-500/5 border border-amber-500/10 rounded-lg px-3 py-1.5">
+              {volumeZoneError}
+            </p>
+          )}
         </div>
 
         {/* Empty state */}
@@ -1827,6 +2524,10 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
         {chartEntries && chartEntries.map(({ key, sym, name, candles, seriesMap }) => (
           <ChartPanel key={key} sym={sym} name={name} chartType={effectiveChartType}
             showVolume={showVolume} color={colorOf(sym)} candles={candles} seriesMap={seriesMap}
+            volumeZones={sym !== 'combined' ? volumeZonesBySymbol.get(sym) ?? null : null}
+            volumeZoneOptions={volumeZoneOptions}
+            zoneLayers={zoneLayers}
+            zoneControls={zoneControls}
           />
         ))}
       </div>

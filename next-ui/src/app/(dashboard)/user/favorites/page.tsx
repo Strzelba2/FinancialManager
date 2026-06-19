@@ -3,7 +3,7 @@ import { syncUser, listFavoriteLists, listFavoriteItemsWithAlerts } from '@/lib/
 import { saveWalletUserId } from '@/lib/api/session'
 import { getQuotesBulk } from '@/lib/api/stock'
 import { FavoritesPage } from '@/features/wallet/components/FavoritesPage'
-import type { FavoriteItemRow } from '@/app/api/wallet/favorites/[id]/route'
+import { resolveFavoriteName, type FavoriteItemRow } from '@/app/api/wallet/favorites/[id]/route'
 
 export default async function FavoritesRoute() {
   const headerStore = await headers()
@@ -48,7 +48,7 @@ export default async function FavoritesRoute() {
     const bulkResults = await Promise.all(
       [...micGroups.keys()].map(async (mic) => ({ mic, data: await getQuotesBulk(mic) }))
     )
-    const quoteMap = new Map<string, { last_price_fmt?: string | null; last_price?: string | number | null; change_pct?: string | number | null; change_pct_fmt?: string | null; volume?: number | null; last_trade_date_fmt?: string | null; last_trade_time_fmt?: string | null }>()
+    const quoteMap = new Map<string, { last_price_fmt?: string | null; last_price?: string | number | null; change_pct?: string | number | null; change_pct_fmt?: string | null; volume?: number | null; last_trade_date_fmt?: string | null; last_trade_time_fmt?: string | null; name?: string | null }>()
     for (const { data: bd } of bulkResults) {
       for (const [sym, q] of Object.entries(bd)) {
         quoteMap.set(sym.toUpperCase(), q)
@@ -61,7 +61,7 @@ export default async function FavoritesRoute() {
       const al = it.alert ?? null
       return {
         symbol: sym || '—',
-        name: (it.name ?? '').trim() || '—',
+        name: resolveFavoriteName(sym, it.name, q?.name),
         mic: (it.mic ?? 'XWAR').trim(),
         price: q?.last_price_fmt ?? (q?.last_price != null ? String(q.last_price) : null),
         changePct: q?.change_pct != null ? Number(q.change_pct) : null,

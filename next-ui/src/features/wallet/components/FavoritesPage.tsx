@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import {
   Search, RefreshCw, Plus, Trash2, Bell, BellOff,
   TrendingUp, TrendingDown, MoreVertical, X, AlertCircle,
-  ChevronUp, ChevronDown as ChevdownIcon, Minus, FileText,
+  ChevronUp, ChevronDown as ChevdownIcon, Minus, FileText, BarChart2,
 } from 'lucide-react'
 import type { FavoriteItemRow } from '@/app/api/wallet/favorites/[id]/route'
 import type { FavoriteList } from '@/lib/api/wallet'
@@ -557,6 +557,17 @@ export function FavoritesPage({ initialLists, initialListId, initialItems }: Pro
               <AlertCircle className="w-3.5 h-3.5" />
             )}
             {actionMenu.alert ? 'Edytuj alert' : 'Dodaj alert'}
+          </button>
+          <button
+            onClick={() => {
+              const qs = new URLSearchParams({ symbol: actionMenu.symbol })
+              router.push(`/stock/charts/${actionMenu.mic}?${qs.toString()}`)
+              setActionMenu(null)
+            }}
+            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+          >
+            <BarChart2 className="w-3.5 h-3.5" />
+            Wykresy
           </button>
           {actionMenu.mic !== 'STCM' && (
             <button

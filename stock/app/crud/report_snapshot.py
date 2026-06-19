@@ -72,6 +72,27 @@ async def list_report_snapshots(
     return list(res.scalars().all())
 
 
+async def get_latest_ready_report_ai_snapshot(
+    session: AsyncSession,
+    instrument_id: uuid.UUID,
+    asset_class: ReportAssetClass,
+    schema_version: int,
+) -> Optional[ReportAiSnapshot]:
+    stmt = (
+        select(ReportAiSnapshot)
+        .where(
+            ReportAiSnapshot.instrument_id == instrument_id,
+            ReportAiSnapshot.asset_class == asset_class,
+            ReportAiSnapshot.schema_version == schema_version,
+            ReportAiSnapshot.status == "ready",
+        )
+        .order_by(ReportAiSnapshot.generated_at.desc())
+        .limit(1)
+    )
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
 async def upsert_report_ai_snapshot(
     session: AsyncSession,
     instrument_id: uuid.UUID,

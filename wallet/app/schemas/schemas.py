@@ -17,7 +17,7 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
-    Q2, Q2NonNeg, Q10Opt, Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt
+    Q2, Q2NonNeg, Q3, Q3OptNonNeg, Q10Opt, Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt
 )
 
 from app.models.enums import (
@@ -177,7 +177,7 @@ class BrokerageHistoryImportRow(BaseModel):
     instrument_name: Optional[str] = None
     event_kind: Optional[BrokerageEventKind] = None
     quantity: Optional[Q2] = None
-    price: Optional[Q2] = None
+    price: Optional[Q3] = None
     split_ratio: Q10Opt = None
     review_reason: Optional[str] = None
 
@@ -208,7 +208,7 @@ class BrokerageEventUpdate(PartialUpdateMixin):
     
     kind: Optional[BrokerageEventKind] = None
     quantity: Optional[Q2] = None
-    price: Optional[Q2] = None
+    price: Optional[Q3] = None
     currency: Optional[Currency] = None
     split_ratio: Q10Opt = None
     note: NoneIfEmpty = None
@@ -269,8 +269,8 @@ class HoldingRead(HoldingBase, UUIDMixin, TimestampMixin):
 class HoldingUpdate(PartialUpdateMixin):
 
     quantity: Q2OptNonNeg = None
-    avg_cost: Q2OptNonNeg = None
-    
+    avg_cost: Q3OptNonNeg = None
+
     __update_require_any__ = {"quantity", "avg_cost"}
     
     

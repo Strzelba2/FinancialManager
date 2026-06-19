@@ -20,6 +20,8 @@ from tests.helpers.http import wait_for_response
             [
                 "/wallet/create/wallet",
                 "/wallet/accounts",
+                "/wallet/goals/upsert",
+                "/wallet/{wallet_id}/goals/all",
                 "/wallet/brokerage/event",
                 "/wallet/brokerage/events/import",
                 "/wallet/brokerage/history/import",
@@ -36,6 +38,7 @@ from tests.helpers.http import wait_for_response
                 "/stock/instruments/resolve",
                 "/stock/instruments/options",
                 "/stock/quotes/latest/bulk",
+                "/stock/analysis/{mic}/{symbol}/volume-zones",
                 "/stock/ingest/start_manual",
                 "/stock/ingest/status",
             ],

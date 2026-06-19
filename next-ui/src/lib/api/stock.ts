@@ -332,6 +332,299 @@ export type CandleDay = {
   low: number
   close: number
   volume: number | null
+  // Set by candle aggregation (weekly/monthly): the daily date range the
+  // aggregated bucket covers. Absent for daily candles.
+  period_start?: string
+  period_end?: string
+}
+
+export type VolumeZoneEvidenceDirection = 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL'
+export type VolumeZoneBehavior =
+  | 'DEMAND_ABSORPTION_PROXY'
+  | 'SUPPLY_ABSORPTION_PROXY'
+  | 'NEUTRAL_LIQUIDITY'
+  | 'INSUFFICIENT_DIRECTIONAL_EVIDENCE'
+  | 'BROAD_NEUTRAL_LIQUIDITY'
+export type VolumeZoneStatus = 'ACTIVE' | 'CONFIRMED' | 'INVALIDATED' | 'DORMANT' | 'NEUTRAL'
+export type VolumeZoneLifecycleStatus =
+  | 'CANDIDATE'
+  | 'ACTIVE'
+  | 'CONFIRMED'
+  | 'INVALIDATED'
+  | 'CLOSED'
+export type VolumeZoneMarketRole =
+  | 'ACTIVE_DEMAND'
+  | 'ACTIVE_SUPPLY'
+  | 'FORMER_DEMAND_NOW_SUPPLY'
+  | 'FORMER_SUPPLY_NOW_DEMAND'
+  | 'HISTORICAL_SUPPORT'
+  | 'HISTORICAL_RESISTANCE'
+  | 'NEUTRAL_LIQUIDITY'
+export type VolumeZonePriceRelation =
+  | 'INSIDE_ZONE'
+  | 'ABOVE_ZONE'
+  | 'BELOW_ZONE'
+  | 'APPROACHING_FROM_ABOVE'
+  | 'APPROACHING_FROM_BELOW'
+  | 'RETESTING_FROM_ABOVE'
+  | 'RETESTING_FROM_BELOW'
+  | 'BROKEN_UP'
+  | 'BROKEN_DOWN'
+export type VolumeZoneQualityGate = 'PASSED' | 'FAILED'
+export type VolumeZoneSelectionReason =
+  | 'INSIDE_ZONE'
+  | 'WITHIN_ATR_DISTANCE'
+  | 'RECENT_CONTACT'
+  | 'INSIDE_AND_RECENT'
+export type VolumeZoneDisplayRole =
+  | 'ACTIVE'
+  | 'NEAREST_DEMAND'
+  | 'NEAREST_SUPPLY'
+  | 'NEAREST_SUPPORT'
+  | 'NEAREST_RESISTANCE'
+  | 'STRONGEST_STRUCTURAL'
+export type VolumeProfileMode = 'STRUCTURAL' | 'ACTIVE'
+export type VolumeProfileWeighting = 'TIME_DECAY' | 'ACTIVITY_NORMALIZED'
+export type VolumeZoneSourceProfile = 'STRUCTURAL' | 'ACTIVE' | 'BOTH'
+export type DirectionalPhaseType = 'ACCUMULATION' | 'DISTRIBUTION'
+export type DirectionalPhaseStatus = 'CANDIDATE' | 'ACTIVE' | 'CONFIRMED' | 'INVALIDATED' | 'CLOSED'
+
+export type DirectionalPhase = {
+  phase_id: string
+  phase: DirectionalPhaseType
+  estimated_start_at?: string | null
+  base_end_at?: string | null
+  candidate_at: string
+  active_at: string | null
+  ended_at: string
+  confirmed_at?: string | null
+  invalidated_at?: string | null
+  price_low: number
+  price_high: number
+  center_price: number
+  average_balance: number
+  peak_balance: number
+  cumulative_evidence: number
+  session_count: number
+  evidence_score: number
+  status: DirectionalPhaseStatus
+  confirmation_price: number | null
+  invalidation_price: number | null
+  linked_zone_ids: string[]
+  setup_score?: number | null
+  historical_outcome_score?: number | null
+  subsequent_return_20?: number | null
+  subsequent_return_60?: number | null
+  maximum_favorable_excursion?: number | null
+  maximum_adverse_excursion?: number | null
+  expected_direction_return?: number | null
+  opposite_move_penalty?: number | null
+  outcome_lookahead_sessions?: number | null
+  significance_score?: number | null
+}
+export type VolumeZoneState =
+  | 'NEUTRAL'
+  | 'ACCUMULATION_CANDIDATE'
+  | 'ACCUMULATION_ACTIVE'
+  | 'MARKUP'
+  | 'FAILED_ACCUMULATION'
+  | 'REACCUMULATION_CANDIDATE'
+  | 'REACCUMULATION_ACTIVE'
+  | 'DISTRIBUTION_CANDIDATE'
+  | 'DISTRIBUTION_ACTIVE'
+  | 'MARKDOWN'
+  | 'FAILED_DISTRIBUTION'
+  | 'REDISTRIBUTION_CANDIDATE'
+  | 'REDISTRIBUTION_ACTIVE'
+export type VolumeZonesMode = 'summary' | 'full' | 'backtest'
+
+export type VolumeZoneEvidence = {
+  code: string
+  value: number | string
+  direction: VolumeZoneEvidenceDirection
+}
+
+export type VolumeZoneEpisode = {
+  episode_id: string
+  zone_id: string
+  estimated_start_date: string
+  first_detected_at: string
+  last_active_at: string
+  direction_assigned_at: string | null
+  confirmed_at: string | null
+  invalidated_at: string | null
+  effective_sessions: number
+  session_count: number
+  active_weeks: number
+  allocated_volume: number
+  weighted_volume: number
+  activity_equivalent_sessions: number
+  demand_absorption_evidence: number
+  supply_absorption_evidence: number
+  evidence_balance: number
+  consistency: number
+  direction_label: string
+  evidence_score: number
+  confidence: 'high' | 'medium' | 'low'
+  status: VolumeZoneStatus
+  confirmation_price: number | null
+  invalidation_price: number | null
+  evidence: VolumeZoneEvidence[]
+}
+
+export type VolumeZone = {
+  zone_id: string
+  price_low: number
+  price_high: number
+  center_price: number
+  estimated_start_date: string
+  first_detected_at: string
+  last_active_at: string
+  raw_volume: number
+  weighted_volume: number
+  activity_score: number
+  activity_equivalent_sessions: number
+  effective_sessions: number
+  active_weeks: number
+  dominant_session_share: number
+  freshness_score: number
+  status: VolumeZoneStatus
+  behavior: VolumeZoneBehavior
+  direction_label: string
+  evidence_score: number
+  evidence_balance: number
+  consistency: number
+  confirmation_price: number | null
+  invalidation_price: number | null
+  current_free_float_turnover: number | null
+  current_free_float_turnover_is_estimate: boolean
+  evidence: VolumeZoneEvidence[]
+  episodes: VolumeZoneEpisode[]
+  // Identity / lifecycle (additive; backend may omit on older payloads).
+  detected_signature?: VolumeZoneBehavior | null
+  episode_signature?: VolumeZoneBehavior | null
+  directional_classification_allowed?: boolean
+  lifecycle_status?: VolumeZoneLifecycleStatus | null
+  raw_directional_score?: number | null
+  quality_gate?: VolumeZoneQualityGate | null
+  quality_fail_reasons?: string[]
+  display_classification?: string | null
+  display_priority?: number | null
+  display_role?: VolumeZoneDisplayRole | null
+  current_market_role?: VolumeZoneMarketRole | null
+  source_profile?: VolumeZoneSourceProfile | null
+  structural_strength?: number | null
+  active_strength?: number | null
+  current_relevance?: number | null
+  top_session_dates?: string[]
+}
+
+export type VolumeProfileBin = {
+  price_low: number
+  price_high: number
+  center_price: number
+  raw_volume: number
+  weighted_volume: number
+  activity_score: number
+  contributing_sessions?: number
+}
+
+export type VolumeProfileMetadata = {
+  mode: VolumeProfileMode
+  weighting: VolumeProfileWeighting
+  half_life_sessions: number | null
+  lookback_sessions: number | null
+  bin_count: number
+  bin_strategy: string
+  relative_volume_window: number
+  history_start: string | null
+  history_end: string | null
+}
+
+export type VolumeZonesResponse = {
+  symbol: string
+  mic: string
+  as_of: string
+  calculation_version: string
+  configuration_version: string
+  data_quality: {
+    ohlcv_interval: '1d'
+    historical_free_float_available: boolean
+    current_free_float_used: boolean
+    current_free_float_pct: number | null
+    current_free_float_as_of: string | null
+    current_float_shares: number | null
+    current_free_float_source: string | null
+    confidence: 'high' | 'medium' | 'low'
+    input_rows: number
+    valid_rows: number
+    excluded_rows: number
+    duplicate_dates: string[]
+    first_date: string | null
+    last_date: string | null
+    warnings: string[]
+  }
+  current_state: {
+    state: VolumeZoneState
+    evidence_score: number
+    detected_at: string | null
+    confirmation_price: number | null
+    invalidation_price: number | null
+    transition_reasons: string[]
+    active_zone_id: string | null
+    active_episode_id: string | null
+    current_market_role?: VolumeZoneMarketRole | null
+    price_relation?: VolumeZonePriceRelation | null
+    selection_reason?: VolumeZoneSelectionReason | null
+    distance_to_zone_percent?: number | null
+    distance_to_zone_atr?: number | null
+    sessions_since_last_contact?: number | null
+    confirmation_hold_sessions?: number | null
+    invalidation_hold_sessions?: number | null
+  }
+  active_zone: VolumeZone | null
+  zones: VolumeZone[]
+  profile: VolumeProfileBin[]
+  structural_profile?: VolumeProfileBin[]
+  structural_profile_metadata?: VolumeProfileMetadata | null
+  active_profile_metadata?: VolumeProfileMetadata | null
+  nearest_zone_above?: VolumeZone | null
+  nearest_zone_below?: VolumeZone | null
+  highlighted_zone_ids?: string[]
+  directional_episodes?: DirectionalPhase[]
+  resolved_directional_episodes?: DirectionalPhase[]
+  major_directional_phases?: DirectionalPhase[]
+  timeline: Array<{
+    date: string
+    state: VolumeZoneState
+    evidence_score: number
+    evidence_balance: number | null
+    active_zone_id: string | null
+    active_episode_id: string | null
+    confirmation_price: number | null
+    invalidation_price: number | null
+    transition_reasons: string[]
+  }>
+  backtest: {
+    evaluated_sessions: number
+    detected_zones: number
+    directional_zones: number
+    neutral_zones: number
+    candidate_states: number
+    confirmed_states: number
+    invalidated_states: number
+    state_changes: number
+    average_signal_delay_sessions: number | null
+    benchmark_notes: string[]
+  } | null
+}
+
+export type VolumeZonesOptions = {
+  mode?: VolumeZonesMode
+  dateFrom?: string | null
+  dateTo?: string | null
+  includeTimeline?: boolean
+  maxZones?: number
 }
 
 export type SyncCandlesPayload = {
@@ -425,6 +718,22 @@ export async function importDailyCandlesCsv(
     ...result,
     data: normalizeSyncCandlesResult(result.data),
   }
+}
+
+export async function getVolumeZones(
+  mic: string,
+  symbol: string,
+  options: VolumeZonesOptions = {},
+): Promise<RequestResult<VolumeZonesResponse>> {
+  const qs = new URLSearchParams()
+  qs.set('mode', options.mode ?? 'summary')
+  if (options.dateFrom) qs.set('date_from', options.dateFrom)
+  if (options.dateTo) qs.set('date_to', options.dateTo)
+  if (options.includeTimeline) qs.set('include_timeline', 'true')
+  if (options.maxZones != null) qs.set('max_zones', String(options.maxZones))
+  return requestWithMeta<VolumeZonesResponse>(
+    `/stock/analysis/${encodeURIComponent(mic)}/${encodeURIComponent(symbol)}/volume-zones?${qs.toString()}`,
+  )
 }
 
 function normalizeEquityReportResult(raw: EquityReportApiResponse): EquityReportResult {

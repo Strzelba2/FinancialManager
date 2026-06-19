@@ -677,6 +677,23 @@ class TestBrokerageHoldingRules(unittest.TestCase):
         self.assertEqual(holding.quantity, Decimal("1269"))
         self.assertEqual(holding.avg_cost, Decimal("3.50"))
 
+    def test_adjustment_average_cost_preserves_three_decimals(self) -> None:
+        holding = SimpleNamespace(quantity=Decimal("0"), avg_cost=Decimal("0"))
+
+        apply_event_to_holding(
+            holding,
+            self._payload(
+                kind=BrokerageEventKind.ADJUSTMENT,
+                quantity="100",
+                price="12.3456",
+                note="Korekta średniej ceny",
+            ),
+        )
+
+        self.assertEqual(holding.quantity, Decimal("100"))
+        # Q3 validator on the event price rounds to three decimals (was two).
+        self.assertEqual(holding.avg_cost, Decimal("12.346"))
+
     def test_conversion_moves_quantity_and_cost_basis_to_target_holding(self) -> None:
         source = SimpleNamespace(quantity=Decimal("1000"), avg_cost=Decimal("2.00"))
         target = SimpleNamespace(quantity=Decimal("0"), avg_cost=Decimal("0"))

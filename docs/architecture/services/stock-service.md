@@ -9,7 +9,7 @@ candles, parsing and ingestion paths, and stock report generation snapshots.
 
 - Own markets, instruments, latest quotes, daily candles, and instrument sync state.
 - Expose stock API reads for markets, instrument options/search/resolve, quotes, candles,
-  report reads, and ingest/status operations.
+  report reads, deterministic volume-zone analysis, and ingest/status operations.
 - Parse and ingest market data from configured providers and web sources.
 - Allow manual markets and instruments, including optional per-instrument quote source
   URLs for instruments that are not covered by a standard market table ingestor.
@@ -36,6 +36,7 @@ candles, parsing and ingestion paths, and stock report generation snapshots.
 | Quote services and tasks | `stock/app/api/services/`, `stock/app/core/tasks/` | Ingest/read orchestration and Celery task entrypoints |
 | Market data adapters | `stock/app/markerdata/` | Provider registry, parsers, browser/html integration |
 | Reports | `stock/app/reports/equity/` | Report builder, prompt, web source, sanitization, OpenAI client |
+| Volume zones | `stock/app/analysis/volume_zones/` | Deterministic OHLCV volume-zone analysis without AI |
 | Persistence | `stock/app/models/`, `stock/app/crud/`, `stock/app/db/` | Market/report models and database access |
 | Runtime config | `stock/app/core/config.py`, `stock/app/core/celery_app.py` | URLs, report settings, queues, beat schedule |
 
@@ -49,6 +50,7 @@ Important route families in `stock/app/api/routes/stock.py`:
 - market list and instrument options/search/resolve
 - daily candle sync and CSV import
 - equity report read
+- deterministic volume-zone analysis read
 - Celery status and manual ingest status/start
 
 Stock worker entrypoints are:
@@ -107,6 +109,42 @@ flowchart LR
 
 The scheduled path uses the stock Celery task module. Manual ingest is started by the
 stock API and uses storage lock/status keys without entering RabbitMQ first.
+
+### Volume-zone analysis flow
+
+```mermaid
+flowchart LR
+    Request[Volume-zone request]
+    Route[stock route]
+    Candles[CandleDaily CRUD]
+    Service[analysis/volume_zones]
+    Reports[Stored report AI snapshot]
+    Cache[Redis stock cache]
+    Response[Typed API response]
+
+    Request --> Route
+    Route --> Reports
+    Route --> Cache
+    Route --> Candles
+    Candles --> Service
+    Service --> Cache
+    Service --> Response
+```
+
+The volume-zone indicator is deterministic and uses daily OHLCV candles available
+through the requested date range. It does not call OpenAI or trigger equity report
+generation. If a stored report AI snapshot already has free-float and shares-outstanding
+metrics, the endpoint uses them as point-in-time turnover context and includes the
+snapshot version in the Redis cache key. Historical free-float values are not available in
+the stock candle model, so free-float turnover is not treated as historical evidence.
+Directional accumulation/distribution phases are anchored to a compact base found before
+or early in the evidence signal; confirmation and invalidation dates are returned
+separately so historical boxes do not imply the final outcome was known at the base start.
+Raw phase candidates are returned for diagnostics. `resolved_directional_episodes` are the
+technical merged/conflict-resolved setup layer. `major_directional_phases` are the
+after-the-fact historical layer ranked by sign-aware follow-through (`ret20`, `ret60`,
+MFE/MAE, expected-direction return, and opposite-move penalty) and are the sparse default
+for chart annotation.
 
 ### Report read and generation flow
 

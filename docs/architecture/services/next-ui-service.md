@@ -15,6 +15,7 @@ and protected dashboard pages, then acts as the server-side call boundary toward
   classification editing, pagination, sorting, and deletion.
 - Render brokerage account creation, optional brokerage cash subaccount setup, holding
   actions, brokerage history preview, and manual stock instrument administration.
+- Render stock candle charts with deterministic volume-zone overlays returned by `stock`.
 - Use server actions for auth and selected form workflows.
 - Use server-side API helpers and App Router route handlers to call backend APIs.
 - Read ForwardAuth headers supplied by Traefik for protected requests.
@@ -65,6 +66,8 @@ keeps the public auth paths on a separate router.
   implementation still runs in the existing `ui` service while NiceGUI is being retired.
 - Proxies stock administration and quote refresh requests through Next route handlers;
   stock remains the source of truth for markets, instruments, and quotes.
+- Proxies stock volume-zone analysis through a Next route handler; all indicator
+  calculations remain in `stock`, while Next maps evidence codes to fixed UI labels.
 
 ## Key Flows
 
@@ -181,6 +184,35 @@ market instruments.
 For BoSSA full-history import, the preview is allowed to show unresolved instruments, but
 the import button is blocked while any row is marked `NEEDS_REVIEW`. Wallet repeats the
 preflight so a crafted browser payload cannot create partial cash or holding state.
+
+### Stock chart volume-zone overlay
+
+```mermaid
+sequenceDiagram
+    actor Browser
+    participant Next as ChartsPage
+    participant Route as Next stock analysis route
+    participant Stock as stock API
+
+    Browser->>Next: Sync and render one instrument
+    Next->>Route: GET /api/stock/analysis/volume-zones
+    Route->>Stock: GET /stock/analysis/{mic}/{symbol}/volume-zones
+    Stock-->>Route: Zones, current state, price profile, evidence, timeline
+    Route-->>Next: Typed JSON
+    Next-->>Browser: ECharts overlays and fixed evidence labels
+```
+
+The overlay is available for a single candlestick chart. Next does not calculate the
+indicator and does not generate descriptions; it renders the deterministic response from
+`stock`. Directional `A/D` boxes in the default historical mode render
+`major_directional_phases`, which are ranked by backend outcome metrics rather than local
+evidence strength alone. Their selection is independent of the zone visibility buttons
+(`Wszystkie`, `Istotne`, `Aktywne`), which only filter the liquidity-zone overlay.
+`A/D bieżąca` uses active/candidate setup phases from
+`resolved_directional_episodes`, and raw `directional_episodes` are used only by
+`A/D debug`. `A✓/A×` and `D✓/D×` outcome markers are placed on the confirmation or
+invalidation date returned by `stock`. The default chart view keeps the A/D phase layer
+sparse and conflict-resolved.
 
 ## Cookie and Identity Handoff
 

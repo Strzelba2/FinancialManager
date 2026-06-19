@@ -17,7 +17,7 @@ from .enums import (
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, 
     Shortname, BICOpt, NonEmptyStr,
-    BytesLen32, Q2, Q2NonNeg, Q10, Q6Pos, AreaQ2OptPos,
+    BytesLen32, Q2, Q2NonNeg, Q3, Q10, Q6Pos, AreaQ2OptPos,
     CountryISO2Opt, CityOpt, NoneIfEmpty,
     MICCode, Symbol12
 )
@@ -202,9 +202,9 @@ class BrokerageEventBase(SQLModel):
         sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
         description="quantity envent"
     )
-    price: Q2 = Field(
+    price: Q3 = Field(
         default=Decimal("0"),
-        sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"),
+        sa_column=sa.Column(sa.Numeric(20, 3), nullable=False, server_default="0"),
         description="price envent"
     )
     currency: InstrumentCurrency = Field(
@@ -279,7 +279,7 @@ class HoldingBase(SQLModel):
     model_config = ConfigDict(validate_assignment=True, from_attributes=True) 
     
     quantity: Q2 = Field(sa_column=sa.Column(sa.Numeric(28, 10), nullable=False, server_default="0"))
-    avg_cost: Q2 = Field(sa_column=sa.Column(sa.Numeric(20, 8),  nullable=False, server_default="0"))
+    avg_cost: Q3 = Field(sa_column=sa.Column(sa.Numeric(20, 8),  nullable=False, server_default="0"))
        
            
 class InstrumentBase(SQLModel):

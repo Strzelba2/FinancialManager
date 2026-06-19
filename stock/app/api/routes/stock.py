@@ -22,6 +22,7 @@ from app.schemas.quotes import (
     LatestQuoteBySymbol, QuotesBySymbolsRequest, CandleDailyOut, SyncDailyResponse,
     SyncDailyRequest, ImportDailyCsvRequest, SyncDailyResult
 )
+from app.schemas.volume_zones import AnalysisMode, VolumeZonesResponse
 from app.crud.market import create_market, get_market_id_by_mic, list_markets
 from app.crud.instrument import (
     create_instrument, list_instruments, search_instruments_by_shortname_or_name, get_instrument_by_symbol,
@@ -31,8 +32,14 @@ from app.api.services.quotes import (
     get_latest_quotes_by_symbols, sync_daily_by_symbol, import_daily_csv_by_symbol,
 )
 from app.crud.candle_daily import list_candles_daily
+from app.crud.report_snapshot import get_latest_ready_report_ai_snapshot
 from app.markerdata.registry import get_provider
+from app.models.enums import ReportAssetClass
 from app.api.services.stock import ingest_market, refresh_quote_source_instruments
+from app.analysis.volume_zones import analyze_volume_zones
+from app.analysis.volume_zones.cache import CACHE_TTL_SECONDS, volume_zones_cache_key
+from app.analysis.volume_zones.free_float import extract_free_float_snapshot
+from app.core.config import settings
 from app.reports.equity.schemas import EquityReportResponse
 from app.reports.equity.service import (
     ReportConflictError,
@@ -436,6 +443,95 @@ async def get_equity_report_endpoint(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ReportGenerationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/analysis/{mic}/{symbol}/volume-zones", response_model=VolumeZonesResponse)
+async def get_volume_zones_endpoint(
+    mic: str,
+    symbol: str,
+    request: Request,
+    mode: AnalysisMode = Query(default="summary"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    include_timeline: bool = Query(default=False),
+    max_zones: int = Query(default=3, ge=1, le=20),
+    session: AsyncSession = Depends(db.get_session),
+) -> VolumeZonesResponse:
+    logger.info(
+        "Request: get_volume_zones mic=%r symbol=%r mode=%r date_from=%r date_to=%r",
+        mic,
+        symbol,
+        mode,
+        date_from,
+        date_to,
+    )
+    resolved = await get_instrument_with_market_by_mic_symbol(
+        session=session,
+        mic=mic.strip().upper(),
+        symbol=symbol.strip().upper(),
+    )
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Instrument not found")
+
+    inst, market = resolved
+    candles = list(
+        await list_candles_daily(
+            session,
+            instrument_id=inst.id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )
+    last_candle_date = candles[-1].date_quote if candles else None
+    ai_snapshot = await get_latest_ready_report_ai_snapshot(
+        session=session,
+        instrument_id=inst.id,
+        asset_class=ReportAssetClass.EQUITY,
+        schema_version=settings.REPORT_SCHEMA_VERSION,
+    )
+    free_float = extract_free_float_snapshot(
+        ai_snapshot.ai_payload if ai_snapshot is not None else None,
+        source="report_ai_snapshot",
+    )
+    free_float_version = (
+        f"{ai_snapshot.id}:{ai_snapshot.generated_at.isoformat()}"
+        if ai_snapshot is not None and free_float is not None
+        else None
+    )
+    cache_key = volume_zones_cache_key(
+        mic=market.mic,
+        symbol=inst.symbol,
+        mode=mode,
+        date_from=date_from,
+        date_to=date_to,
+        include_timeline=include_timeline,
+        max_zones=max_zones,
+        last_candle_date=last_candle_date,
+        free_float_version=free_float_version,
+    )
+    cached = await request.app.storage.stock.get(cache_key)
+    if cached is not None:
+        return VolumeZonesResponse.model_validate(cached)
+
+    try:
+        response = analyze_volume_zones(
+            candles,
+            symbol=inst.symbol,
+            mic=market.mic,
+            mode=mode,
+            include_timeline=include_timeline,
+            max_zones=max_zones,
+            free_float=free_float,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await request.app.storage.stock.set(
+        cache_key,
+        response.model_dump(mode="json"),
+        timeout=CACHE_TTL_SECONDS,
+    )
+    return response
 
 
 @router.post("/instruments/{symbol}/candles/daily/sync", response_model=SyncDailyResponse)

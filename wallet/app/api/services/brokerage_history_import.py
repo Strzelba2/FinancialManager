@@ -42,6 +42,10 @@ def _money(value: Decimal | int | str) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"))
 
 
+def _price(value: Decimal | int | str) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.001"))
+
+
 def _row_context(row: BrokerageHistoryImportRow) -> dict:
     return {
         "row": row.row_number,
@@ -171,7 +175,7 @@ async def _build_forced_sell_payload(
         return None
 
     quantity = _money(holding.quantity)
-    price = _money(abs(Decimal(str(row.amount))) / quantity) if quantity else Decimal("0.00")
+    price = _price(abs(Decimal(str(row.amount))) / quantity) if quantity else Decimal("0.000")
     return BrokerageEventCreate(
         brokerage_account_id=brokerage_account_id,
         instrument_symbol=row.instrument_symbol,

@@ -1,0 +1,1 @@
+"""Deterministic stock analysis helpers."""

@@ -105,7 +105,7 @@ export function PriceAlertModal({
             Below price
             <input
               value={below}
-              onChange={(e) => setBelow(e.target.value)}
+              onChange={(e) => setBelow(e.target.value.replace(',', '.'))}
               placeholder="np. 100.00"
               className="mt-1 w-full px-2.5 py-1.5 text-sm bg-slate-800 border border-white/10 rounded-lg text-white placeholder-white/20 focus:outline-none focus:border-blue-500/50"
             />
@@ -114,7 +114,7 @@ export function PriceAlertModal({
             Above price
             <input
               value={above}
-              onChange={(e) => setAbove(e.target.value)}
+              onChange={(e) => setAbove(e.target.value.replace(',', '.'))}
               placeholder="np. 120.00"
               className="mt-1 w-full px-2.5 py-1.5 text-sm bg-slate-800 border border-white/10 rounded-lg text-white placeholder-white/20 focus:outline-none focus:border-blue-500/50"
             />
