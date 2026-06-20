@@ -57,7 +57,7 @@ class NextServerActionRenderer(JSONRenderer):
 
 
 def _valid_hmac_ttl_seconds() -> int:
-    return int(getattr(settings, "VALID_HMAC", 1200))
+    return int(getattr(settings, "VALID_HMAC", 1800))
 
 
 def _active_login_key(user_id) -> str:
@@ -634,6 +634,11 @@ class VerifySessionView(APIView):
             logout(request)
             response = HttpResponseRedirect(login_url)
             return response
+
+        # Persist the authenticated request so Django moves the server-side
+        # session expiry and reissues `sessionid` through SessionMiddleware.
+        # Invalid or expired HMAC tokens return before this sliding refresh.
+        request.session.modified = True
         
         timestamp = int(time.time())
 

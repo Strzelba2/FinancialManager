@@ -146,7 +146,7 @@ export type YearGoalOut = {
 export type FavoriteItem = {
   sym: string
   pl_pct: string   // percentage points from quote change_pct, e.g. "4.23" = 4.23%
-  pl_abs: string   // absolute P/L in item currency
+  pl_abs: string   // current quote price; legacy response field name
   currency: string
 }
 

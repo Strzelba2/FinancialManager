@@ -23,7 +23,11 @@ describe('ObservedStocksCard', () => {
 
     render(<ObservedStocksCard items={items} viewCurrency="PLN" href="/user/favorites" />)
 
+    expect(screen.getByRole('columnheader', { name: 'Cena (PLN)' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'P/L (PLN)' })).not.toBeInTheDocument()
     expect(screen.getByText('+3,55%')).toBeInTheDocument()
     expect(screen.queryByText('+355,00%')).not.toBeInTheDocument()
+    expect(screen.getByText('70.40 PLN')).toBeInTheDocument()
+    expect(screen.queryByText('+70.40 PLN')).not.toBeInTheDocument()
   })
 })

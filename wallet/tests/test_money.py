@@ -7,7 +7,9 @@ import unittest
 import allure
 import pytest
 
-from app.models.enums import AccountType, BrokerageEventKind
+from app.api.services.holding import compute_top_n_performance_from_quotes
+from app.models.enums import AccountType, BrokerageEventKind, InstrumentCurrency
+from app.schemas.response import QuoteBySymbolItem
 from app.utils.money import (
     account_type_allows_negative_balance,
     compute_cash_effect,
@@ -99,3 +101,81 @@ class MoneyUtilsTests(unittest.TestCase):
         self.assertFalse(account_type_allows_negative_balance(AccountType.CURRENT))
         self.assertFalse(account_type_allows_negative_balance(AccountType.SAVINGS))
         self.assertFalse(account_type_allows_negative_balance(None))
+
+
+@allure.epic("Unit Tests")
+@allure.feature("Wallet")
+@allure.story("Portfolio performance aggregates duplicate symbols before ranking")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("wallet", "brokerage", "money", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Duplicate PLN holdings for WAS and F51 are combined across brokerage accounts "
+    "using total quantity and weighted cost before five unique gainers and losers are ranked."
+)
+class PositionPerformanceRankingTests(unittest.TestCase):
+    @staticmethod
+    def _holding(symbol: str, avg_cost: str, quantity: str = "10") -> SimpleNamespace:
+        return SimpleNamespace(
+            id=symbol,
+            quantity=Decimal(quantity),
+            avg_cost=Decimal(avg_cost),
+            instrument=SimpleNamespace(symbol=symbol),
+        )
+
+    @staticmethod
+    def _quote(symbol: str, price: str) -> QuoteBySymbolItem:
+        return QuoteBySymbolItem(
+            symbol=symbol,
+            price=Decimal(price),
+            currency=InstrumentCurrency.PLN,
+            change_pct=Decimal("0"),
+        )
+
+    def test_top_five_lists_never_borrow_positions_from_opposite_sign(self) -> None:
+        prices = {
+            "ALR": "20",
+            "UNT": "15",
+            "WAS": "14",
+            "ZUE": "12",
+            "PEO": "11",
+            "CRB": "1",
+            "F51": "2",
+            "IPW": "3",
+            "MPS": "4",
+            "LTX": "5",
+        }
+        holdings = [
+            self._holding("ALR", "10"),
+            self._holding("UNT", "10"),
+            self._holding("WAS", "8"),
+            self._holding("WAS", "12"),
+            self._holding("ZUE", "10"),
+            self._holding("PEO", "10"),
+            self._holding("CRB", "10"),
+            self._holding("F51", "8"),
+            self._holding("F51", "12"),
+            self._holding("IPW", "10"),
+            self._holding("MPS", "10"),
+            self._holding("LTX", "10"),
+        ]
+        quotes = {symbol: self._quote(symbol, price) for symbol, price in prices.items()}
+
+        losers, gainers = compute_top_n_performance_from_quotes(holdings, quotes, n=5)
+
+        self.assertEqual([position.symbol for position in gainers], ["ALR", "UNT", "WAS", "ZUE", "PEO"])
+        self.assertEqual([position.symbol for position in losers], ["CRB", "F51", "IPW", "MPS", "LTX"])
+        self.assertTrue(all(position.pnl_pct > 0 for position in gainers))
+        self.assertTrue(all(position.pnl_pct < 0 for position in losers))
+        self.assertEqual(gainers[0].pnl_amount, Decimal("100"))
+        self.assertEqual(losers[0].pnl_amount, Decimal("-90"))
+        was = next(position for position in gainers if position.symbol == "WAS")
+        f51 = next(position for position in losers if position.symbol == "F51")
+        self.assertEqual(was.quantity, Decimal("20"))
+        self.assertEqual(was.cost, Decimal("200"))
+        self.assertEqual(was.avg_cost, Decimal("10"))
+        self.assertEqual(was.pnl_amount, Decimal("80"))
+        self.assertEqual(f51.quantity, Decimal("20"))
+        self.assertEqual(f51.cost, Decimal("200"))
+        self.assertEqual(f51.avg_cost, Decimal("10"))
+        self.assertEqual(f51.pnl_amount, Decimal("-160"))

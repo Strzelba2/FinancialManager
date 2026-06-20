@@ -116,8 +116,11 @@ def compute_top_n_performance_from_quotes(
         - quotes_map: symbol -> QuoteBySymbolItem (with latest price & currency)
 
     PnL logic:
-        - value      = quantity * price
-        - cost       = quantity * avg_price
+        - holdings with the same symbol across brokerage accounts are aggregated first
+        - quantity   = sum of quantities for the symbol
+        - cost       = sum of quantity * avg_price for the symbol
+        - avg_price  = aggregated cost / aggregated quantity
+        - value      = aggregated quantity * price
         - pnl_amount = value - cost
         - pnl_pct    = pnl_amount / cost if cost > 0 else 0
 
@@ -129,10 +132,12 @@ def compute_top_n_performance_from_quotes(
     Returns:
         (top_losers, top_gainers):
             - both are lists of PositionPerformance
-            - top_losers: sorted by pnl_amount ASC (największe straty pierwsze)
-            - top_gainers: sorted by pnl_amount DESC (największe zyski pierwsze)
+            - top_losers: negative pnl_pct only, sorted ASC (największe straty pierwsze)
+            - top_gainers: positive pnl_pct only, sorted DESC (największe zyski pierwsze)
+            - flat positions are omitted from both lists
     """
-    perf_list: List[PositionPerformance] = []
+    quantity_by_symbol: Dict[str, Decimal] = {}
+    cost_by_symbol: Dict[str, Decimal] = {}
 
     for h in holdings:
         if h.quantity is None:
@@ -154,21 +159,40 @@ def compute_top_n_performance_from_quotes(
         qty = Decimal(h.quantity)
         avg_price = Decimal(h.avg_cost)  
 
+        try:
+            holding_cost = qty * avg_price
+        except Exception:
+            logger.exception(
+                f"Failed to compute cost for symbol={symbol}, "
+                f"qty={qty}, avg_price={avg_price}"
+            )
+            continue
+
+        quantity_by_symbol[symbol] = quantity_by_symbol.get(symbol, Decimal("0")) + qty
+        cost_by_symbol[symbol] = cost_by_symbol.get(symbol, Decimal("0")) + holding_cost
+
+    perf_list: List[PositionPerformance] = []
+
+    for symbol, qty in quantity_by_symbol.items():
+        quote = quotes_map[symbol]
         price = quote.price
         ccy = quote.currency
+        cost = cost_by_symbol[symbol]
 
         try:
             value = qty * price
-            cost = qty * avg_price
         except Exception:
             logger.exception(
-                f"Failed to compute value/cost for symbol={symbol}, "
-                f"qty={qty}, price={price}, avg_price={avg_price}"
+                f"Failed to compute value for aggregated symbol={symbol}, "
+                f"qty={qty}, price={price}"
             )
             continue
 
         pnl_amount = value - cost
         pnl_pct = Decimal("0")
+        avg_cost = Decimal("0")
+        if qty > 0:
+            avg_cost = cost / qty
         if cost > 0:
             try:
                 pnl_pct = pnl_amount / cost
@@ -182,7 +206,7 @@ def compute_top_n_performance_from_quotes(
             PositionPerformance(
                 symbol=symbol,
                 quantity=qty,
-                avg_cost=h.avg_cost,
+                avg_cost=avg_cost,
                 price=price,
                 currency=ccy,
                 value=value,
@@ -195,8 +219,15 @@ def compute_top_n_performance_from_quotes(
     if not perf_list:
         return [], []
 
-    losers_sorted = sorted(perf_list, key=lambda p: p.pnl_pct)
-    gainers_sorted = sorted(perf_list, key=lambda p: p.pnl_pct, reverse=True)
+    losers_sorted = sorted(
+        (performance for performance in perf_list if performance.pnl_pct < 0),
+        key=lambda performance: performance.pnl_pct,
+    )
+    gainers_sorted = sorted(
+        (performance for performance in perf_list if performance.pnl_pct > 0),
+        key=lambda performance: performance.pnl_pct,
+        reverse=True,
+    )
 
     top_losers = losers_sorted[:n]
     top_gainers = gainers_sorted[:n]

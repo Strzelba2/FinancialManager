@@ -96,4 +96,98 @@ describe('holdings API aggregation', () => {
       quoteMissing: true,
     })
   })
+
+  it('aggregates twelve ranked symbols across accounts from different wallets', async () => {
+    await nextUiUnitStory('Holdings API aggregates cross-wallet quantities and costs before ranking', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'holdings', 'money', 'financial-data'],
+    })
+
+    const holding = (
+      accountId: string,
+      accountName: string,
+      symbol: string,
+      quantity: string,
+      avgCost: string,
+    ) => ({
+      account_id: accountId,
+      account_name: accountName,
+      instrument_id: `instrument-${symbol}`,
+      instrument_symbol: symbol,
+      instrument_mic: 'XWAR',
+      instrument_name: symbol,
+      instrument_currency: 'PLN',
+      quantity,
+      avg_cost: avgCost,
+    })
+
+    vi.mocked(listHoldings).mockResolvedValue([
+      holding('alpha', 'Portfel Alpha', 'GAIN-1', '2', '50'),
+      holding('beta', 'Portfel Beta', 'GAIN-1', '3', '100'),
+      holding('alpha', 'Portfel Alpha', 'GAIN-2', '10', '10'),
+      holding('beta', 'Portfel Beta', 'GAIN-3', '10', '10'),
+      holding('alpha', 'Portfel Alpha', 'GAIN-4', '10', '10'),
+      holding('beta', 'Portfel Beta', 'GAIN-5', '10', '10'),
+      holding('alpha', 'Portfel Alpha', 'GAIN-6', '10', '10'),
+      holding('alpha', 'Portfel Alpha', 'LOSS-1', '2', '100'),
+      holding('beta', 'Portfel Beta', 'LOSS-1', '2', '50'),
+      holding('alpha', 'Portfel Alpha', 'LOSS-2', '10', '10'),
+      holding('beta', 'Portfel Beta', 'LOSS-3', '10', '10'),
+      holding('alpha', 'Portfel Alpha', 'LOSS-4', '10', '10'),
+      holding('beta', 'Portfel Beta', 'LOSS-5', '10', '10'),
+      holding('alpha', 'Portfel Alpha', 'LOSS-6', '10', '10'),
+    ])
+    vi.mocked(listBrokerageAccounts).mockResolvedValue([
+      { id: 'alpha', name: 'Portfel Alpha' },
+      { id: 'beta', name: 'Portfel Beta' },
+    ])
+    vi.mocked(getFxRates).mockResolvedValue(null)
+    vi.mocked(getQuotesBySymbols).mockResolvedValue({
+      'GAIN-1': { symbol: 'GAIN-1', price: '120', currency: 'PLN', change_pct: '0' },
+      'GAIN-2': { symbol: 'GAIN-2', price: '20', currency: 'PLN', change_pct: '0' },
+      'GAIN-3': { symbol: 'GAIN-3', price: '18', currency: 'PLN', change_pct: '0' },
+      'GAIN-4': { symbol: 'GAIN-4', price: '17', currency: 'PLN', change_pct: '0' },
+      'GAIN-5': { symbol: 'GAIN-5', price: '16', currency: 'PLN', change_pct: '0' },
+      'GAIN-6': { symbol: 'GAIN-6', price: '14', currency: 'PLN', change_pct: '0' },
+      'LOSS-1': { symbol: 'LOSS-1', price: '30', currency: 'PLN', change_pct: '0' },
+      'LOSS-2': { symbol: 'LOSS-2', price: '1', currency: 'PLN', change_pct: '0' },
+      'LOSS-3': { symbol: 'LOSS-3', price: '2', currency: 'PLN', change_pct: '0' },
+      'LOSS-4': { symbol: 'LOSS-4', price: '3', currency: 'PLN', change_pct: '0' },
+      'LOSS-5': { symbol: 'LOSS-5', price: '5', currency: 'PLN', change_pct: '0' },
+      'LOSS-6': { symbol: 'LOSS-6', price: '6', currency: 'PLN', change_pct: '0' },
+    } as never)
+
+    const result = await fetchHoldings({
+      userId: 'user-1',
+      brokerage_account_id: ['alpha', 'beta'],
+      group_mode: 'SYMBOL',
+      view_ccy: 'PLN',
+    })
+
+    expect(listHoldings).toHaveBeenCalledWith('user-1', {
+      q: undefined,
+      brokerage_account_id: ['alpha', 'beta'],
+    })
+    expect(result.rows).toHaveLength(12)
+    expect(result.rows.find((item) => item.symbol === 'GAIN-1')).toMatchObject({
+      accountsDisp: '2 rachunki',
+      quantity: 5,
+      avgCostRaw: 80,
+      costRaw: 400,
+      valueRaw: 600,
+      pnlAmountRaw: 200,
+      pnlPct: 0.5,
+      pnlView: 200,
+    })
+    expect(result.rows.find((item) => item.symbol === 'LOSS-1')).toMatchObject({
+      accountsDisp: '2 rachunki',
+      quantity: 4,
+      avgCostRaw: 75,
+      costRaw: 300,
+      valueRaw: 120,
+      pnlAmountRaw: -180,
+      pnlPct: -0.6,
+      pnlView: -180,
+    })
+  })
 })

@@ -812,6 +812,7 @@ class SessionLifecycleViewTests(SimpleTestCase):
         )
         request.session = MagicMock()
         request.session.session_key = "fresh-session-key"
+        request.session.modified = False
         request.session.get.side_effect = lambda key, default=None: {"wallet_user_id": "wallet-user-1"}.get(
             key,
             default,
@@ -841,6 +842,8 @@ class SessionLifecycleViewTests(SimpleTestCase):
         response = VerifySessionView().get(request)
 
         self.assertEqual(response.status_code, 400)
+        self.assertFalse(request.session.modified)
+        self.assertNotIn("hmac", response.cookies)
 
     @patch.object(VerifySessionView, "get", return_value=Response({"ok": True}))
     def test_verify_session_accepts_next_server_action_forwardauth_request(
@@ -872,6 +875,8 @@ class SessionLifecycleViewTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 302)
         django_logout.assert_called_once_with(request)
+        self.assertFalse(request.session.modified)
+        self.assertNotIn("hmac", response.cookies)
 
     @patch("userauth.views.time.time", return_value=1_001)
     @patch("userauth.views.HmacToken.calculate_token", return_value="fresh-hmac")
@@ -892,4 +897,5 @@ class SessionLifecycleViewTests(SimpleTestCase):
         self.assertEqual(response.headers["X-User"], "unit-user")
         self.assertEqual(response.headers["X-User-Id"], "wallet-user-1")
         self.assertEqual(response.cookies["hmac"].value, "1001:fresh-hmac")
+        self.assertTrue(request.session.modified)
         self.assertTrue(any(call.args[0] == "active_login:42" for call in cache.set.call_args_list))

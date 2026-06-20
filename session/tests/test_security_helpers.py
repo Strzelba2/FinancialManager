@@ -81,7 +81,7 @@ class CryptoHelperTests(SimpleTestCase):
 @allure.severity(allure.severity_level.CRITICAL)
 @allure.tag("auth", "security", "hmac")
 @allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
-@override_settings(SERVER_SALT="unit-test-salt", VALID_HMAC=60)
+@override_settings(SERVER_SALT="unit-test-salt", VALID_HMAC=1800)
 class HmacTokenTests(SimpleTestCase):
     def setUp(self) -> None:
         self.factory = RequestFactory()
@@ -104,13 +104,23 @@ class HmacTokenTests(SimpleTestCase):
         with patch("userauth.hmac_token.time.time", return_value=1_010):
             self.assertTrue(HmacToken.is_valid_hmac(token, request, str(timestamp)))
 
+    def test_hmac_expires_at_thirty_minute_boundary(self) -> None:
+        request = self._request()
+        timestamp = 1_000
+        token = HmacToken.calculate_token("session-123", request, timestamp)
+
+        with patch("userauth.hmac_token.time.time", return_value=2_799):
+            self.assertTrue(HmacToken.is_valid_hmac(token, request, str(timestamp)))
+        with patch("userauth.hmac_token.time.time", return_value=2_800):
+            self.assertFalse(HmacToken.is_valid_hmac(token, request, str(timestamp)))
+
     def test_hmac_rejects_invalid_timestamp_expired_token_and_tampering(self) -> None:
         request = self._request()
         timestamp = 1_000
         token = HmacToken.calculate_token("session-123", request, timestamp)
 
         self.assertFalse(HmacToken.is_valid_hmac(token, request, "not-a-time"))
-        with patch("userauth.hmac_token.time.time", return_value=1_061):
+        with patch("userauth.hmac_token.time.time", return_value=2_800):
             self.assertFalse(HmacToken.is_valid_hmac(token, request, str(timestamp)))
         with patch("userauth.hmac_token.time.time", return_value=1_010):
             self.assertFalse(HmacToken.is_valid_hmac(base64.b64encode(b"bad").decode(), request, str(timestamp)))

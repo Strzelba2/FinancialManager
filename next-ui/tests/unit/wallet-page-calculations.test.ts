@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { computeDashFlowData, computeExpensesYtd, computeGoalsProgress } from '@/app/(dashboard)/wallet/page'
+import { buildPerfRowsFromHoldings, computeDashFlowData, computeExpensesYtd, computeGoalsProgress } from '@/app/(dashboard)/wallet/page'
 import { computeDashFlowProfit } from '@/features/wallet/components/DashFlowCard'
+import type { HoldingRawRow } from '@/lib/api/holdings'
 import type { WalletListItem, YearGoalOut } from '@/lib/types/wallet'
 import { nextUiUnitStory } from '../allure'
 
@@ -29,7 +30,65 @@ function walletFixture(overrides: Partial<WalletListItem> = {}): WalletListItem 
   }
 }
 
+function performanceFixture(symbol: string, pnlPct: number, pnlAmount: number): HoldingRawRow {
+  const cost = 1000
+  const value = cost + pnlAmount
+  return {
+    id: symbol,
+    accountId: 'aggregated',
+    symbol,
+    instrumentMic: 'XWAR',
+    name: symbol,
+    currency: 'PLN',
+    accountsDisp: '2 rachunki',
+    quantity: 10,
+    avgCostRaw: cost / 10,
+    priceRaw: value / 10,
+    costRaw: cost,
+    valueRaw: value,
+    pnlAmountRaw: pnlAmount,
+    pnlPct,
+    costView: cost,
+    valueView: value,
+    pnlView: pnlAmount,
+    changePct: 0,
+    quoteMissing: false,
+  }
+}
+
 describe('wallet page calculations', () => {
+  it('selects five of six cross-wallet aggregated gainers and losers', async () => {
+    await nextUiUnitStory('Wallet dashboard ranks aggregated holdings across every selected wallet', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'money', 'next-ui'],
+    })
+
+    const rows = [
+      performanceFixture('GAIN-1', 0.5, 500),
+      performanceFixture('GAIN-2', 1, 1000),
+      performanceFixture('GAIN-3', 0.8, 800),
+      performanceFixture('GAIN-4', 0.7, 700),
+      performanceFixture('GAIN-5', 0.6, 600),
+      performanceFixture('GAIN-6', 0.4, 400),
+      performanceFixture('LOSS-1', -0.6, -600),
+      performanceFixture('LOSS-2', -0.9, -900),
+      performanceFixture('LOSS-3', -0.8, -800),
+      performanceFixture('LOSS-4', -0.7, -700),
+      performanceFixture('LOSS-5', -0.5, -500),
+      performanceFixture('LOSS-6', -0.4, -400),
+    ]
+
+    const gainers = buildPerfRowsFromHoldings(rows, 'PLN', 'desc')
+    const losers = buildPerfRowsFromHoldings(rows, 'PLN', 'asc')
+
+    expect(gainers.map((row) => row.sym)).toEqual(['GAIN-2', 'GAIN-3', 'GAIN-4', 'GAIN-5', 'GAIN-1'])
+    expect(losers.map((row) => row.sym)).toEqual(['LOSS-2', 'LOSS-3', 'LOSS-4', 'LOSS-1', 'LOSS-5'])
+    expect(gainers.every((row) => row.pl_pct > 0)).toBe(true)
+    expect(losers.every((row) => row.pl_pct < 0)).toBe(true)
+    expect(gainers[0]).toMatchObject({ pl_pct: 100, pl_abs_fmt: '+1\u00a0000 PLN' })
+    expect(losers[0]).toMatchObject({ pl_pct: -90, pl_abs_fmt: '-900 PLN' })
+  })
+
   it('shows YTD expenses as an absolute value while preserving the existing aggregate', async () => {
     await nextUiUnitStory('Wallet dashboard YTD expenses use absolute display value', {
       severity: 'critical',

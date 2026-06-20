@@ -6,6 +6,8 @@ import { Decimal } from 'decimal.js'
 import { syncUser, getLatestRealEstatePrice, listWalletGoals, listRecurringExpenses } from '@/lib/api/wallet'
 import { saveWalletUserId } from '@/lib/api/session'
 import { getFxRates } from '@/lib/api/nbp'
+import { fetchHoldings } from '@/lib/api/holdings'
+import type { HoldingRawRow } from '@/lib/api/holdings'
 import { KpiCard } from '@/features/wallet/components/KpiCard'
 import { StockPerfCard, ObservedStocksCard } from '@/features/wallet/components/StockTableCard'
 import { PriceAlertsCard } from '@/features/wallet/components/PriceAlertsCard'
@@ -250,18 +252,20 @@ export function computeGoalsProgress(
   }
 }
 
-function buildPerfRows(wallets: WalletListItem[], ccy: Currency, rates: NullableFxRates, sort: 'asc' | 'desc'): PerfRow[] {
-  const all = wallets.flatMap((w) => [...(w.top_gainers ?? []), ...(w.top_losers ?? [])])
-  const unique = [...new Map(all.map((p) => [p.symbol, p])).values()]
-  const sorted = unique.sort((a, b) => {
-    const da = Number(a.pnl_pct), db = Number(b.pnl_pct)
+export function buildPerfRowsFromHoldings(rows: HoldingRawRow[], ccy: Currency, sort: 'asc' | 'desc'): PerfRow[] {
+  const matching = rows.filter((position) => {
+    if (position.quoteMissing || position.pnlView === null) return false
+    return sort === 'desc' ? position.pnlPct > 0 : position.pnlPct < 0
+  })
+  const sorted = matching.sort((a, b) => {
+    const da = a.pnlPct, db = b.pnlPct
     return sort === 'desc' ? db - da : da - db
   }).slice(0, 5)
 
   return sorted.map((p, i) => {
-    const pct = Number(p.pnl_pct) * 100
-    const plAbs = conv(dec(p.pnl_amount), p.currency, ccy, rates)
-    const sign = plAbs.gte(0) ? '+' : ''
+    const pct = p.pnlPct * 100
+    const plAbs = dec(p.pnlView)
+    const sign = plAbs.gt(0) ? '+' : plAbs.lt(0) ? '-' : ''
     return {
       rank: i + 1,
       sym: p.symbol,
@@ -507,6 +511,18 @@ export default async function WalletPage({
     walletFilter === 'all' || !walletNames.includes(walletFilter)
       ? wallets
       : wallets.filter((w) => w.name === walletFilter)
+
+  const selectedBrokerageAccountIds = selected.flatMap((wallet) =>
+    wallet.brokerage_accounts.map((account) => account.id)
+  )
+  const performanceHoldings = selectedBrokerageAccountIds.length > 0
+    ? (await fetchHoldings({
+        userId: data.user_id,
+        brokerage_account_id: selectedBrokerageAccountIds,
+        group_mode: 'SYMBOL',
+        view_ccy: viewCurrency,
+      })).rows
+    : []
 
   if (wallets.length === 0) {
     return (
@@ -773,8 +789,8 @@ export default async function WalletPage({
         </div>
 
         {(() => {
-          const gainers = buildPerfRows(selected, viewCurrency, rates, 'desc')
-          const losers  = buildPerfRows(selected, viewCurrency, rates, 'asc')
+          const gainers = buildPerfRowsFromHoldings(performanceHoldings, viewCurrency, 'desc')
+          const losers  = buildPerfRowsFromHoldings(performanceHoldings, viewCurrency, 'asc')
           return (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mt-3">
               <StockPerfCard

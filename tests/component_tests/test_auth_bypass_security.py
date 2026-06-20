@@ -287,12 +287,12 @@ class TestNextUiForwardAuthBypass:
 @pytest.mark.db
 @allure.epic("System Tests")
 @allure.feature("Component")
-@allure.story("Next UI protected transaction pages refresh HMAC through ForwardAuth")
+@allure.story("Next UI protected transaction pages refresh auth cookies through ForwardAuth")
 @allure.severity(allure.severity_level.BLOCKER)
 @allure.tag("next-ui", "transactions", "auth", "security", "hmac", "forwardauth")
 @allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
 class TestNextUiForwardAuthHmacRefresh:
-    def test_transactions_page_returns_refreshed_hmac_cookie(
+    def test_transactions_page_returns_refreshed_auth_cookies(
         self,
         session_url: str,
         traefik_url: str,
@@ -327,8 +327,10 @@ class TestNextUiForwardAuthHmacRefresh:
         assert routed_response is not None
         assert routed_response.status_code == 200, routed_response.text[:500]
         assert refreshed_hmac != hmac_token
+        assert routed_response.cookies.get("sessionid") == sessionid
         set_cookie_headers = "\n".join(_set_cookie_headers(routed_response)).lower()
         assert "hmac=" in set_cookie_headers
+        assert "sessionid=" in set_cookie_headers
         assert "httponly" in set_cookie_headers
         assert "secure" in set_cookie_headers
         assert "samesite=lax" in set_cookie_headers
@@ -836,7 +838,7 @@ class TestLoginSessionCookieContract:
 
         assert replay_response.status_code in {302, 400, 401}
 
-    def test_verify_session_refreshes_hmac_cookie_value(self, session_url: str) -> None:
+    def test_verify_session_refreshes_hmac_and_django_session_cookies(self, session_url: str) -> None:
         user = _create_active_user(session_url)
         client_ip = "10.227.2.10"
         login_response = _login(session_url, user, client_ip=client_ip)
@@ -860,8 +862,10 @@ class TestLoginSessionCookieContract:
         assert verify_response is not None
         assert verify_response.status_code == 200
         assert refreshed_hmac != hmac_token
+        assert verify_response.cookies.get("sessionid") == sessionid
         set_cookie_headers = "\n".join(_set_cookie_headers(verify_response)).lower()
         assert "hmac=" in set_cookie_headers
+        assert "sessionid=" in set_cookie_headers
         assert "httponly" in set_cookie_headers
         assert "secure" in set_cookie_headers
         assert "samesite=lax" in set_cookie_headers

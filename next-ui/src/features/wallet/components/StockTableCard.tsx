@@ -107,16 +107,16 @@ export function ObservedStocksCard({ items, viewCurrency, href }: ObservedCardPr
                 <th className="px-4 py-2 text-left font-semibold text-white/30 w-8">#</th>
                 <th className="px-2 py-2 text-left font-semibold text-white/30">Symbol</th>
                 <th className="px-2 py-2 text-right font-semibold text-white/30">Zmiana %</th>
-                <th className="px-4 py-2 text-right font-semibold text-white/30">P/L ({viewCurrency})</th>
+                <th className="px-4 py-2 text-right font-semibold text-white/30">Cena ({viewCurrency})</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((item, i) => {
                 const pct = Number(item.pl_pct)
-                const abs = Number(item.pl_abs)
+                const price = Number(item.pl_abs)
                 const up  = pct >= 0
                 const pctFmt = fmtObservedPct(pct)
-                const absFmt = `${abs >= 0 ? '+' : ''}${Math.abs(abs).toFixed(2)} ${viewCurrency}`
+                const priceFmt = `${Math.abs(price).toFixed(2)} ${viewCurrency}`
                 return (
                   <tr key={item.sym} className="border-b border-white/5 last:border-0 hover:bg-white/[0.03] transition-colors">
                     <td className="px-4 py-2.5 text-white/30">{i + 1}</td>
@@ -125,7 +125,7 @@ export function ObservedStocksCard({ items, viewCurrency, href }: ObservedCardPr
                       {pctFmt}
                     </td>
                     <td className={`px-4 py-2.5 text-right tabular-nums ${up ? 'text-emerald-400/70' : 'text-red-400/70'}`}>
-                      {absFmt}
+                      {priceFmt}
                     </td>
                   </tr>
                 )

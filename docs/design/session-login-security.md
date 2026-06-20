@@ -54,6 +54,9 @@ Out of scope:
   window; `session-auth` records used tokens in cache and rejects replays.
 - 2FA setup in `next-ui` does not enable the flag when the QR code is generated;
   the flag is persisted only after a valid TOTP code is submitted.
+- The authenticated HMAC and Django session use a 30-minute sliding inactivity
+  window. A successful protected page or API request refreshes both cookies;
+  requests with missing, malformed, tampered, or expired HMAC data do not.
 
 The request fingerprint is derived from the trusted client IP, `User-Agent`, and
 `Sec-CH-UA-Platform`, then hashed with the server salt before being stored in the
@@ -79,8 +82,10 @@ cache.
 9. If 2FA is not enabled, or once 2FA verification succeeds, `sessionid` and
    `hmac_token` cookies are issued and the active login cache entry is stored
    for the HMAC validity window.
-10. `verifySession` validates and refreshes the HMAC cookie and refreshes the
-   active login cache TTL.
+10. `verifySession` validates and refreshes the HMAC cookie, marks the Django
+    session for persistence so its expiry moves forward, and refreshes the active
+    login cache TTL. Traefik copies the refreshed `hmac` and `sessionid` cookies
+    to the protected page or API response.
 11. `next-ui` renders `/logout` as a confirmation page. The session is ended only
    when the user submits the logout Server Action, which calls `session-auth`
    `POST /logout/`, clears the browser cookies, and redirects to `/login`.
@@ -135,6 +140,13 @@ user without 2FA enabled:
 
 - Status: `401 Unauthorized`
 - No auth cookies are issued
+
+`GET /verifySession/` success:
+
+- Status: `200 OK`
+- Body: `{"message": "verify_session"}`
+- Cookies: refreshed `hmac` and `sessionid`
+- Extends the authenticated inactivity window to 30 minutes
 
 `POST /login/` temporary or permanent retry block:
 
@@ -191,6 +203,9 @@ a successful login response does not expose both required auth cookies.
 - `next-ui` route guards do not trust spoofed `X-User*` headers on direct
   service access.
 - Session fixation is mitigated by Django session key rotation during login.
+- `next-ui` does not run a heartbeat or infer session activity from mouse movement,
+  keyboard input, or a merely visible tab. Only a real request to a protected page
+  or API route advances the inactivity window; an idle browser therefore expires.
 
 ## Test Expectations
 
@@ -203,7 +218,7 @@ Evidence expected from the testing process:
   cookie security flags, 403/409 mapping, fail-closed cookie handling, login page
   states, 2FA challenge handling, profile 2FA states, and proxy route guards.
 - Component tests for successful login, rejected login, session fixation, HMAC
-  verification, HMAC refresh, 2FA login verification, 2FA setup-before-enable,
+  verification, HMAC and Django-session refresh, 2FA login verification, 2FA setup-before-enable,
   logout, SQL injection and XSS payload rejection, Referer/User-Agent abuse,
   direct header spoofing, `BlockedIP`, user blocks, active login refresh, and
   second-device rejection.
