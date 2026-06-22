@@ -1,7 +1,7 @@
-from fastapi import APIRouter, HTTPException, Query, Depends, status, Request
+from fastapi import APIRouter, HTTPException, Query, Depends, status, Request, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone, date
-from typing import List, Any, Optional
+from typing import Annotated, List, Any, Optional
 import asyncio
 import uuid
 import logging
@@ -17,6 +17,7 @@ from app.schemas.schemas import (
     InstrumentOptionOut,
     InstrumentSearchRead,
     InstrumentRead,
+    InstrumentShortnameUpdate,
 )
 from app.schemas.quotes import (
     LatestQuoteBySymbol, QuotesBySymbolsRequest, CandleDailyOut, SyncDailyResponse,
@@ -26,7 +27,7 @@ from app.schemas.volume_zones import AnalysisMode, VolumeZonesResponse
 from app.crud.market import create_market, get_market_id_by_mic, list_markets
 from app.crud.instrument import (
     create_instrument, list_instruments, search_instruments_by_shortname_or_name, get_instrument_by_symbol,
-    get_instrument_with_market_by_mic_symbol
+    get_instrument_with_market_by_mic_symbol, update_instrument_shortname,
 )
 from app.api.services.quotes import (
     get_latest_quotes_by_symbols, sync_daily_by_symbol, import_daily_csv_by_symbol,
@@ -334,6 +335,36 @@ async def api_resolve_instrument(
     inst, market = result
 
     return _instrument_read_with_mic(inst, market.mic)
+
+
+@router.patch("/instruments/{symbol}/shortname", response_model=InstrumentRead)
+async def api_update_instrument_shortname(
+    symbol: Annotated[str, Path(min_length=1, max_length=12)],
+    payload: InstrumentShortnameUpdate,
+    mic: Annotated[str, Query(min_length=4, max_length=4, pattern=r"^[A-Za-z0-9]{4}$")],
+    session: AsyncSession = Depends(db.get_session),
+) -> InstrumentRead:
+    """Update the quote display name with optimistic concurrency protection."""
+    mic_u = mic.strip().upper()
+    symbol_u = symbol.strip().upper()
+
+    try:
+        async with session.begin():
+            result = await update_instrument_shortname(
+                session=session,
+                mic=mic_u,
+                symbol=symbol_u,
+                shortname=payload.shortname,
+                expected_shortname=payload.expected_shortname,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instrument not found")
+
+    instrument, market = result
+    return _instrument_read_with_mic(instrument, market.mic)
 
 
 @router.get(

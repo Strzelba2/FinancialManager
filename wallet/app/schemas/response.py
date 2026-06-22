@@ -560,3 +560,10 @@ class StockInstrumentRead(BaseModel):
     currency: str
     type: str
     status: str
+
+
+class InstrumentNameSyncResponse(BaseModel):
+    symbol: str
+    mic: str
+    name: str
+    created: bool

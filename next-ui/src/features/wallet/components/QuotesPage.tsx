@@ -7,7 +7,7 @@ import {
   Search, RefreshCw, TrendingUp, TrendingDown,
   ChevronUp, ChevronDown as ChevdownIcon, Minus,
   MoreVertical, Bell, BarChart2, Star, FileText,
-  Plus,
+  Plus, Save, LoaderCircle,
 } from 'lucide-react'
 import type { QuoteRow } from '@/lib/api/stock'
 import { FavoritesDialog } from './FavoritesDialog'
@@ -213,6 +213,11 @@ export function QuotesPage({ mic, initialRows }: Props) {
   const [showInstrumentDialog, setShowInstrumentDialog] = useState(false)
   const [stockFormError, setStockFormError] = useState<string | null>(null)
   const [savingStockForm, setSavingStockForm] = useState(false)
+  const [editingNameSymbol, setEditingNameSymbol] = useState<string | null>(null)
+  const [editNameValue, setEditNameValue] = useState('')
+  const [pendingNames, setPendingNames] = useState<Record<string, string>>({})
+  const [savingNames, setSavingNames] = useState<Record<string, boolean>>({})
+  const editNameInputRef = useRef<HTMLInputElement>(null)
   const [marketForm, setMarketForm] = useState<MarketForm>({
     mic: '',
     name: '',
@@ -239,6 +244,12 @@ export function QuotesPage({ mic, initialRows }: Props) {
   const fetchInFlightRef = useRef(false)
   const ingestPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const ingestPollInFlightRef = useRef(false)
+
+  useEffect(() => {
+    if (!editingNameSymbol) return
+    editNameInputRef.current?.focus()
+    editNameInputRef.current?.select()
+  }, [editingNameSymbol])
 
   const stopIngestPolling = useCallback(() => {
     if (ingestPollRef.current !== null) {
@@ -574,6 +585,8 @@ export function QuotesPage({ mic, initialRows }: Props) {
     setLastRefresh(initialRows.length > 0 ? new Date() : null)
     setAutoRefreshEnabled(initialRows.length > 0)
     setRefreshMessage(initialRows.length > 0 ? null : NO_QUOTES_MESSAGE)
+    setEditingNameSymbol(null)
+    setPendingNames({})
   }, [initialRows, stopIngestPolling])
 
   useEffect(() => {
@@ -603,13 +616,76 @@ export function QuotesPage({ mic, initialRows }: Props) {
     else { setSort(field); setSortDir('asc') }
   }
 
+  const startNameEdit = (row: QuoteRow) => {
+    setEditingNameSymbol(row.symbol)
+    setEditNameValue(pendingNames[row.symbol] ?? row.name ?? row.symbol)
+  }
+
+  const commitNameEdit = (row: QuoteRow) => {
+    const nextName = editNameValue.trim()
+    const persistedName = rows.find((item) => item.symbol === row.symbol)?.name ?? ''
+    setEditingNameSymbol(null)
+    if (!nextName) {
+      toast.error('Nazwa instrumentu nie może być pusta')
+      return
+    }
+
+    setPendingNames((current) => {
+      const next = { ...current }
+      if (nextName === persistedName) delete next[row.symbol]
+      else next[row.symbol] = nextName
+      return next
+    })
+  }
+
+  const saveInstrumentName = async (row: QuoteRow) => {
+    const name = pendingNames[row.symbol]
+    if (!name || savingNames[row.symbol]) return
+
+    setSavingNames((current) => ({ ...current, [row.symbol]: true }))
+    try {
+      const response = await fetch(`/api/wallet/instruments/${encodeURIComponent(row.symbol)}/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mic, name }),
+      })
+      const payload = await response.json().catch(() => null) as { name?: string; error?: string } | null
+      if (!response.ok || !payload?.name) {
+        toast.error(payload?.error ?? 'Nie udało się zapisać nazwy instrumentu')
+        return
+      }
+
+      setRows((current) => current.map((item) => (
+        item.symbol === row.symbol ? { ...item, name: payload.name ?? item.name } : item
+      )))
+      setPendingNames((current) => {
+        const next = { ...current }
+        delete next[row.symbol]
+        return next
+      })
+      toast.success('Nazwa instrumentu została zapisana')
+    } catch {
+      toast.error('Nie udało się połączyć z serwisem')
+    } finally {
+      setSavingNames((current) => {
+        const next = { ...current }
+        delete next[row.symbol]
+        return next
+      })
+    }
+  }
+
   const q = query.trim().toLowerCase()
+  const displayRows = rows.map((row) => ({
+    ...row,
+    name: pendingNames[row.symbol] ?? row.name,
+  }))
   const filtered = q
-    ? rows.filter((r) =>
+    ? displayRows.filter((r) =>
         r.symbol.toLowerCase().includes(q) ||
         (r.name ?? '').toLowerCase().includes(q),
       )
-    : rows
+    : displayRows
   const sorted = sortRows(filtered, sort, sortDir)
 
   const pos = rows.filter((r) => r.changePct >= 0).length
@@ -1037,8 +1113,43 @@ export function QuotesPage({ mic, initialRows }: Props) {
                       <td className="px-4 py-2.5 font-semibold text-white whitespace-nowrap">
                         {row.symbol}
                       </td>
-                      <td className="px-4 py-2.5 text-white/70 max-w-[260px] truncate">
-                        {row.name ?? '—'}
+                      <td className="px-4 py-2.5 text-white/70 max-w-[260px]">
+                        {editingNameSymbol === row.symbol ? (
+                          <input
+                            ref={editNameInputRef}
+                            value={editNameValue}
+                            maxLength={40}
+                            onChange={(event) => setEditNameValue(event.target.value)}
+                            onBlur={() => commitNameEdit(row)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                event.currentTarget.blur()
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault()
+                                setEditingNameSymbol(null)
+                              }
+                            }}
+                            aria-label={`Edytuj nazwę instrumentu ${row.symbol}`}
+                            className="w-full min-w-[180px] rounded border border-blue-500/50 bg-slate-900 px-2 py-1 text-sm text-white outline-none focus:border-blue-400"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onDoubleClick={() => startNameEdit(row)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === 'F2') {
+                                event.preventDefault()
+                                startNameEdit(row)
+                              }
+                            }}
+                            aria-label={`Nazwa instrumentu ${row.symbol}: ${row.name ?? '—'}. Kliknij dwukrotnie, aby edytować`}
+                            className="block max-w-[260px] truncate text-left text-white/70 hover:text-white focus:outline-none focus:ring-1 focus:ring-blue-400/60"
+                          >
+                            {row.name ?? '—'}
+                          </button>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-left tabular-nums text-white whitespace-nowrap">
                         {row.lastPriceFmt}
@@ -1073,7 +1184,21 @@ export function QuotesPage({ mic, initialRows }: Props) {
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-right">
-                        <div className="inline-block" data-row-menu>
+                        <div className="inline-flex items-center gap-1" data-row-menu>
+                          {pendingNames[row.symbol] !== undefined && (
+                            <button
+                              type="button"
+                              onClick={() => void saveInstrumentName(row)}
+                              disabled={savingNames[row.symbol]}
+                              aria-label={`Zapisz nazwę instrumentu ${row.symbol}`}
+                              title="Zapisz nazwę"
+                              className="rounded p-1 text-emerald-400 transition-colors hover:bg-emerald-500/10 hover:text-emerald-300 disabled:cursor-wait disabled:opacity-60"
+                            >
+                              {savingNames[row.symbol]
+                                ? <LoaderCircle className="w-4 h-4 animate-spin" />
+                                : <Save className="w-4 h-4" />}
+                            </button>
+                          )}
                           <button
                             onClick={(e) => {
                               e.stopPropagation()

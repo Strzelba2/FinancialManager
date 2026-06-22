@@ -59,6 +59,35 @@ describe('wallet API client', () => {
     expect(result).toEqual({ ok: false, error: 'Field required', status: 422 })
   })
 
+  it('synchronizes instrument names with the internal user header', async () => {
+    await nextUiUnitStory('Wallet API client synchronizes canonical instrument display names', {
+      severity: 'critical',
+      tags: ['wallet', 'stock', 'instruments', 'api-client', 'financial-data'],
+    })
+    const requests: Request[] = []
+    server.use(http.put('http://wallet:8001/wallet/instruments/PKO/name', async ({ request }) => {
+      requests.push(request.clone())
+      return HttpResponse.json({ symbol: 'PKO', mic: 'XWAR', name: 'PKO BP SA', created: true })
+    }))
+    process.env.WALLET_API_URL = 'http://wallet:8001'
+    const { synchronizeInstrumentName } = await import('@/lib/api/wallet')
+
+    const result = await synchronizeInstrumentName(
+      'user-1',
+      'PKO',
+      { mic: 'XWAR', name: 'PKO BP SA' },
+    )
+
+    expect(result).toEqual({
+      ok: true,
+      status: 200,
+      data: { symbol: 'PKO', mic: 'XWAR', name: 'PKO BP SA', created: true },
+    })
+    expect(requests[0]?.method).toBe('PUT')
+    expect(requests[0]?.headers.get('X-User-Id')).toBe('user-1')
+    await expect(requests[0]?.json()).resolves.toEqual({ mic: 'XWAR', name: 'PKO BP SA' })
+  })
+
   it('preserves favorite-list duplicate conflict messages from wallet service', async () => {
     await nextUiUnitStory('Wallet API client preserves favorite-list duplicate conflicts', {
       severity: 'critical',

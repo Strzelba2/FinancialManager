@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel, Field
-from pydantic import ConfigDict, BaseModel
+from pydantic import ConfigDict, BaseModel, field_validator
 from typing import Optional, Annotated, List
 from datetime import datetime
 from decimal import Decimal
@@ -17,7 +17,8 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
 
 from app.validators.validators import (
     Username12, EmailLower, FirstNameOpt, NonEmptyStr, Shortname, BICOpt, Q2OptNonNeg,
-    Q2, Q2NonNeg, Q3, Q3OptNonNeg, Q10Opt, Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt
+    Q2, Q2NonNeg, Q3, Q3OptNonNeg, Q10Opt, Q6Pos, AreaQ2OptPos, CountryISO2Opt, CityOpt, NoneIfEmpty, IBANOpt,
+    MICCode,
 )
 
 from app.models.enums import (
@@ -293,6 +294,16 @@ class InstrumentUpdate(PartialUpdateMixin):
     sync_at: Optional[datetime] = None
     
     __update_require_any__ = {"symbol", "name", "type", "currency", "sync_at"}
+
+
+class InstrumentNameSyncRequest(BaseModel):
+    mic: MICCode
+    name: str = Field(min_length=1, max_length=40)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
     
     
 class TransactionCreate(TransactionBase):

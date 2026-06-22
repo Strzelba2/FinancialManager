@@ -18,6 +18,7 @@ Covered behavior:
 - wallet-side instrument mirroring after stock resolve
 - manual stock market and instrument creation
 - `quote_source` refresh for occasional foreign instruments
+- synchronized correction of instrument display names from the quotes table
 
 Out of scope:
 
@@ -138,6 +139,25 @@ Refresh writes latest quote data when a price is found. If a quote source page c
 parsed, the refresh result should expose a controlled per-instrument error without
 corrupting other quote updates.
 
+### Instrument Display Name Synchronization
+
+The quotes table displays `stock.instrument.shortname`. Wallet mirrors that value in
+`wallet.instruments.name`; the full legal `stock.instrument.name` is not changed by an
+inline correction. Symbols remain stable.
+
+An authenticated user may correct this shared display name from `/stock/quotes/[mic]`.
+The change is global because instrument rows are shared reference data rather than
+user-owned aliases. Wallet coordinates the two writes and automatically creates its
+local mirror from canonical stock metadata when the symbol is not present there yet.
+
+The stock update uses the previously resolved shortname as an optimistic concurrency
+condition. A stock error rolls back the wallet transaction. If wallet persistence fails
+after stock changed, wallet attempts a conditional compensating update to restore the
+previous stock shortname. A failed compensation is logged as a critical consistency
+error and returned as a controlled server failure. For an ambiguous stock timeout or
+invalid response, wallet resolves the instrument again and continues only when the
+requested shortname is already persisted.
+
 ## Main Flow
 
 ```mermaid
@@ -165,6 +185,26 @@ sequenceDiagram
         Wallet->>Wallet: Write events, cash transactions, holdings, gains
         Wallet-->>Next: Import summary
     end
+```
+
+Inline display-name correction follows this sequence:
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Next as next-ui
+    participant Wallet as wallet
+    participant Stock as stock
+
+    User->>Next: Save edited quote name
+    Next->>Wallet: PUT instrument name (authenticated)
+    Wallet->>Stock: Resolve MIC + symbol
+    Stock-->>Wallet: Canonical metadata + current shortname
+    Wallet->>Wallet: Lock or prepare local mirror
+    Wallet->>Stock: PATCH shortname with expected old value
+    Stock-->>Wallet: Normalized instrument
+    Wallet->>Wallet: Store the returned shortname as name
+    Wallet-->>Next: Synchronized name and created flag
 ```
 
 ## Error Handling
@@ -202,7 +242,18 @@ POST /stock/instruments
 GET /stock/instruments/resolve
 POST /stock/ingest/quotes
 GET /stock/ingest/quotes/status
+PATCH /stock/instruments/{symbol}/shortname?mic=XWAR
 ```
+
+The authenticated synchronization entry point is:
+
+```text
+PUT /wallet/instruments/{symbol}/name
+```
+
+It accepts `{ "mic": "XWAR", "name": "PKO BP SA" }` and returns
+`{ symbol, mic, name, created }`. The internal stock PATCH accepts `shortname` and
+`expected_shortname`; conflicts return `409` and validation failures return `422`.
 
 Import preflight failures return `422` and no wallet rows are written. Duplicate rows may
 be reported as skipped only after blocking preflight checks have passed.
@@ -223,11 +274,17 @@ Stock:
 
 ## Security Considerations
 
-All wallet mutations are user-scoped. Next UI forwards the authenticated wallet user ID,
-and wallet checks ownership of the wallet, brokerage account, and linked cash accounts.
+Financial wallet mutations are user-scoped. Next UI forwards the authenticated wallet
+user ID, and wallet checks ownership of wallets, brokerage accounts, and linked cash
+accounts. Instrument display-name correction is the explicit exception: it requires an
+authenticated user but changes shared reference data globally.
 
 Instrument resolution is a trust boundary. Wallet may not accept arbitrary browser or CSV
 instrument text as an owned instrument without stock confirmation.
+
+The public mutation is exposed only through the ForwardAuth-protected Next UI route.
+Wallet still requires the forwarded internal user ID. The internal stock mutation is
+called by wallet on the service network and is not exposed as a separate browser flow.
 
 `quote_source` is user-provided configuration. Refresh should validate supported source
 shape and avoid leaking internal parser details to the browser.
@@ -245,4 +302,9 @@ Evidence expected from the testing process:
   network calls
 - stock component/API tests for manual markets, instruments, resolve, and quote refresh
 - integration checks for wallet brokerage and stock manual-instrument API paths
-
+- Next UI tests for double-click editing, keyboard/blur commit, dirty state, save errors,
+  and refresh protection
+- stock and wallet unit/API tests for optimistic conflicts, mirror creation, rollback,
+  and compensation
+- an isolated cross-service integration test asserting identical stock shortname and
+  wallet name after synchronization

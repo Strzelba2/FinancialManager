@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from app.api.deps import get_auth_crypto, get_internal_user_id, get_stock_client
 from app.clients.auth_client import AuthCryptoClient
-from app.clients.stock_client import StockClient
+from app.clients.stock_client import StockClient, StockInstrumentUpdateError
 
 pytestmark = pytest.mark.unit
 
@@ -235,6 +235,45 @@ class WalletClientBoundaryTests(unittest.IsolatedAsyncioTestCase):
             await unavailable_client.resolve_instrument("XWAR", "PKO")
         with self.assertRaisesRegex(ValueError, "Invalid instrument payload"):
             await invalid_client.resolve_instrument("XWAR", "PKO")
+
+    async def test_update_instrument_shortname_sends_conditional_patch(self) -> None:
+        fake = _FakeAsyncHttpClient(
+            httpx.Response(
+                200,
+                json={
+                    "mic": "XWAR",
+                    "symbol": "PKO",
+                    "shortname": "PKO BP SA",
+                    "name": "POWSZECHNA KASA",
+                    "currency": "PLN",
+                    "type": "STOCK",
+                    "status": "ACTIVE",
+                },
+            )
+        )
+        client = _stock_client_with(fake)
+
+        result = await client.update_instrument_shortname("xwar", "pko", "PKO BP SA", "PKO")
+
+        self.assertEqual(result.shortname, "PKO BP SA")
+        self.assertEqual(fake.calls[0]["method"], "PATCH")
+        self.assertEqual(fake.calls[0]["url"], "/stock/instruments/PKO/shortname")
+        self.assertEqual(fake.calls[0]["params"], {"mic": "XWAR"})
+        self.assertEqual(
+            fake.calls[0]["json"],
+            {"shortname": "PKO BP SA", "expected_shortname": "PKO"},
+        )
+
+    async def test_update_instrument_shortname_preserves_stock_error_status(self) -> None:
+        client = _stock_client_with(
+            _FakeAsyncHttpClient(httpx.Response(409, json={"detail": "concurrent update"}))
+        )
+
+        with self.assertRaises(StockInstrumentUpdateError) as captured:
+            await client.update_instrument_shortname("XWAR", "PKO", "NEW", "OLD")
+
+        self.assertEqual(captured.exception.status_code, 409)
+        self.assertEqual(captured.exception.detail, "concurrent update")
 
 
 @allure.epic("Unit Tests")

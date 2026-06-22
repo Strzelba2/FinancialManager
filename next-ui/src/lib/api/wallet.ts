@@ -37,6 +37,13 @@ export type BrokerageImportSummary = {
   rows: BrokerageImportRowResult[]
 }
 
+export type InstrumentNameSyncResponse = {
+  symbol: string
+  mic: string
+  name: string
+  created: boolean
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -96,6 +103,19 @@ async function requestOrNull<T>(
 ): Promise<T | null> {
   const result = await request<T>(method, path, body, extraHeaders)
   return result.ok ? result.data : null
+}
+
+export async function synchronizeInstrumentName(
+  userId: string,
+  symbol: string,
+  payload: { mic: string; name: string },
+): Promise<ApiResult<InstrumentNameSyncResponse>> {
+  return request<InstrumentNameSyncResponse>(
+    'PUT',
+    `/wallet/instruments/${encodeURIComponent(symbol)}/name`,
+    payload,
+    { 'X-User-Id': userId },
+  )
 }
 
 export async function createAccount(

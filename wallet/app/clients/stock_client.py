@@ -12,6 +12,13 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+class StockInstrumentUpdateError(RuntimeError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
 class StockClient:
     """
     Thin async client for the STOCK service.
@@ -23,6 +30,7 @@ class StockClient:
     QUOTES_BY_SYMBOLS_PATH = "/stock/quotes/latest/symbols" 
     SYNC_DAILY_CANDLES_PATH = "/stock/instruments/{symbol}/candles/daily/sync"
     INSTRUMENT_RESOLVE_PATH = "/stock/instruments/resolve"
+    INSTRUMENT_SHORTNAME_PATH = "/stock/instruments/{symbol}/shortname"
 
     def __init__(self) -> None:
         """Bind this client to a shared AsyncClient stored in `app.state.stock_httpx`."""
@@ -217,3 +225,41 @@ class StockClient:
                 f"resolve_instrument: failed to parse response (mic={mic_u} symbol={sym_u}) body={resp.text}"
             )
             raise ValueError("Invalid instrument payload from stock-service")
+
+    async def update_instrument_shortname(
+        self,
+        mic: str,
+        symbol: str,
+        shortname: str,
+        expected_shortname: str,
+    ) -> StockInstrumentRead:
+        """Update a stock display name and preserve the backend error contract."""
+        mic_u = mic.strip().upper()
+        symbol_u = symbol.strip().upper()
+        path = self.INSTRUMENT_SHORTNAME_PATH.format(symbol=symbol_u)
+        response = await self._request(
+            "PATCH",
+            path,
+            params={"mic": mic_u},
+            json_body={
+                "shortname": shortname,
+                "expected_shortname": expected_shortname,
+            },
+        )
+        if response is None:
+            raise StockInstrumentUpdateError(503, "Stock service unavailable.")
+
+        if response.status_code != 200:
+            detail = f"Stock service error: {response.status_code}"
+            try:
+                payload = response.json()
+                if isinstance(payload, dict) and isinstance(payload.get("detail"), str):
+                    detail = payload["detail"]
+            except ValueError:
+                pass
+            raise StockInstrumentUpdateError(response.status_code, detail)
+
+        try:
+            return StockInstrumentRead.model_validate(response.json())
+        except Exception as exc:
+            raise StockInstrumentUpdateError(502, "Invalid instrument payload from stock-service.") from exc

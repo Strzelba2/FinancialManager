@@ -4,6 +4,7 @@ import uuid
 
 from app.models.base import InstrumentBase, MarketBase, QuoteLatestBase
 from app.models.enums import InstrumentType, Currency
+from app.validators.validators import Shortname40
 
 
 class MarketCreate(MarketBase):
@@ -21,6 +22,11 @@ class InstrumentManualCreate(InstrumentBase):
     market_id: Optional[uuid.UUID] = None
     market_mic: Optional[str] = None
     currency: Optional[Currency] = None
+
+
+class InstrumentShortnameUpdate(BaseModel):
+    shortname: Shortname40
+    expected_shortname: Shortname40
 
 
 class InstrumentRead(InstrumentBase):

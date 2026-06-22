@@ -111,6 +111,38 @@ async def get_instrument_with_market_by_mic_symbol(
     return inst, market
 
 
+async def update_instrument_shortname(
+    session: AsyncSession,
+    mic: str,
+    symbol: str,
+    shortname: str,
+    expected_shortname: str,
+) -> Optional[Tuple[Instrument, Market]]:
+    """Update the display name only when the caller has the current value."""
+    stmt = (
+        select(Instrument, Market)
+        .join(Market, Market.id == Instrument.market_id)
+        .where(Market.mic == mic, Instrument.symbol == symbol)
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    row = result.first()
+    if row is None:
+        return None
+
+    instrument, market = row
+    if instrument.shortname != expected_shortname:
+        raise ValueError("Instrument shortname changed concurrently.")
+
+    instrument.shortname = shortname
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        raise ValueError("Instrument with this shortname already exists.") from exc
+
+    return instrument, market
+
+
 async def create_instrument(session: AsyncSession, data: InstrumentCreate) -> Instrument:
     """
     Create and persist a new instrument.
