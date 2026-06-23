@@ -460,6 +460,22 @@ class QuoteSourcePageParserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.change_pct, Decimal("-5.970"))
         self.assertEqual(result.volume, 752979)
 
+    async def test_provider_table_uses_percent_from_combined_change_cell(self) -> None:
+        page = _FakeQuotePage([
+            ["Kurs", "17.16 €"],
+            ["Zmiana", "+0.08 (+0.47%)"],
+            ["Zmiana 52t", "+6.02 (54.04%)"],
+            ["Wolumen", "882"],
+            ["Data", "17:30"],
+        ])
+
+        result = await parse_quote_source_page(page, f"{ST_BASE_URL}/q/?s=un9.de")
+
+        self.assertEqual(result.symbol, "UN9.DE")
+        self.assertEqual(result.last_price, Decimal("17.160"))
+        self.assertEqual(result.change_pct, Decimal("0.470"))
+        self.assertEqual(result.volume, 882)
+
     async def test_provider_table_missing_price_returns_controlled_error(self) -> None:
         page = _FakeQuotePage([
             ["Wolumen", "752,979"],

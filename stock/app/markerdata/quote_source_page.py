@@ -90,6 +90,13 @@ def _normalize_label(value: str) -> str:
     return text
 
 
+def _extract_percent_value(value: str) -> str | None:
+    percent_matches = re.findall(r"[-+]?\d+(?:[,.]\d+)?\s*%", value or "")
+    if not percent_matches:
+        return None
+    return percent_matches[-1].replace(" ", "")
+
+
 def _value_from_row_cells(label: str, values: list[str]) -> str | None:
     normalized_label = _normalize_label(label)
     candidates = [value for value in values if value]
@@ -98,8 +105,9 @@ def _value_from_row_cells(label: str, values: list[str]) -> str | None:
 
     if "zmiana" in normalized_label:
         for value in candidates:
-            if "%" in value and parse_float_pl(value) is not None:
-                return value
+            percent_value = _extract_percent_value(value)
+            if percent_value is not None and parse_float_pl(percent_value) is not None:
+                return percent_value
 
     if "wolumen" in normalized_label or "volume" in normalized_label:
         for value in candidates:

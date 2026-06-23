@@ -29,6 +29,24 @@ describe('QuotesPage manual instruments', () => {
     vi.clearAllMocks()
     server.resetHandlers()
   })
+
+  it('shows the PLNC quotes market fallback as PLN', async () => {
+    await nextUiUnitStory('Stock quotes page exposes PLNC currency quotes in the market switcher', {
+      severity: 'normal',
+      tags: ['stock', 'quotes', 'currency', 'next-ui'],
+    })
+
+    server.use(
+      http.get('*/api/stock/markets', () => HttpResponse.json({ error: 'markets unavailable' }, { status: 404 })),
+    )
+
+    render(<QuotesPage mic="XWAR" initialRows={[]} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'PLN' }))
+
+    expect(routerPush).toHaveBeenCalledWith('/stock/quotes/PLNC')
+  })
+
   it('sends quote_source when adding a manual instrument with external URL', async () => {
     await nextUiUnitStory('Stock quotes page adds manual instrument with quote_source', {
       severity: 'critical',

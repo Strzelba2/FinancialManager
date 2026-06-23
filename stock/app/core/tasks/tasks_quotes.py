@@ -3,7 +3,7 @@ import logging
 
 from app.core.celery_app import celery_app
 from app.core.context import app_context, market_lock
-from app.markerdata.registry import get_provider
+from app.markerdata.registry import MARKET_INGEST_KEYS, get_provider
 from app.api.services.stock import (
     ingest_market,
     ingest_gpw_quotes_from_html,
@@ -32,7 +32,7 @@ def ingest_gpw_quarter() -> int:
     This task:
     - Creates an application context (DB session + storage).
     - Resolves the "market" provider.
-    - For each supported `market_key` ("pl-wse", "pl-newconnect"):
+    - For each configured market key from `MARKET_INGEST_KEYS`:
         * Acquires a distributed lock via `market_lock`.
         * Runs `ingest_market` to fetch and store quotes.
     - Sums up all processed rows and returns the total.
@@ -46,7 +46,7 @@ def ingest_gpw_quarter() -> int:
         async with app_context() as (session, storage):
             all_processed = 0
 
-            for market_key in ("pl-wse", "pl-newconnect", "commodities", "cpi"):
+            for market_key in MARKET_INGEST_KEYS:
                 logger.info(
                     f"ingest_gpw_quarter: processing market_key={market_key!r}"
                 )

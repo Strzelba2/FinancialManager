@@ -34,7 +34,7 @@ from app.api.services.quotes import (
 )
 from app.crud.candle_daily import list_candles_daily
 from app.crud.report_snapshot import get_latest_ready_report_ai_snapshot
-from app.markerdata.registry import get_provider
+from app.markerdata.registry import MARKET_INGEST_KEYS, get_provider
 from app.models.enums import ReportAssetClass
 from app.api.services.stock import ingest_market, refresh_quote_source_instruments
 from app.analysis.volume_zones import analyze_volume_zones
@@ -817,7 +817,7 @@ async def start_manual_ingest(
             provider = get_provider("market") 
             async with db.async_session() as session:
                 all_processed = 0
-                for market_key in ("pl-wse", "pl-newconnect", "commodities", "cpi"):
+                for market_key in MARKET_INGEST_KEYS:
                     logger.debug(
                             f"ingest_quarter: processing market_key={market_key!r}"
                         )

@@ -36,7 +36,17 @@ MARKETS = {
         instrument_type=InstrumentType.MACRO, 
         layout=TableLayout(min_cols=5, volume_col=None, time_col=4),
     ),
+    "pln_currency": MarketConfig(
+        id="pln_currency",
+        base_url=settings.ST_BASE_URL,
+        start_path=settings.ST_START_PLN_CURRENCY_QUOTE_URL,
+        mic="PLNC",  
+        instrument_type=InstrumentType.CURRENCY_PAIR,
+        layout=TableLayout(min_cols=6, volume_col=None, time_col=5),
+    )
 }
+
+MARKET_INGEST_KEYS = tuple(MARKETS.keys())
 
 PROVIDERS = {
     "market": MarketProvider(MARKETS),

@@ -215,7 +215,7 @@ async def iter_wse_rows(page: Page, cfg: MarketConfig) -> AsyncIterator[IndexRow
             raise RuntimeError(f"HTTP {resp.status} at {url}")
 
         try:
-            await page.wait_for_load_state("networkidle", timeout=3000)
+            await page.wait_for_load_state("networkidle", timeout=4000)
         except Exception as e:
             logger.debug(
                 f"iter_wse_rows: networkidle wait failed/timeout on page_no={page_no}: {e}"
