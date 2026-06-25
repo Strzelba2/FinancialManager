@@ -43,6 +43,14 @@ MARKETS = {
         mic="PLNC",  
         instrument_type=InstrumentType.CURRENCY_PAIR,
         layout=TableLayout(min_cols=6, volume_col=None, time_col=5),
+    ),
+    "global_indexs": MarketConfig(
+        id="global_indexs",
+        base_url=settings.ST_BASE_URL,
+        start_path=settings.ST_START_PLN_INDEXS_QUOTE_URL,
+        mic="GLIX",
+        instrument_type=InstrumentType.INDEX,
+        layout=TableLayout(min_cols=6, volume_col=None, time_col=5),
     )
 }
 

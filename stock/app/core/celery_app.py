@@ -13,8 +13,17 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 log_file = os.path.join(ROOT_DIR, 'logs', 'celery_stock.json')
 
+
+def _build_log_handler(log_path: str) -> logging.Handler:
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        return logging.FileHandler(log_path, encoding='utf-8')
+    except OSError:
+        return logging.StreamHandler()
+
+
 logger = logging.getLogger()
-logHandler = logging.FileHandler(log_file, encoding='utf-8')
+logHandler = _build_log_handler(log_file)
 
 log_format = (
     '%(levelname)s %(name)-12s %(asctime)s %(module)s %(process)d %(thread)d %(message)s'

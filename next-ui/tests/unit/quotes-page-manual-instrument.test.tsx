@@ -47,6 +47,23 @@ describe('QuotesPage manual instruments', () => {
     expect(routerPush).toHaveBeenCalledWith('/stock/quotes/PLNC')
   })
 
+  it('shows the GLIX quotes market fallback as global indexes', async () => {
+    await nextUiUnitStory('Stock quotes page exposes GLIX global indexes in the market switcher', {
+      severity: 'normal',
+      tags: ['stock', 'quotes', 'indexes', 'next-ui'],
+    })
+
+    server.use(
+      http.get('*/api/stock/markets', () => HttpResponse.json({ error: 'markets unavailable' }, { status: 404 })),
+    )
+
+    render(<QuotesPage mic="XWAR" initialRows={[]} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Indeksy' }))
+
+    expect(routerPush).toHaveBeenCalledWith('/stock/quotes/GLIX')
+  })
+
   it('sends quote_source when adding a manual instrument with external URL', async () => {
     await nextUiUnitStory('Stock quotes page adds manual instrument with quote_source', {
       severity: 'critical',

@@ -2,9 +2,14 @@ import { NextRequest } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createInstrument, createMarket, getInstruments, getMarkets } from '@/lib/api/stock'
+import StockChartsRoute from '@/app/(dashboard)/stock/charts/[mic]/page'
 import { GET as getInstrumentsRoute, POST as postInstrumentRoute } from '@/app/api/stock/instruments/route'
 import { GET as getMarketsRoute, POST as postMarketRoute } from '@/app/api/stock/markets/route'
 import { nextUiUnitStory } from '../allure'
+
+vi.mock('@/features/wallet/components/ChartsPage', () => ({
+  ChartsPage: () => null,
+}))
 
 vi.mock('@/lib/api/stock', () => ({
   createInstrument: vi.fn(),
@@ -41,6 +46,38 @@ describe('stock route handlers', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual([{ mic: 'XLON', name: 'London Stock Exchange' }])
     expect(getMarkets).toHaveBeenCalledWith({ onlyWithInstruments: true })
+  })
+
+  it('normalizes chart route markets and falls back to the first supported MIC', async () => {
+    await nextUiUnitStory('Stock charts route normalizes market options for the charts page', {
+      severity: 'normal',
+      tags: ['stock', 'charts', 'api-route', 'next-ui'],
+    })
+    vi.mocked(getMarkets).mockResolvedValue({
+      ok: true,
+      data: [
+        { mic: ' xlon ', name: ' London ' },
+        { mic: 'BAD', name: 'Invalid' },
+      ],
+    })
+    vi.mocked(getInstruments).mockResolvedValue({
+      ok: true,
+      data: [{ symbol: 'VOD', shortname: 'Vodafone' }],
+    })
+
+    const element = await StockChartsRoute({
+      params: Promise.resolve({ mic: 'bad!' }),
+      searchParams: Promise.resolve({ symbol: ' vod ' }),
+    })
+
+    expect(getMarkets).toHaveBeenCalledWith({ onlyWithInstruments: true })
+    expect(getInstruments).toHaveBeenCalledWith('XLON')
+    expect(element.props).toEqual({
+      mic: 'XLON',
+      marketOptions: [{ mic: 'XLON', name: 'London' }],
+      instruments: [{ symbol: 'VOD', shortname: 'Vodafone' }],
+      preselectedSymbol: 'VOD',
+    })
   })
 
   it('creates a market with an uppercased MIC', async () => {

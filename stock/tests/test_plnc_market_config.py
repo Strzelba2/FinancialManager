@@ -31,7 +31,7 @@ class _AsyncContext:
 
 @allure.epic("Unit Tests")
 @allure.feature("Stock Market Data")
-@allure.story("PLNC currency quotes use the registered provider and scheduled ingest")
+@allure.story("Registered Stooq quote markets use the provider and scheduled ingest")
 @allure.severity(allure.severity_level.CRITICAL)
 @allure.tag("market-data", "quotes", "stock")
 @allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
@@ -46,9 +46,20 @@ class PlncMarketConfigTests(unittest.TestCase):
         self.assertIsNone(cfg.layout.volume_col)
         self.assertEqual(cfg.layout.time_col, 5)
 
-    def test_scheduled_ingest_includes_pln_currency_market(self) -> None:
+    def test_global_indexs_registry_uses_index_source(self) -> None:
+        cfg = MARKETS["global_indexs"]
+
+        self.assertEqual(cfg.mic, "GLIX")
+        self.assertEqual(cfg.instrument_type, InstrumentType.INDEX)
+        self.assertEqual(cfg.start_path, settings.ST_START_PLN_INDEXS_QUOTE_URL)
+        self.assertEqual(cfg.layout.min_cols, 6)
+        self.assertIsNone(cfg.layout.volume_col)
+        self.assertEqual(cfg.layout.time_col, 5)
+
+    def test_scheduled_ingest_includes_stooq_quote_markets(self) -> None:
         self.assertEqual(MARKET_INGEST_KEYS, tuple(MARKETS.keys()))
         self.assertIn("pln_currency", MARKET_INGEST_KEYS)
+        self.assertIn("global_indexs", MARKET_INGEST_KEYS)
         self.assertIs(tasks_quotes.MARKET_INGEST_KEYS, MARKET_INGEST_KEYS)
 
     def test_celery_ingest_runs_every_registered_market(self) -> None:

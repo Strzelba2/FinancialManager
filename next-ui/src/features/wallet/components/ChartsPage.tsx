@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
 import ReactECharts from 'echarts-for-react'
 import { toast } from 'sonner'
 import {
@@ -12,6 +11,13 @@ import {
 import type { CandleDay, SyncCandlesResult, VolumeZonesResponse } from '@/lib/api/stock'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   buildDateIndexResolver,
   buildDirectionalEpisodeBoxSeries,
@@ -39,8 +45,13 @@ import {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const MIC_LABELS: Record<string, string> = { XWAR: 'GPW', XNCO: 'NewConnect', STCM: 'RAW' }
-const MICS = ['XWAR', 'XNCO', 'STCM'] as const
+const MIC_LABELS: Record<string, string> = { XWAR: 'GPW', XNCO: 'NewConnect', STCM: 'RAW', PLNC: 'PLN' }
+const DEFAULT_MARKETS = [
+  { mic: 'XWAR', name: 'GPW' },
+  { mic: 'XNCO', name: 'NewConnect' },
+  { mic: 'STCM', name: 'RAW' },
+  { mic: 'PLNC', name: 'PLN' },
+]
 const CHART_COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
   '#ef4444', '#06b6d4', '#f97316', '#84cc16',
@@ -54,6 +65,9 @@ type Layout = 'separate' | 'combined'
 type DateRange = '1M' | '3M' | '1Y' | 'ALL' | 'CUSTOM'
 type AggInterval = 'D' | 'W' | 'M'
 type DrawMode = 'cursor' | 'hline' | 'vline' | 'trend' | 'channel'
+type LineScaleMode = 'price' | 'percent' | 'index100'
+type MarketOption = { mic: string; name: string }
+type SelectedSeries = { key: string; mic: string; symbol: string; shortname?: string | null }
 
 type AnnoStyle = { color: string; width: number }
 type XAnchor = { date: string; offset?: number }
@@ -113,7 +127,28 @@ type EngineState = {
 }
 
 type Instrument = { symbol: string; shortname: string }
-type SeriesData = { result: SyncCandlesResult; candles: CandleDay[] }
+type SeriesData = { result: SyncCandlesResult; candles: CandleDay[]; selection: SelectedSeries; label: string }
+
+function normalizeMic(value: string): string {
+  return value.trim().toUpperCase()
+}
+
+function normalizeSymbol(value: string): string {
+  return value.trim().toUpperCase()
+}
+
+function seriesKey(mic: string, symbol: string): string {
+  return `${normalizeMic(mic)}:${normalizeSymbol(symbol)}`
+}
+
+function marketName(mic: string, markets: MarketOption[]): string {
+  const normalizedMic = normalizeMic(mic)
+  return MIC_LABELS[normalizedMic] ?? markets.find((market) => market.mic === normalizedMic)?.name ?? normalizedMic
+}
+
+function seriesLabel(selection: SelectedSeries, markets: MarketOption[]): string {
+  return `${selection.symbol} · ${marketName(selection.mic, markets)}`
+}
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
 
@@ -480,6 +515,33 @@ function loadChartState(sym: string): Omit<PersistedChartState, 'v' | 'ts'> {
 const AXIS_LABEL_STYLE = { color: 'rgba(255,255,255,0.35)', fontSize: 10 }
 const SPLIT_LINE_STYLE = { lineStyle: { color: 'rgba(255,255,255,0.05)' } }
 const VOL_LABEL_FMT = (v: number) => v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(0)}K` : String(v)
+
+function formatLineRawValue(value: number): string {
+  const abs = Math.abs(value)
+  if (abs > 0 && abs < 10) return value.toFixed(4)
+  if (abs >= 1000) return value.toLocaleString('pl-PL', { maximumFractionDigits: 0 })
+  return value.toFixed(2)
+}
+
+function formatLineValue(value: number, scaleMode: LineScaleMode): string {
+  if (scaleMode === 'percent') return `${value.toFixed(2)}%`
+  if (scaleMode === 'index100') return value.toFixed(2)
+  return value.toFixed(2)
+}
+
+function firstFiniteNonZero(values: (number | null)[]): number | null {
+  const first = values.find((value) => value != null && Number.isFinite(value) && value !== 0)
+  return first ?? null
+}
+
+function scaleLineValue(value: number | null, base: number | null, scaleMode: LineScaleMode): number | null {
+  if (value == null || !Number.isFinite(value)) return null
+  if (scaleMode === 'price') return value
+  if (base == null || !Number.isFinite(base) || base === 0) return null
+  if (scaleMode === 'percent') return ((value / base) - 1) * 100
+  return (value / base) * 100
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function tooltipFormatter(params: any[]): string {
   if (!params?.length) return ''
@@ -510,8 +572,18 @@ function tooltipFormatter(params: any[]): string {
     } else {
       // line / scatter etc.
       if (v == null) continue
-      const n = Number(v)
-      if (Number.isFinite(n)) display = n.toFixed(2)
+      const data = (p.data ?? {}) as { value?: unknown; raw?: unknown; scaleMode?: unknown }
+      const n = typeof v === 'number' ? v : Number(data.value)
+      if (Number.isFinite(n)) {
+        const scaleMode = data.scaleMode === 'percent' || data.scaleMode === 'index100' || data.scaleMode === 'price'
+          ? data.scaleMode
+          : 'price'
+        display = formatLineValue(n, scaleMode)
+        const raw = Number(data.raw)
+        if (scaleMode !== 'price' && Number.isFinite(raw)) {
+          display += ` · ${formatLineRawValue(raw)}`
+        }
+      }
     }
 
     if (!display) continue
@@ -764,6 +836,7 @@ function buildCandlestickOption(
 function buildLineOption(
   seriesMap: Map<string, CandleDay[]>, showVolume: boolean, indicators: Set<string>,
   crosshairOn = true,
+  lineScaleMode: LineScaleMode = 'price',
 ): object {
   const allDates = [...new Set([...seriesMap.values()].flatMap((c) => c.map((d) => d.date_quote)))].sort()
   const series: Record<string, unknown>[] = []
@@ -772,20 +845,35 @@ function buildLineOption(
   for (const [sym, candles] of seriesMap) {
     const byDate = new Map(candles.map((c) => [c.date_quote, c]))
     const closes = allDates.map((d) => { const v = byDate.get(d)?.close; return v != null ? Number(v) : null })
+    const base = firstFiniteNonZero(closes)
+    const lineData = closes.map((value) => {
+      const scaled = scaleLineValue(value, base, lineScaleMode)
+      return scaled == null ? null : { value: scaled, raw: value, scaleMode: lineScaleMode }
+    })
     const color = CHART_COLORS[colorIdx++ % CHART_COLORS.length] ?? '#3b82f6'
-    series.push({ name: sym, type: 'line', data: closes, showSymbol: false, lineStyle: { width: 2, color }, color, connectNulls: false })
+    series.push({ name: sym, type: 'line', data: lineData, showSymbol: false, lineStyle: { width: 2, color }, color, connectNulls: false })
 
     const dateToIdx = new Map(candles.map((c, i) => [c.date_quote, i]))
     const candleCloses = candles.map((c) => Number(c.close))
     for (const p of SMA_PERIODS) {
       if (!indicators.has(`sma-${p}`)) continue
       const smaVals = sma(candleCloses, p)
-      const smaFull = allDates.map((d) => { const i = dateToIdx.get(d); return i !== undefined ? smaVals[i] : null })
-      series.push({ name: `${sym} SMA${p}`, type: 'line', data: smaFull, showSymbol: false, lineStyle: { width: 1.5, type: 'dashed', color }, color, connectNulls: false })
+      const smaFull = allDates.map((d) => { const i = dateToIdx.get(d); return i !== undefined ? smaVals[i] ?? null : null })
+      const smaData = smaFull.map((value) => {
+        const scaled = scaleLineValue(value, base, lineScaleMode)
+        return scaled == null ? null : { value: scaled, raw: value, scaleMode: lineScaleMode }
+      })
+      series.push({ name: `${sym} SMA${p}`, type: 'line', data: smaData, showSymbol: false, lineStyle: { width: 1.5, type: 'dashed', color }, color, connectNulls: false })
     }
     if (indicators.has('bb') && seriesMap.size === 1) {
       const bb = bollingerBands(candleCloses)
-      const mapBB = (arr: (number | null)[]) => allDates.map((d) => { const i = dateToIdx.get(d); return i !== undefined ? arr[i] : null })
+      const mapBB = (arr: (number | null)[]) => allDates.map((d) => {
+        const i = dateToIdx.get(d)
+        if (i === undefined) return null
+        const raw = arr[i] ?? null
+        const scaled = scaleLineValue(raw, base, lineScaleMode)
+        return scaled == null ? null : { value: scaled, raw, scaleMode: lineScaleMode }
+      })
       series.push(
         { name: 'BB Upper', type: 'line', data: mapBB(bb.map((b) => b.upper)), showSymbol: false, lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: false },
         { name: 'BB Lower', type: 'line', data: mapBB(bb.map((b) => b.lower)), showSymbol: false, lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: false },
@@ -859,7 +947,14 @@ function buildLineOption(
   }))
 
   const yAxis: object[] = [
-    { gridIndex: 0, scale: true, splitLine: SPLIT_LINE_STYLE, axisLabel: AXIS_LABEL_STYLE },
+    {
+      gridIndex: 0,
+      scale: true,
+      splitLine: SPLIT_LINE_STYLE,
+      axisLabel: lineScaleMode === 'price'
+        ? AXIS_LABEL_STYLE
+        : { ...AXIS_LABEL_STYLE, formatter: (value: number) => formatLineValue(value, lineScaleMode) },
+    },
   ]
   if (rsiGridIndex  !== null) yAxis.push({ gridIndex: rsiGridIndex,  min: 0, max: 100, splitNumber: 2, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9 }, splitLine: SPLIT_LINE_STYLE })
   if (macdGridIndex !== null) yAxis.push({ gridIndex: macdGridIndex, scale: true,      splitNumber: 2, axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9 }, splitLine: SPLIT_LINE_STYLE })
@@ -1485,12 +1580,22 @@ function SymbolChip({ symbol, color, onRemove }: { symbol: string; color: string
   return (
     <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border border-white/10 text-white/80" style={{ borderLeftColor: color, borderLeftWidth: 3 }}>
       {symbol}
-      <button onClick={onRemove} className="text-white/30 hover:text-white transition-colors"><X className="w-3 h-3" /></button>
+      <button type="button" aria-label={`Usuń ${symbol}`} onClick={onRemove} className="text-white/30 hover:text-white transition-colors"><X className="w-3 h-3" /></button>
     </span>
   )
 }
 
-function InstrumentSearch({ instruments, selected, onAdd }: { instruments: Instrument[]; selected: string[]; onAdd: (sym: string) => void }) {
+function InstrumentSearch({
+  activeMic,
+  instruments,
+  selectedKeys,
+  onAdd,
+}: {
+  activeMic: string
+  instruments: Instrument[]
+  selectedKeys: string[]
+  onAdd: (instrument: Instrument) => void
+}) {
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -1498,8 +1603,8 @@ function InstrumentSearch({ instruments, selected, onAdd }: { instruments: Instr
   const filtered = useMemo(() => {
     const lq = q.toLowerCase()
     return instruments
-      .filter((i) => !selected.includes(i.symbol) && (i.symbol.toLowerCase().includes(lq) || (i.shortname ?? '').toLowerCase().includes(lq)))
-  }, [instruments, selected, q])
+      .filter((i) => !selectedKeys.includes(seriesKey(activeMic, i.symbol)) && (i.symbol.toLowerCase().includes(lq) || (i.shortname ?? '').toLowerCase().includes(lq)))
+  }, [activeMic, instruments, selectedKeys, q])
 
   return (
     <div ref={ref} className="relative">
@@ -1522,7 +1627,7 @@ function InstrumentSearch({ instruments, selected, onAdd }: { instruments: Instr
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault()
-                onAdd(i.symbol)
+                onAdd(i)
                 setQ('')
                 setOpen(false)
               }}
@@ -1542,6 +1647,12 @@ const INDICATOR_ITEMS = [
   { key: 'bb',   label: 'Bollinger Bands (20)' },
   { key: 'rsi',  label: 'RSI (14)' },
   { key: 'macd', label: 'MACD (12,26,9)' },
+]
+
+const LINE_SCALE_ITEMS: Array<{ key: LineScaleMode; label: string }> = [
+  { key: 'price', label: 'Cena' },
+  { key: 'percent', label: '% od startu' },
+  { key: 'index100', label: 'Indeks 100' },
 ]
 
 type ZoneLayerItem = { key: string; label: string; checked: boolean; onToggle: () => void; disabled?: boolean }
@@ -1673,6 +1784,7 @@ type ChartPanelProps = {
   name: string
   chartType: ChartType
   showVolume: boolean
+  lineScaleMode: LineScaleMode
   color: string
   candles?: CandleDay[]
   seriesMap?: Map<string, CandleDay[]>
@@ -1696,7 +1808,7 @@ type ZoneControls = {
   setOpacity: (o: number) => void
 }
 
-function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMap, volumeZones, volumeZoneOptions, zoneLayers, zoneControls }: ChartPanelProps) {
+function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, candles, seriesMap, volumeZones, volumeZoneOptions, zoneLayers, zoneControls }: ChartPanelProps) {
   const [interval, setIntervalState] = useState<AggInterval>('D')
   const [indicators, setIndicators] = useState<Set<string>>(new Set())
   const [zoneDetailsOpen, setZoneDetailsOpen] = useState(false)
@@ -1749,8 +1861,8 @@ function ChartPanel({ sym, name, chartType, showVolume, color, candles, seriesMa
     }
     const sm = aggSeriesMap ?? (aggCandles ? new Map([[sym, aggCandles]]) : null)
     if (!sm) return null
-    return buildLineOption(sm, showVolume, indicators, crosshairOn)
-  }, [aggCandles, aggSeriesMap, chartType, showVolume, indicators, sym, volumeZones, volumeZoneOptions, crosshairOn])
+    return buildLineOption(sm, showVolume, indicators, crosshairOn, lineScaleMode)
+  }, [aggCandles, aggSeriesMap, chartType, showVolume, indicators, sym, volumeZones, volumeZoneOptions, crosshairOn, lineScaleMode])
 
   const setMode = useCallback((mode: DrawMode) => {
     setDrawMode(mode)
@@ -2182,14 +2294,27 @@ function ImportCsvModal({ symbol, dateFrom, dateTo, returnAll, onImported, onClo
   )
 }
 
-type Props = { mic: string; instruments: Instrument[]; preselectedSymbol: string | null }
+type Props = {
+  mic: string
+  instruments: Instrument[]
+  preselectedSymbol: string | null
+  marketOptions?: MarketOption[]
+}
 
-export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
-  const router = useRouter()
+export function ChartsPage({ mic, instruments, preselectedSymbol, marketOptions = DEFAULT_MARKETS }: Props) {
+  const initialMic = normalizeMic(mic)
+  const initialPreselectedSymbol = preselectedSymbol ? normalizeSymbol(preselectedSymbol) : null
 
-  const [selectedSymbols, setSelectedSymbols] = useState<string[]>(preselectedSymbol ? [preselectedSymbol] : [])
+  const [activeMic, setActiveMic] = useState(initialMic)
+  const [activeInstruments, setActiveInstruments] = useState<Instrument[]>([])
+  const [selectedSeries, setSelectedSeries] = useState<SelectedSeries[]>(
+    initialPreselectedSymbol
+      ? [{ key: seriesKey(initialMic, initialPreselectedSymbol), mic: initialMic, symbol: initialPreselectedSymbol }]
+      : [],
+  )
   const [chartType, setChartType]   = useState<ChartType>('candlestick')
   const [layout, setLayout]         = useState<Layout>('separate')
+  const [lineScaleMode, setLineScaleMode] = useState<LineScaleMode>('index100')
   const [showVolume, setShowVolume] = useState(true)
   const [dateRange, setDateRange]   = useState<DateRange>('ALL')
   const [customFrom, setCustomFrom] = useState('')
@@ -2207,18 +2332,75 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
   const [phaseVisibility, setPhaseVisibility] = useState<PhaseVisibility>('significant')
   const [status, setStatus]         = useState<string | null>(null)
   const [showCsvModal, setShowCsvModal] = useState(false)
+  const markets = useMemo(() => {
+    const normalized = marketOptions
+      .map((market) => ({
+        mic: normalizeMic(market.mic),
+        name: market.name.trim(),
+      }))
+      .filter((market) => market.mic)
 
-  const colorOf = useCallback((sym: string): string => {
-    const idx = [...seriesData.keys()].indexOf(sym)
-    const fallback = selectedSymbols.indexOf(sym)
+    return normalized.length > 0 ? normalized : DEFAULT_MARKETS
+  }, [marketOptions])
+  const selectedKeys = useMemo(() => selectedSeries.map((selection) => selection.key), [selectedSeries])
+  const visibleInstruments = normalizeMic(activeMic) === normalizeMic(mic) ? instruments : activeInstruments
+
+  useEffect(() => {
+    let cancelled = false
+    const normalizedActiveMic = normalizeMic(activeMic)
+    const normalizedRouteMic = normalizeMic(mic)
+
+    if (normalizedActiveMic === normalizedRouteMic) {
+      return
+    }
+
+    const qs = new URLSearchParams({ mic: normalizedActiveMic })
+    void fetch(`/api/stock/instruments?${qs.toString()}`, {
+      headers: { Accept: 'application/json' },
+    })
+      .then(async (res) => {
+        const payload = await res.json().catch(() => []) as Instrument[] | { error?: string }
+        if (cancelled) return
+        if (!res.ok || !Array.isArray(payload)) {
+          const msg = !Array.isArray(payload) && payload.error ? payload.error : 'Nie udało się pobrać instrumentów'
+          toast.error(`${marketName(normalizedActiveMic, markets)}: ${msg}`)
+          setActiveInstruments([])
+          return
+        }
+        setActiveInstruments(payload)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          toast.error(`${marketName(normalizedActiveMic, markets)}: błąd połączenia`)
+          setActiveInstruments([])
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeMic, markets, mic])
+
+  const colorOf = useCallback((key: string): string => {
+    const idx = [...seriesData.keys()].indexOf(key)
+    const fallback = selectedKeys.indexOf(key)
     return CHART_COLORS[(idx >= 0 ? idx : fallback) % CHART_COLORS.length] ?? '#3b82f6'
-  }, [seriesData, selectedSymbols])
+  }, [seriesData, selectedKeys])
 
-  const addSymbol    = (sym: string) => { if (!selectedSymbols.includes(sym)) setSelectedSymbols((p) => [...p, sym]) }
-  const removeSymbol = (sym: string) => {
-    setSelectedSymbols((p) => p.filter((s) => s !== sym))
-    setSeriesData((p) => { const m = new Map(p); m.delete(sym); return m })
-    setVolumeZonesBySymbol((p) => { const m = new Map(p); m.delete(sym); return m })
+  const addInstrument = (instrument: Instrument) => {
+    const symbol = normalizeSymbol(instrument.symbol)
+    const normalizedMic = normalizeMic(activeMic)
+    const key = seriesKey(normalizedMic, symbol)
+    setSelectedSeries((prev) => (
+      prev.some((selection) => selection.key === key)
+        ? prev
+        : [...prev, { key, mic: normalizedMic, symbol, shortname: instrument.shortname }]
+    ))
+  }
+  const removeSymbol = (key: string) => {
+    setSelectedSeries((p) => p.filter((selection) => selection.key !== key))
+    setSeriesData((p) => { const m = new Map(p); m.delete(key); return m })
+    setVolumeZonesBySymbol((p) => { const m = new Map(p); m.delete(key); return m })
   }
 
   const getRange = useCallback((): { from: string | null; to: string | null } => {
@@ -2227,13 +2409,13 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
   }, [dateRange, customFrom, customTo])
 
   const openImportCsvModal = useCallback(() => {
-    if (selectedSymbols.length !== 1) {
+    if (selectedSeries.length !== 1) {
       toast.warning('Wybierz dokładnie jeden instrument przed importem CSV')
       return
     }
 
     setShowCsvModal(true)
-  }, [selectedSymbols])
+  }, [selectedSeries])
 
   const volumeZoneOptions = useMemo<VolumeZoneChartOptions>(() => ({
     showZones: showVolumeZones,
@@ -2246,7 +2428,7 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
   }), [showVolumeZones, showZoneProfile, zoneProfileOpacity, profileMode, zoneVisibility, phaseVisibility])
 
   // Volume-zone layers are toggled from the Wskaźniki dropdown (per chart).
-  const singleSymbol = selectedSymbols.length === 1
+  const singleSymbol = selectedSeries.length === 1
 
   const zoneControls = useMemo<ZoneControls>(() => ({
     showZones: showVolumeZones,
@@ -2262,10 +2444,10 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
     setOpacity: setZoneProfileOpacity,
   }), [showVolumeZones, showZoneProfile, singleSymbol, zoneVisibility, phaseVisibility, profileMode, zoneProfileOpacity])
 
-  const fetchVolumeZonesForSymbol = useCallback(async (sym: string, from: string | null, to: string | null): Promise<VolumeZonesResponse | null> => {
+  const fetchVolumeZonesForSeries = useCallback(async (selection: SelectedSeries, from: string | null, to: string | null): Promise<VolumeZonesResponse | null> => {
     const qs = new URLSearchParams({
-      mic,
-      symbol: sym,
+      mic: selection.mic,
+      symbol: selection.symbol,
       // Full page chart: return every detected zone (history); the backend still
       // marks up to three via highlighted_zone_ids.
       mode: 'full',
@@ -2283,7 +2465,7 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
       if (!res.ok) {
         const msg = payload.error ?? 'Nie udało się policzyć stref wolumenowych'
         setVolumeZoneError(msg)
-        toast.error(`${sym}: ${msg}`)
+        toast.error(`${seriesLabel(selection, markets)}: ${msg}`)
         return null
       }
       setVolumeZoneError(null)
@@ -2291,22 +2473,22 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
     } catch {
       const msg = 'Nie można połączyć się z analizą stref wolumenowych'
       setVolumeZoneError(msg)
-      toast.error(`${sym}: ${msg}`)
+      toast.error(`${seriesLabel(selection, markets)}: ${msg}`)
       return null
     }
-  }, [mic])
+  }, [markets])
 
   // Zones are opt-in; fetch them lazily from the toggle (event handler, not an
   // effect) the first time the layer is enabled for an already-loaded symbol.
   const ensureZonesFetched = useCallback(() => {
-    if (selectedSymbols.length !== 1) return
-    const sym = selectedSymbols[0]!
-    if (volumeZonesBySymbol.has(sym) || !seriesData.has(sym)) return
+    if (selectedSeries.length !== 1) return
+    const selection = selectedSeries[0]!
+    if (volumeZonesBySymbol.has(selection.key) || !seriesData.has(selection.key)) return
     const { from, to } = getRange()
-    void fetchVolumeZonesForSymbol(sym, from, to).then((analysis) => {
-      if (analysis) setVolumeZonesBySymbol((prev) => new Map(prev).set(sym, analysis))
+    void fetchVolumeZonesForSeries(selection, from, to).then((analysis) => {
+      if (analysis) setVolumeZonesBySymbol((prev) => new Map(prev).set(selection.key, analysis))
     })
-  }, [selectedSymbols, volumeZonesBySymbol, seriesData, getRange, fetchVolumeZonesForSymbol])
+  }, [selectedSeries, volumeZonesBySymbol, seriesData, getRange, fetchVolumeZonesForSeries])
 
   const zoneLayers = useMemo<ZoneLayerItem[]>(() => [
     { key: 'vz-zones', label: 'Strefa wolumenowa', checked: showVolumeZones, disabled: !singleSymbol, onToggle: () => { if (!showVolumeZones) ensureZonesFetched(); setShowVolumeZones((v) => !v) } },
@@ -2315,30 +2497,31 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
   ], [showVolumeZones, showZoneProfile, phaseVisibility, singleSymbol, ensureZonesFetched])
 
   const syncAndRender = useCallback(async () => {
-    if (!selectedSymbols.length) { toast.warning('Wybierz przynajmniej jeden instrument'); return }
+    if (!selectedSeries.length) { toast.warning('Wybierz przynajmniej jeden instrument'); return }
     setSyncing(true); setStatus('Synchronizacja danych…')
     const { from, to } = getRange()
     const newData = new Map<string, SeriesData>()
     const newVolumeZones = new Map<string, VolumeZonesResponse>()
 
-    for (const sym of selectedSymbols) {
-      setStatus(`Pobieranie: ${sym}…`)
+    for (const selection of selectedSeries) {
+      const label = seriesLabel(selection, markets)
+      setStatus(`Pobieranie: ${label}…`)
       try {
         const res = await fetch('/api/stock/candles/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol: sym, date_from: from, date_to: to, return_all: !from, overlap_days: 7 }),
+          body: JSON.stringify({ symbol: selection.symbol, date_from: from, date_to: to, return_all: !from, overlap_days: 7 }),
         })
         if (!res.ok) {
           const err = await res.json().catch(() => ({})) as { error?: string }
-          toast.error(`${sym}: ${err.error ?? 'Błąd sync'}`)
+          toast.error(`${label}: ${err.error ?? 'Błąd sync'}`)
           continue
         }
         const result = await res.json() as SyncCandlesResult
         const candles = (result.items ?? []).sort((a, b) => a.date_quote.localeCompare(b.date_quote))
-        newData.set(sym, { result, candles })
+        newData.set(selection.key, { result, candles, selection, label })
       } catch {
-        toast.error(`${sym}: błąd połączenia`)
+        toast.error(`${label}: błąd połączenia`)
       }
     }
 
@@ -2348,15 +2531,15 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
     setSyncing(false)
     setStatus(newData.size > 0 ? `Dane gotowe — ${pointCount} punktów` : 'Brak danych')
 
-    if (showVolumeZones && newData.size === 1 && selectedSymbols.length === 1) {
-      const sym = selectedSymbols[0]!
-      setStatus(`Dane gotowe — analiza stref: ${sym}…`)
-      const analysis = await fetchVolumeZonesForSymbol(sym, from, to)
-      if (analysis) newVolumeZones.set(sym, analysis)
+    if (showVolumeZones && newData.size === 1 && selectedSeries.length === 1) {
+      const selection = selectedSeries[0]!
+      setStatus(`Dane gotowe — analiza stref: ${seriesLabel(selection, markets)}…`)
+      const analysis = await fetchVolumeZonesForSeries(selection, from, to)
+      if (analysis) newVolumeZones.set(selection.key, analysis)
       setVolumeZonesBySymbol(newVolumeZones)
       setStatus(newData.size > 0 ? `Gotowe — ${pointCount} punktów` : 'Brak danych')
     }
-  }, [selectedSymbols, getRange, fetchVolumeZonesForSymbol, showVolumeZones])
+  }, [selectedSeries, getRange, fetchVolumeZonesForSeries, showVolumeZones, markets])
 
   const stableSyncRef = useRef<() => Promise<void>>(async () => {})
 
@@ -2375,27 +2558,35 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
   }, [preselectedSymbol])
 
   const handleCsvImported = useCallback((result: SyncCandlesResult) => {
+    const currentSelection = selectedSeries[0] ?? {
+      key: seriesKey(activeMic, result.symbol),
+      mic: normalizeMic(activeMic),
+      symbol: normalizeSymbol(result.symbol),
+    }
+    const label = seriesLabel(currentSelection, markets)
     const candles = (result.items ?? []).sort((a, b) => a.date_quote.localeCompare(b.date_quote))
-    setSeriesData(new Map([[result.symbol, { result, candles }]]))
-    setSelectedSymbols([result.symbol])
-    setStatus(`Zaimportowano ${result.upserted_rows} wierszy dla ${result.symbol}`)
+    setSeriesData(new Map([[currentSelection.key, { result, candles, selection: currentSelection, label }]]))
+    setSelectedSeries([currentSelection])
+    setStatus(`Zaimportowano ${result.upserted_rows} wierszy dla ${label}`)
     const { from, to } = getRange()
-    void fetchVolumeZonesForSymbol(result.symbol, from, to).then((analysis) => {
-      setVolumeZonesBySymbol(analysis ? new Map([[result.symbol, analysis]]) : new Map())
+    void fetchVolumeZonesForSeries(currentSelection, from, to).then((analysis) => {
+      setVolumeZonesBySymbol(analysis ? new Map([[currentSelection.key, analysis]]) : new Map())
     })
-  }, [fetchVolumeZonesForSymbol, getRange])
+  }, [activeMic, fetchVolumeZonesForSeries, getRange, markets, selectedSeries])
 
   const effectiveChartType: ChartType =
-    chartType === 'candlestick' && layout === 'combined' && selectedSymbols.length > 1 ? 'line' : chartType
+    chartType === 'candlestick' && layout === 'combined' && selectedSeries.length > 1 ? 'line' : chartType
+  const effectiveLineScaleMode: LineScaleMode =
+    effectiveChartType === 'line' && layout === 'combined' ? lineScaleMode : 'price'
 
   const chartEntries = useMemo(() => {
     if (!seriesData.size) return null
     if (layout === 'combined') {
-      const combinedMap = new Map([...seriesData.entries()].map(([sym, { candles }]) => [sym, candles]))
+      const combinedMap = new Map([...seriesData.values()].map(({ label, candles }) => [label, candles]))
       return [{ key: 'combined', sym: 'combined', name: 'Porównanie', seriesMap: combinedMap, candles: undefined as CandleDay[] | undefined }]
     }
-    return [...seriesData.entries()].map(([sym, { candles, result }]) => ({
-      key: sym, sym, name: result.name ?? sym,
+    return [...seriesData.entries()].map(([key, { candles, result, label }]) => ({
+      key, sym: label, name: result.name ?? label,
       candles, seriesMap: undefined as Map<string, CandleDay[]> | undefined,
     }))
   }, [seriesData, layout])
@@ -2425,20 +2616,29 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
         <div className="bg-slate-800/40 border border-white/10 rounded-xl p-4 space-y-3">
           {/* Row 1: market + symbols */}
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex rounded-lg overflow-hidden border border-white/10">
-              {MICS.map((m) => (
-                <button key={m} onClick={() => router.push(`/stock/charts/${m}`)}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${mic === m ? 'bg-blue-600 text-white' : 'text-white/50 hover:text-white hover:bg-white/5'}`}>
-                  {MIC_LABELS[m]}
-                </button>
-              ))}
+            <div className="w-48">
+              <Select value={activeMic} onValueChange={(value) => setActiveMic(normalizeMic(value))}>
+                <SelectTrigger
+                  aria-label="Market"
+                  className="h-8 w-full border-white/10 bg-slate-900 text-xs font-medium text-white/75 hover:bg-slate-900 hover:text-white focus-visible:border-blue-500/50"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 border-white/10 text-white">
+                {markets.map((market) => (
+                  <SelectItem key={market.mic} value={market.mic} className="text-xs text-white/80 focus:bg-white/10 focus:text-white">
+                    {MIC_LABELS[market.mic] ?? market.name ?? market.mic}
+                  </SelectItem>
+                ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {selectedSymbols.map((sym) => (
-                <SymbolChip key={sym} symbol={sym} color={colorOf(sym)} onRemove={() => removeSymbol(sym)} />
+              {selectedSeries.map((selection) => (
+                <SymbolChip key={selection.key} symbol={seriesLabel(selection, markets)} color={colorOf(selection.key)} onRemove={() => removeSymbol(selection.key)} />
               ))}
             </div>
-            <InstrumentSearch instruments={instruments} selected={selectedSymbols} onAdd={addSymbol} />
+            <InstrumentSearch activeMic={activeMic} instruments={visibleInstruments} selectedKeys={selectedKeys} onAdd={addInstrument} />
           </div>
 
           {/* Row 2: chart options + date range */}
@@ -2462,6 +2662,16 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
                   </button>
                 ))}
               </div>
+              {effectiveChartType === 'line' && layout === 'combined' && (
+                <div className="flex rounded-lg overflow-hidden border border-white/10" role="group" aria-label="Skala porównania">
+                  {LINE_SCALE_ITEMS.map((item) => (
+                    <button key={item.key} type="button" onClick={() => setLineScaleMode(item.key)}
+                      className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${lineScaleMode === item.key ? 'bg-blue-600 text-white' : 'text-white/50 hover:text-white hover:bg-white/5'}`}>
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <button onClick={() => setShowVolume((v) => !v)}
                 className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${showVolume ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-900/40 border-white/10 text-white/50 hover:text-white hover:border-white/20'}`}>
                 Wolumen
@@ -2492,14 +2702,14 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-white/10 bg-slate-900/40 text-white/60 hover:text-white hover:border-white/20 rounded-lg transition-colors">
                 <Upload className="w-3.5 h-3.5" />Import CSV
               </button>
-              <button onClick={() => void syncAndRender()} disabled={syncing || !selectedSymbols.length}
+              <button onClick={() => void syncAndRender()} disabled={syncing || !selectedSeries.length}
                 className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                 <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />Sync &amp; Render
               </button>
             </div>
           </div>
 
-          {chartType === 'candlestick' && layout === 'combined' && selectedSymbols.length > 1 && (
+          {chartType === 'candlestick' && layout === 'combined' && selectedSeries.length > 1 && (
             <p className="text-xs text-amber-400/70 bg-amber-500/5 border border-amber-500/10 rounded-lg px-3 py-1.5">
               Tryb nakładany ze świecami jest dostępny tylko dla jednego symbolu — przełączono na liniowy.
             </p>
@@ -2523,8 +2733,8 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
         {/* Charts */}
         {chartEntries && chartEntries.map(({ key, sym, name, candles, seriesMap }) => (
           <ChartPanel key={key} sym={sym} name={name} chartType={effectiveChartType}
-            showVolume={showVolume} color={colorOf(sym)} candles={candles} seriesMap={seriesMap}
-            volumeZones={sym !== 'combined' ? volumeZonesBySymbol.get(sym) ?? null : null}
+            showVolume={showVolume} lineScaleMode={effectiveLineScaleMode} color={colorOf(key)} candles={candles} seriesMap={seriesMap}
+            volumeZones={key !== 'combined' ? volumeZonesBySymbol.get(key) ?? null : null}
             volumeZoneOptions={volumeZoneOptions}
             zoneLayers={zoneLayers}
             zoneControls={zoneControls}
@@ -2532,9 +2742,9 @@ export function ChartsPage({ mic, instruments, preselectedSymbol }: Props) {
         ))}
       </div>
 
-      {showCsvModal && selectedSymbols.length === 1 && (
+      {showCsvModal && selectedSeries.length === 1 && (
         <ImportCsvModal
-          symbol={selectedSymbols[0]!}
+          symbol={selectedSeries[0]!.symbol}
           dateFrom={getRange().from}
           dateTo={getRange().to}
           returnAll={!getRange().from}

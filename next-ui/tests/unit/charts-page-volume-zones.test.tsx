@@ -7,8 +7,12 @@ import type { SyncCandlesResult, VolumeZonesResponse } from '@/lib/api/stock'
 import { server } from '../msw-server'
 import { nextUiUnitStory } from '../allure'
 
+type ChartDataPoint = number | null | { value?: number | null; raw?: number | null; scaleMode?: string }
+type ChartSeries = { name?: string; data?: ChartDataPoint[] }
 type ChartOption = {
-  series?: Array<{ name?: string }>
+  series?: ChartSeries[]
+  tooltip?: { formatter?: (params: unknown[]) => string }
+  yAxis?: Array<{ axisLabel?: { formatter?: (value: number) => string } }>
 }
 
 const chartOptions = vi.hoisted(() => [] as ChartOption[])
@@ -37,21 +41,59 @@ vi.mock('sonner', () => ({
   },
 }))
 
-function syncCandlesFixture(): SyncCandlesResult {
+function syncCandlesFixture(symbol = 'PKN', name = 'PKNORLEN', closes?: number[]): SyncCandlesResult {
+  const baseItems = [
+    { date_quote: '2026-01-02', open: 45, high: 47, low: 44, close: 46, volume: 1200 },
+    { date_quote: '2026-01-05', open: 46, high: 48, low: 45, close: 47, volume: 1300 },
+    { date_quote: '2026-01-06', open: 47, high: 49, low: 46, close: 48, volume: 1800 },
+    { date_quote: '2026-01-07', open: 48, high: 53, low: 47, close: 52, volume: 2200 },
+    { date_quote: '2026-01-08', open: 52, high: 55, low: 51, close: 54, volume: 2100 },
+    { date_quote: '2026-01-09', open: 54, high: 57, low: 53, close: 56, volume: 2300 },
+  ]
+  const items = closes
+    ? closes.map((close, index) => {
+      const date = new Date(Date.UTC(2026, 0, 2 + index)).toISOString().slice(0, 10)
+      const item = baseItems[index] ?? { volume: 1200 + (index * 100) }
+      return {
+        date_quote: date,
+        open: Number((close * 0.98).toFixed(4)),
+        high: Number((close * 1.02).toFixed(4)),
+        low: Number((close * 0.96).toFixed(4)),
+        close,
+        volume: item.volume,
+      }
+    })
+    : baseItems
+
   return {
-    symbol: 'PKN',
-    name: 'PKNORLEN',
-    fetched_rows: 6,
+    symbol,
+    name,
+    fetched_rows: items.length,
     upserted_rows: 0,
-    returned_count: 6,
-    items: [
-      { date_quote: '2026-01-02', open: 45, high: 47, low: 44, close: 46, volume: 1200 },
-      { date_quote: '2026-01-05', open: 46, high: 48, low: 45, close: 47, volume: 1300 },
-      { date_quote: '2026-01-06', open: 47, high: 49, low: 46, close: 48, volume: 1800 },
-      { date_quote: '2026-01-07', open: 48, high: 53, low: 47, close: 52, volume: 2200 },
-      { date_quote: '2026-01-08', open: 52, high: 55, low: 51, close: 54, volume: 2100 },
-      { date_quote: '2026-01-09', open: 54, high: 57, low: 53, close: 56, volume: 2300 },
-    ],
+    returned_count: items.length,
+    items,
+  }
+}
+
+function latestOption(): ChartOption {
+  return chartOptions.at(-1) ?? {}
+}
+
+function lineTooltipHtml(option: ChartOption, params: unknown[]): string {
+  const formatter = option.tooltip?.formatter
+  expect(formatter).toBeTypeOf('function')
+  return formatter?.(params) ?? ''
+}
+
+function lineParam(seriesName: string, value: number, raw: number, scaleMode: string) {
+  return {
+    axisValue: '2026-01-02',
+    seriesType: 'line',
+    seriesName,
+    marker: '<span></span>',
+    color: '#3b82f6',
+    value: { value },
+    data: { value, raw, scaleMode },
   }
 }
 
@@ -179,10 +221,173 @@ function latestSeriesNames(): string[] {
   return (chartOptions.at(-1)?.series ?? []).map((series) => series.name ?? '')
 }
 
+function latestSeries(name: string): ChartSeries | undefined {
+  return (chartOptions.at(-1)?.series ?? []).find((series) => series.name === name)
+}
+
+function pointValue(point: ChartDataPoint | undefined): number | null {
+  if (point == null) return null
+  if (typeof point === 'number') return point
+  return point.value ?? null
+}
+
+function pointRaw(point: ChartDataPoint | undefined): number | null {
+  if (point == null || typeof point === 'number') return null
+  return point.raw ?? null
+}
+
 describe('ChartsPage volume-zone controls', () => {
   beforeEach(() => {
     chartOptions.length = 0
     routerPush.mockClear()
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  it('keeps selected line series while adding another market to the overlay', async () => {
+    await nextUiUnitStory('Charts page overlays line series selected from different markets', {
+      severity: 'normal',
+      tags: ['stock', 'charts', 'markets', 'line-overlay', 'next-ui', 'page'],
+    })
+
+    const syncRequests: Array<{ symbol?: string }> = []
+    server.use(
+      http.get('*/api/stock/instruments', ({ request }) => {
+        const url = new URL(request.url)
+        const mic = url.searchParams.get('mic')
+        if (mic === 'XLON') return HttpResponse.json([{ symbol: 'VOD', shortname: 'Vodafone' }])
+        return HttpResponse.json([])
+      }),
+      http.post('*/api/stock/candles/sync', async ({ request }) => {
+        const body = await request.json() as { symbol?: string }
+        syncRequests.push(body)
+        return HttpResponse.json(syncCandlesFixture(
+          body.symbol ?? 'PKN',
+          body.symbol === 'VOD' ? 'Vodafone' : 'PKNORLEN',
+          body.symbol === 'VOD' ? [2, 2.2, 2.1, 2.4, 2.8, 3] : undefined,
+        ))
+      }),
+    )
+
+    render(
+      <ChartsPage
+        mic="XWAR"
+        marketOptions={[
+          { mic: 'XWAR', name: 'GPW' },
+          { mic: 'XLON', name: 'London' },
+        ]}
+        instruments={[{ symbol: 'PKN', shortname: 'PKNORLEN' }]}
+        preselectedSymbol={null}
+      />,
+    )
+
+    const instrumentInput = screen.getByPlaceholderText('Dodaj instrument…')
+    fireEvent.change(instrumentInput, { target: { value: 'PKN' } })
+    fireEvent.mouseDown(await screen.findByRole('button', { name: /PKN/ }))
+    expect(screen.getByText('PKN · GPW')).toBeInTheDocument()
+
+    const marketSelect = screen.getByRole('combobox', { name: 'Market' })
+    expect(within(marketSelect).getByText('GPW')).toBeInTheDocument()
+    fireEvent.click(marketSelect)
+    const londonOption = await screen.findByRole('option', { name: 'London' })
+    fireEvent.click(londonOption)
+
+    expect(routerPush).not.toHaveBeenCalled()
+    expect(screen.getByText('PKN · GPW')).toBeInTheDocument()
+
+    fireEvent.change(instrumentInput, { target: { value: 'VOD' } })
+    fireEvent.mouseDown(await screen.findByRole('button', { name: /VOD/ }))
+    expect(screen.getByText('VOD · London')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Liniowy/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Nakładany' }))
+    fireEvent.click(screen.getByRole('button', { name: /Sync & Render/ }))
+
+    await waitFor(() => {
+      expect(syncRequests.map((request) => request.symbol)).toEqual(['PKN', 'VOD'])
+    })
+    await waitFor(() => {
+      expect(latestSeriesNames()).toContain('PKN · GPW')
+      expect(latestSeriesNames()).toContain('VOD · London')
+    })
+    expect(pointValue(latestSeries('PKN · GPW')?.data?.[0])).toBeCloseTo(100)
+    expect(pointValue(latestSeries('VOD · London')?.data?.[0])).toBeCloseTo(100)
+    expect(pointValue(latestSeries('VOD · London')?.data?.[1])).toBeCloseTo(110)
+    expect(pointRaw(latestSeries('VOD · London')?.data?.[1])).toBeCloseTo(2.2)
+
+    fireEvent.click(screen.getByRole('button', { name: '% od startu' }))
+    await waitFor(() => {
+      expect(pointValue(latestSeries('VOD · London')?.data?.[0])).toBeCloseTo(0)
+      expect(pointValue(latestSeries('VOD · London')?.data?.[1])).toBeCloseTo(10)
+    })
+  })
+
+  it('scales line indicators and keeps raw prices visible in the tooltip', async () => {
+    await nextUiUnitStory('Charts page scales overlay indicators and tooltip values for line comparison', {
+      severity: 'normal',
+      tags: ['stock', 'charts', 'line-overlay', 'indicators', 'next-ui', 'page'],
+    })
+
+    const closes = Array.from({ length: 25 }, (_, index) => 2 + (index * 0.5))
+    server.use(
+      http.post('*/api/stock/candles/sync', () => (
+        HttpResponse.json(syncCandlesFixture('PKN', 'PKNORLEN', closes))
+      )),
+    )
+
+    render(
+      <ChartsPage
+        mic="XWAR"
+        instruments={[{ symbol: 'PKN', shortname: 'PKNORLEN' }]}
+        preselectedSymbol={null}
+      />,
+    )
+
+    const instrumentInput = screen.getByPlaceholderText('Dodaj instrument…')
+    fireEvent.change(instrumentInput, { target: { value: 'PKN' } })
+    fireEvent.mouseDown(await screen.findByRole('button', { name: /PKN/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Liniowy/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Nakładany' }))
+    fireEvent.click(screen.getByRole('button', { name: /Sync & Render/ }))
+
+    await screen.findByTestId('charts-page-echarts')
+
+    fireEvent.click(screen.getByRole('button', { name: /Wskaźniki/ }))
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'SMA 7' }))
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Bollinger Bands (20)' }))
+
+    await waitFor(() => {
+      expect(latestSeriesNames()).toContain('PKN · GPW SMA7')
+      expect(latestSeriesNames()).toContain('BB Upper')
+      expect(latestSeriesNames()).toContain('BB Lower')
+    })
+
+    const smaPoint = latestSeries('PKN · GPW SMA7')?.data?.[6]
+    expect(pointRaw(smaPoint)).toBeCloseTo(3.5)
+    expect(pointValue(smaPoint)).toBeCloseTo(175)
+
+    const bbPoint = latestSeries('BB Upper')?.data?.[19]
+    expect(pointRaw(bbPoint)).not.toBeNull()
+    expect(pointValue(bbPoint)).not.toBeNull()
+
+    const indexAxisFormatter = latestOption().yAxis?.[0]?.axisLabel?.formatter
+    expect(indexAxisFormatter?.(123.456)).toBe('123.46')
+
+    const tooltipHtml = lineTooltipHtml(latestOption(), [
+      lineParam('USDPLN · PLN', 110, 2.2, 'index100'),
+      lineParam('WIG · Global Indexes', 120, 1234, 'index100'),
+      lineParam('PKN · GPW', 10, 46, 'percent'),
+      lineParam('Raw price', 46, 46, 'price'),
+    ])
+    expect(tooltipHtml).toContain('110.00 · 2.2000')
+    expect(tooltipHtml).toMatch(/120\.00 · 1.?234/u)
+    expect(tooltipHtml).toContain('10.00% · 46.00')
+    expect(tooltipHtml).toContain('46.00')
+
+    fireEvent.click(screen.getByRole('button', { name: '% od startu' }))
+    await waitFor(() => {
+      const percentAxisFormatter = latestOption().yAxis?.[0]?.axisLabel?.formatter
+      expect(percentAxisFormatter?.(12.345)).toBe('12.35%')
+    })
   })
 
   it('loads volume-zone analysis from the chart screen and keeps A/D disabling in the indicators menu', async () => {

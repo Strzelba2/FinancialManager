@@ -18,9 +18,10 @@ const MIC_LABELS: Record<string, string> = {
   XNCO: 'NewConnect',
   STCM: 'RAW',
   PLNC: 'PLN',
+  GLIX: 'Indeksy',
 }
 
-const MICS = ['XWAR', 'XNCO', 'STCM', 'PLNC'] as const
+const MICS = ['XWAR', 'XNCO', 'STCM', 'PLNC', 'GLIX'] as const
 const DEFAULT_MARKETS = MICS.map((marketMic) => ({
   mic: marketMic,
   name: MIC_LABELS[marketMic] ?? marketMic,
