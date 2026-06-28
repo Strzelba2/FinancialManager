@@ -336,6 +336,23 @@ async def sync_daily_by_symbol(
     if end is not None:
         rows = [r for r in rows if r.date_quote <= end]
 
+    sync_start, sync_end = _rows_span(rows)
+    if sync_end is None:
+        msg = (
+            f"Upstream returned no candle rows in requested sync window for symbol={symbol} "
+            f"(start={start}, end={end}, url={url})"
+        )
+        logger.error(msg)
+        state = await get_or_create_sync_state(session, inst.id)
+        await mark_daily_failure(session, state, error=msg)
+        raise HTTPException(status_code=503, detail=msg)
+
+    if sync_end < end:
+        logger.info(
+            f"sync_daily_by_symbol: upstream latest row for symbol={symbol} "
+            f"is {sync_end}, earlier than target_end={end}"
+        )
+
     upserted_total = await _upsert_daily_row_batches(
         session=session,
         instrument_id=inst.id,
@@ -348,7 +365,7 @@ async def sync_daily_by_symbol(
         session,
         state,
         now=datetime.now(timezone.utc),
-        target_end=end,
+        target_end=sync_end,
         fetched_rows=fetched_rows,
         upserted_rows=upserted_total,
     )
@@ -360,8 +377,8 @@ async def sync_daily_by_symbol(
         requested_url=url,
         fetched_rows=fetched_rows,
         upserted_rows=upserted_total,
-        sync_start=start,
-        sync_end=end,
+        sync_start=sync_start,
+        sync_end=sync_end,
     )
 
 

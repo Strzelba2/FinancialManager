@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { buildPerfRowsFromHoldings, computeDashFlowData, computeExpensesYtd, computeGoalsProgress } from '@/app/(dashboard)/wallet/page'
+import {
+  buildPerfRowsFromHoldings,
+  computeAssetsChartData,
+  computeDashFlowData,
+  computeExpensesYtd,
+  computeGoalsProgress,
+} from '@/app/(dashboard)/wallet/page'
 import { computeDashFlowProfit } from '@/features/wallet/components/DashFlowCard'
 import type { HoldingRawRow } from '@/lib/api/holdings'
 import type { WalletListItem, YearGoalOut } from '@/lib/types/wallet'
@@ -169,5 +175,61 @@ describe('wallet page calculations', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('uses nominal assets only when CPI is missing', async () => {
+    await nextUiUnitStory('Wallet dashboard assets chart keeps nominal assets when CPI is unavailable', {
+      severity: 'critical',
+      tags: ['wallet', 'dashboard', 'snapshots', 'cpi', 'next-ui'],
+    })
+
+    const chart = computeAssetsChartData(
+      { months: ['2026-05', '2026-06'], values: [1000, 1100] },
+      null,
+      'PLN',
+    )
+
+    expect(chart.months).toEqual(['2026-05', '2026-06'])
+    expect(chart.nominal).toEqual([1000, 1100])
+    expect(chart.real).toEqual([])
+    expect(chart.inflacja).toEqual([])
+    expect(chart.mom).toEqual([0, 100])
+  })
+
+  it('derives real assets from CPI YoY rates', async () => {
+    await nextUiUnitStory('Wallet dashboard assets chart converts YoY CPI rates into a real assets series', {
+      severity: 'critical',
+      tags: ['wallet', 'dashboard', 'snapshots', 'cpi', 'inflation', 'next-ui'],
+    })
+
+    const chart = computeAssetsChartData(
+      { months: ['2026-05', '2026-06'], values: [1000, 1100] },
+      { index_by_month: { '2026-05': 12, '2026-06': 12 } },
+      'PLN',
+    )
+
+    expect(chart.nominal).toEqual([1000, 1100])
+    expect(chart.inflacja).toEqual([12, 12])
+    expect(chart.real[0]).toBeCloseTo(1000, 5)
+    expect(chart.real[1]).toBeLessThan(1100)
+    expect(chart.real[1]).toBeCloseTo(1089.66, 2)
+  })
+
+  it('distinguishes CPI index values from YoY CPI rates', async () => {
+    await nextUiUnitStory('Wallet dashboard assets chart uses CPI index values directly when CPI is not a YoY rate', {
+      severity: 'critical',
+      tags: ['wallet', 'dashboard', 'snapshots', 'cpi-index', 'inflation', 'next-ui'],
+    })
+
+    const chart = computeAssetsChartData(
+      { months: ['2026-05', '2026-06'], values: [1000, 1100] },
+      { index_by_month: { '2026-05': 100, '2026-06': 110 } },
+      'PLN',
+    )
+
+    expect(chart.inflacja[0]).toBeCloseTo(0, 5)
+    expect(chart.inflacja[1]).toBeCloseTo(10, 5)
+    expect(chart.real[0]).toBeCloseTo(1000, 5)
+    expect(chart.real[1]).toBeCloseTo(1000, 5)
   })
 })

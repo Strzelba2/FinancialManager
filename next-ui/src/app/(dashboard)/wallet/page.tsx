@@ -347,7 +347,7 @@ function computeRecurringTotal(wallets: WalletListItem[], ccy: Currency, rates: 
   return fmtKpi(total, ccy)
 }
 
-function computeAssetsChartData(
+export function computeAssetsChartData(
   assets8m: { months: string[]; values: (number | null)[] } | null,
   cpi8m: { index_by_month: Record<string, number> } | null,
   currency: string,

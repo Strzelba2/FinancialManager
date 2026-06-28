@@ -122,7 +122,7 @@ async def sell_metal_holding_service(
         new_cost = cost_basis - allocated_cost
 
         if new_grams <= 0:
-            await delete_metal_holding(session, mh)
+            await delete_metal_holding(session, mh.id)
         else:
             payload = MetalHoldingUpdate(grams=new_grams, cost_basis=new_cost)
             await update_metal_holding(

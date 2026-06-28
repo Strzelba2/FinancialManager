@@ -8,6 +8,13 @@ import type { HoldingRawRow, HoldingsResult } from '@/lib/api/holdings'
 import { nextUiUnitStory } from '../allure'
 
 const brokerageAccounts = [{ id: 'brokerage-1', name: 'ING Makler' }]
+const routerPush = vi.fn()
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: routerPush,
+  }),
+}))
 
 function row(overrides: Partial<HoldingRawRow>): HoldingRawRow {
   return {
@@ -53,6 +60,7 @@ describe('HoldingsPage', () => {
   })
 
   beforeEach(() => {
+    routerPush.mockClear()
     holdingsResult = result([])
     server.resetHandlers()
     server.use(
@@ -202,6 +210,49 @@ describe('HoldingsPage', () => {
     expect(screen.getAllByText('Brak notowań')).toHaveLength(2)
     expect(screen.queryByText('Tracące:')).not.toBeInTheDocument()
     expect(screen.queryByText('OLD -100,00%')).not.toBeInTheDocument()
+  })
+
+  it('opens favorites dialog from the holding context menu', async () => {
+    await nextUiUnitStory('Brokerage holdings context menu opens favorites for a held instrument', {
+      severity: 'normal',
+      tags: ['wallet', 'brokerage', 'holdings', 'favorites', 'next-ui'],
+    })
+    server.use(
+      http.get('*/api/wallet/favorites', () => HttpResponse.json([
+        { id: 'favorites-1', name: 'Obserwowane', description: null },
+      ])),
+      http.get('*/api/wallet/favorites/favorites-1', () => HttpResponse.json([])),
+    )
+    const rows = [
+      row({
+        id: 'FAV',
+        symbol: 'FAV',
+        instrumentMic: 'XWAR',
+        name: 'Favorite Holding',
+      }),
+    ]
+    holdingsResult = result(rows)
+
+    render(
+      <HoldingsPage
+        initialRows={rows}
+        initialTotalValue={holdingsResult.totalValueView}
+        initialTotalCost={holdingsResult.totalCostView}
+        initialViewCcy="PLN"
+        fxRates={null}
+        brokerageAccounts={brokerageAccounts}
+      />,
+    )
+
+    const symbolCell = screen.getByText('FAV')
+    const holdingRow = symbolCell.closest('tr')
+    expect(holdingRow).not.toBeNull()
+    fireEvent.contextMenu(holdingRow!)
+    fireEvent.click(screen.getByRole('button', { name: 'Ulubione' }))
+
+    expect(await screen.findByText('Ulubione i alerty')).toBeInTheDocument()
+    expect(screen.getByText('FAV — Favorite Holding')).toBeInTheDocument()
+    expect(screen.getByText('Obserwowane')).toBeInTheDocument()
   })
 
   it('opens a holding correction dialog and sends an audited ADJUSTMENT event', async () => {

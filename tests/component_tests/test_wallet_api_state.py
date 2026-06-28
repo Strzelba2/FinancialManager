@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import base64
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -312,6 +313,93 @@ def _get_account_balance(account_id: str) -> Decimal:
             return Decimal(str(row[0]))
 
 
+def _sync_existing_wallet_user(wallet_url: str, fixture: dict[str, str]) -> dict:
+    response = httpx.post(
+        f"{wallet_url}/wallet/sync/user",
+        json={
+            "username": fixture["username"],
+            "email": fixture["email"],
+            "first_name": "Component",
+        },
+        timeout=10.0,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _get_deposit_monthly_snapshot_available(account_id: str, month_key: str) -> Decimal:
+    with _wallet_db_connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT available
+                  FROM deposit_account_monthly_snapshots
+                 WHERE account_id = %s
+                   AND month_key = %s
+                """,
+                (account_id, month_key),
+            )
+            row = cursor.fetchone()
+            assert row is not None
+            return Decimal(str(row[0]))
+
+
+def _ensure_cpi_daily_candle(stock_url: str, quote_day: date, close: Decimal) -> str:
+    market_response = httpx.post(
+        f"{stock_url}/stock/markets",
+        json={
+            "mic": "MCRO",
+            "name": "Macro Indicators",
+            "country": "PL",
+            "timezone": "Europe/Warsaw",
+            "active": True,
+            "currency": "PLN",
+        },
+        timeout=10.0,
+    )
+    assert market_response.status_code in {201, 409}, market_response.text
+
+    instrument_response = httpx.post(
+        f"{stock_url}/stock/instruments",
+        json={
+            "market_mic": "MCRO",
+            "symbol": "CPIYPL.M",
+            "shortname": "CPIYPL.M",
+            "name": "Poland CPI YoY",
+            "type": "MACRO",
+            "status": "ACTIVE",
+            "currency": "PLN",
+            "isin": None,
+            "historical_source": None,
+            "quote_source": None,
+            "popularity": 0,
+            "last_seen_at": None,
+        },
+        timeout=10.0,
+    )
+    assert instrument_response.status_code in {201, 409}, instrument_response.text
+
+    csv = "\n".join(
+        [
+            "Date,Open,High,Low,Close,Volume",
+            f"{quote_day.isoformat()},{close},{close},{close},{close},0",
+        ]
+    )
+    content = base64.b64encode(csv.encode("utf-8")).decode("ascii")
+    import_response = httpx.post(
+        f"{stock_url}/stock/instruments/CPIYPL.M/candles/daily/import_csv",
+        json={
+            "filename": "cpi-wallet-dashboard.csv",
+            "content_b64": content,
+            "return_all": False,
+            "include_items": False,
+        },
+        timeout=10.0,
+    )
+    assert import_response.status_code == 200, import_response.text
+    return quote_day.strftime("%Y-%m")
+
+
 @pytest.mark.component
 @pytest.mark.db
 @allure.epic("System Tests")
@@ -403,6 +491,58 @@ class TestWalletApiPersistedState:
 
         assert denied.status_code == 404
         assert "Wallet not found" in denied.text
+
+
+@pytest.mark.component
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Component")
+@allure.story("Wallet monthly snapshots feed dashboard nominal and real assets")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("wallet", "snapshots", "dashboard", "cpi", "financial-data", "api-contract", "ownership")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Exercises the persisted API path from /wallet/snapshots/monthly to /wallet/sync/user. "
+    "The test seeds a local CPI candle in the stock test service, stores a wallet deposit "
+    "snapshot, verifies assets_8m_total and cpi_8m, and checks cross-user isolation."
+)
+class TestWalletMonthlySnapshotDashboardApi:
+    def test_snapshot_is_persisted_and_returned_with_cpi_without_cross_user_leakage(
+        self,
+        wallet_url: str,
+        stock_url: str,
+    ) -> None:
+        quote_day = datetime.now(timezone.utc).date() - timedelta(days=1)
+        month_key = _ensure_cpi_daily_candle(stock_url, quote_day=quote_day, close=Decimal("3.10"))
+        owner = _seed_wallet_account("snapown", opening_balance="1234.50", currency="PLN")
+        other = _seed_wallet_account("snapoth", opening_balance="9999.00", currency="PLN")
+
+        snapshot_response = httpx.post(
+            f"{wallet_url}/wallet/snapshots/monthly",
+            headers=_auth_headers(owner["user_id"]),
+            json={"month_key": month_key, "currency_rate": {}},
+            timeout=10.0,
+        )
+
+        assert snapshot_response.status_code == 200, snapshot_response.text
+        snapshot = snapshot_response.json()
+        assert snapshot["ok"] is True
+        assert snapshot["month_key"] == month_key
+        assert snapshot["dep_upserted"] == 1
+        assert _get_deposit_monthly_snapshot_available(owner["account_id"], month_key) == Decimal("1234.50")
+
+        owner_sync = _sync_existing_wallet_user(wallet_url, owner)
+        assets = owner_sync["assets_8m_total"]
+        assert month_key in assets["months"]
+        month_idx = assets["months"].index(month_key)
+        assert Decimal(str(assets["values"][month_idx])) == Decimal("1234.5")
+        assert owner_sync["cpi_8m"]["index_by_month"][month_key] == pytest.approx(3.10)
+
+        other_sync = _sync_existing_wallet_user(wallet_url, other)
+        other_assets = other_sync["assets_8m_total"]
+        assert month_key in other_assets["months"]
+        other_month_idx = other_assets["months"].index(month_key)
+        assert Decimal(str(other_assets["values"][other_month_idx])) == Decimal("0.0")
 
 
 @pytest.mark.component

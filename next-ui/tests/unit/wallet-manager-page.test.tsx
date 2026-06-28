@@ -179,6 +179,56 @@ describe('WalletManagerPage', () => {
     expect(screen.getByText(/≈\s*46,00\s*PLN/)).toBeInTheDocument()
   })
 
+  it('creates a monthly snapshot from the toolbar and refreshes after success', async () => {
+    await nextUiUnitStory('Wallet manager creates monthly snapshots from the toolbar', {
+      severity: 'critical',
+      tags: ['wallet', 'wallet-manager', 'snapshots', 'next-ui'],
+    })
+    const requests: unknown[] = []
+    let releaseSnapshot!: () => void
+    const snapshotPending = new Promise<void>((resolve) => {
+      releaseSnapshot = resolve
+    })
+    server.use(
+      http.post('*/api/wallet/manager', async ({ request }) => {
+        requests.push(await request.json())
+        await snapshotPending
+        return HttpResponse.json({ ok: true, month_key: '2026-06' })
+      }),
+    )
+
+    renderManager()
+
+    const button = screen.getByRole('button', { name: /Utwórz snapshot/i })
+    fireEvent.click(button)
+
+    await waitFor(() => expect(button).toBeDisabled())
+    releaseSnapshot()
+
+    await waitFor(() => expect(requests).toEqual([{}]))
+    expect(await screen.findByText('Snapshot zapisany (2026-06)')).toBeInTheDocument()
+    expect(routerRefresh).toHaveBeenCalled()
+  })
+
+  it('shows a controlled snapshot error without refreshing the route', async () => {
+    await nextUiUnitStory('Wallet manager shows snapshot creation errors', {
+      severity: 'critical',
+      tags: ['wallet', 'wallet-manager', 'snapshots', 'error-state', 'next-ui'],
+    })
+    server.use(
+      http.post('*/api/wallet/manager', () => {
+        return HttpResponse.json({ error: 'Błąd serwera (503)' }, { status: 400 })
+      }),
+    )
+
+    renderManager()
+
+    fireEvent.click(screen.getByRole('button', { name: /Utwórz snapshot/i }))
+
+    expect(await screen.findByText('Błąd serwera (503)')).toBeInTheDocument()
+    expect(routerRefresh).not.toHaveBeenCalled()
+  })
+
   it('adds a brokerage currency subaccount from wallet manager', async () => {
     await nextUiUnitStory('Wallet manager submits brokerage currency subaccounts through the local API route', {
       severity: 'critical',

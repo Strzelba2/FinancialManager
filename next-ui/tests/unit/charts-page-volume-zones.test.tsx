@@ -8,7 +8,7 @@ import { server } from '../msw-server'
 import { nextUiUnitStory } from '../allure'
 
 type ChartDataPoint = number | null | { value?: number | null; raw?: number | null; scaleMode?: string }
-type ChartSeries = { name?: string; data?: ChartDataPoint[] }
+type ChartSeries = { name?: string; data?: ChartDataPoint[]; connectNulls?: boolean }
 type ChartOption = {
   series?: ChartSeries[]
   tooltip?: { formatter?: (params: unknown[]) => string }
@@ -309,12 +309,21 @@ describe('ChartsPage volume-zone controls', () => {
       expect(latestSeriesNames()).toContain('PKN · GPW')
       expect(latestSeriesNames()).toContain('VOD · London')
     })
-    expect(pointValue(latestSeries('PKN · GPW')?.data?.[0])).toBeCloseTo(100)
-    expect(pointValue(latestSeries('VOD · London')?.data?.[0])).toBeCloseTo(100)
-    expect(pointValue(latestSeries('VOD · London')?.data?.[1])).toBeCloseTo(110)
+    expect(latestSeries('PKN · GPW')?.connectNulls).toBe(true)
+    expect(pointValue(latestSeries('PKN · GPW')?.data?.[0])).toBeCloseTo(0)
+    expect(pointValue(latestSeries('PKN · GPW')?.data?.[1])).toBeCloseTo(0)
+    expect(pointRaw(latestSeries('PKN · GPW')?.data?.[1])).toBeCloseTo(46)
+    expect(pointValue(latestSeries('VOD · London')?.data?.[0])).toBeCloseTo(0)
+    expect(pointValue(latestSeries('VOD · London')?.data?.[1])).toBeCloseTo(20)
     expect(pointRaw(latestSeries('VOD · London')?.data?.[1])).toBeCloseTo(2.2)
 
-    fireEvent.click(screen.getByRole('button', { name: '% od startu' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Indeks 100' }))
+    await waitFor(() => {
+      expect(pointValue(latestSeries('VOD · London')?.data?.[0])).toBeCloseTo(100)
+      expect(pointValue(latestSeries('VOD · London')?.data?.[1])).toBeCloseTo(110)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zmiana %' }))
     await waitFor(() => {
       expect(pointValue(latestSeries('VOD · London')?.data?.[0])).toBeCloseTo(0)
       expect(pointValue(latestSeries('VOD · London')?.data?.[1])).toBeCloseTo(10)
@@ -363,30 +372,32 @@ describe('ChartsPage volume-zone controls', () => {
 
     const smaPoint = latestSeries('PKN · GPW SMA7')?.data?.[6]
     expect(pointRaw(smaPoint)).toBeCloseTo(3.5)
-    expect(pointValue(smaPoint)).toBeCloseTo(175)
+    expect(pointValue(smaPoint)).toBeCloseTo(12.5)
 
     const bbPoint = latestSeries('BB Upper')?.data?.[19]
     expect(pointRaw(bbPoint)).not.toBeNull()
     expect(pointValue(bbPoint)).not.toBeNull()
 
     const indexAxisFormatter = latestOption().yAxis?.[0]?.axisLabel?.formatter
-    expect(indexAxisFormatter?.(123.456)).toBe('123.46')
+    expect(indexAxisFormatter?.(12.345)).toBe('12.35%')
 
     const tooltipHtml = lineTooltipHtml(latestOption(), [
       lineParam('USDPLN · PLN', 110, 2.2, 'index100'),
       lineParam('WIG · Global Indexes', 120, 1234, 'index100'),
+      lineParam('CPIYPL.M · MACRO', 25, 4.6, 'rangePercent'),
       lineParam('PKN · GPW', 10, 46, 'percent'),
       lineParam('Raw price', 46, 46, 'price'),
     ])
     expect(tooltipHtml).toContain('110.00 · 2.2000')
     expect(tooltipHtml).toMatch(/120\.00 · 1.?234/u)
+    expect(tooltipHtml).toContain('25.00% · 4.6000')
     expect(tooltipHtml).toContain('10.00% · 46.00')
     expect(tooltipHtml).toContain('46.00')
 
-    fireEvent.click(screen.getByRole('button', { name: '% od startu' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Indeks 100' }))
     await waitFor(() => {
-      const percentAxisFormatter = latestOption().yAxis?.[0]?.axisLabel?.formatter
-      expect(percentAxisFormatter?.(12.345)).toBe('12.35%')
+      const index100AxisFormatter = latestOption().yAxis?.[0]?.axisLabel?.formatter
+      expect(index100AxisFormatter?.(123.456)).toBe('123.46')
     })
   })
 

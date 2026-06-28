@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useRef, useCallback, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { RefreshCw, Search, TrendingUp, TrendingDown, ChevronUp, ChevronDown as ChevronDownIcon, Minus, SlidersHorizontal, LoaderCircle, BarChart2, FileText } from 'lucide-react'
+import { RefreshCw, Search, TrendingUp, TrendingDown, ChevronUp, ChevronDown as ChevronDownIcon, Minus, SlidersHorizontal, LoaderCircle, BarChart2, FileText, Star } from 'lucide-react'
 import type { HoldingRawRow, HoldingsResult } from '@/lib/api/holdings'
 import type { FxRates } from '@/lib/api/nbp'
+import { FavoritesDialog } from './FavoritesDialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -118,10 +119,10 @@ function toIsoString(value: string): string {
 }
 
 function HoldingContextMenu({
-  symbol, mic, top, left, onClose,
+  symbol, mic, top, left, onClose, onFavorites,
 }: {
   symbol: string; mic: string; top: number; left: number
-  onClose: () => void
+  onClose: () => void; onFavorites: () => void
 }) {
   const router = useRouter()
   return (
@@ -153,6 +154,14 @@ function HoldingContextMenu({
           Raport AI
         </button>
       )}
+      <div className="my-1 border-t border-white/5" />
+      <button
+        className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+        onClick={() => { onClose(); onFavorites() }}
+      >
+        <Star className="w-4 h-4" />
+        Ulubione
+      </button>
     </div>
   )
 }
@@ -202,7 +211,8 @@ export function HoldingsPage({
   const [actionDate, setActionDate] = useState(() => toDateTimeLocal(new Date()))
   const [actionError, setActionError] = useState<string | null>(null)
   const [isActionPending, startActionTransition] = useTransition()
-  const [contextMenu, setContextMenu] = useState<{ symbol: string; mic: string; top: number; left: number } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ symbol: string; name: string; mic: string; top: number; left: number } | null>(null)
+  const [favoritesTarget, setFavoritesTarget] = useState<{ symbol: string; name: string; mic: string } | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -597,7 +607,13 @@ export function HoldingsPage({
                         }`}
                         onContextMenu={(e) => {
                           e.preventDefault()
-                          setContextMenu({ symbol: row.symbol, mic: row.instrumentMic, top: e.clientY, left: e.clientX })
+                          setContextMenu({
+                            symbol: row.symbol,
+                            name: row.name,
+                            mic: row.instrumentMic,
+                            top: e.clientY,
+                            left: e.clientX,
+                          })
                         }}
                       >
                         {/* Symbol */}
@@ -909,6 +925,19 @@ export function HoldingsPage({
           top={contextMenu.top}
           left={contextMenu.left}
           onClose={() => setContextMenu(null)}
+          onFavorites={() => setFavoritesTarget({
+            symbol: contextMenu.symbol,
+            name: contextMenu.name,
+            mic: contextMenu.mic,
+          })}
+        />
+      )}
+      {favoritesTarget && (
+        <FavoritesDialog
+          symbol={favoritesTarget.symbol}
+          name={favoritesTarget.name}
+          mic={favoritesTarget.mic}
+          onClose={() => setFavoritesTarget(null)}
         />
       )}
     </div>

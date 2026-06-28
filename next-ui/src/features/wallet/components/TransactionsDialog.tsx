@@ -536,7 +536,7 @@ function ManualTab({
           <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
             <SelectValue placeholder="Wybierz konto" />
           </SelectTrigger>
-          <SelectContent className="bg-slate-900 border-white/10 text-white">
+          <SelectContent className="fm-menu-scrollbar bg-slate-900 border-white/10 text-white">
             {accounts.map((account) => (
               <SelectItem key={account.id} value={account.id}>
                 {account.walletName} · {account.name} ({account.currency})
@@ -1155,7 +1155,7 @@ function ImportTab({
             <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
               <SelectValue placeholder="Wybierz konto" />
             </SelectTrigger>
-            <SelectContent className="bg-slate-900 border-white/10 text-white">
+            <SelectContent className="fm-menu-scrollbar bg-slate-900 border-white/10 text-white">
               {accounts.map((account) => (
                 <SelectItem key={account.id} value={account.id}>
                   {account.walletName} · {account.name} ({account.currency})
@@ -1181,7 +1181,7 @@ function ImportTab({
             <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
               <SelectValue placeholder="Wybierz rachunek maklerski" />
             </SelectTrigger>
-            <SelectContent className="bg-slate-900 border-white/10 text-white">
+            <SelectContent className="fm-menu-scrollbar bg-slate-900 border-white/10 text-white">
               {brokerageAccounts.map((account) => (
                 <SelectItem key={account.id} value={account.id}>
                   {account.walletName} · {account.name}
@@ -1264,7 +1264,7 @@ function ImportTab({
             <p className="text-sm font-medium text-white/85">Podgląd transakcji</p>
             <span className="text-xs text-white/45">{txRows.length} wierszy</span>
           </div>
-          <div className="max-h-72 overflow-auto w-full">
+          <div className="fm-menu-scrollbar max-h-72 overflow-auto w-full">
             <table className="w-full text-sm min-w-0">
               <thead>
                 <tr className="border-b border-white/10">
@@ -1295,7 +1295,7 @@ function ImportTab({
             <p className="text-sm font-medium text-white/85">Podgląd operacji maklerskich</p>
             <span className="text-xs text-white/45">{brokerRows.length} wierszy</span>
           </div>
-          <div className="max-h-72 overflow-auto w-full">
+          <div className="fm-menu-scrollbar max-h-72 overflow-auto w-full">
             <table className="w-full text-sm min-w-0">
               <thead>
                 <tr className="border-b border-white/10">
@@ -1333,7 +1333,7 @@ function ImportTab({
               {historyBlockingRows.map(formatHistoryBlockingRow).join('\n')}
             </div>
           )}
-          <div className="max-h-72 overflow-auto w-full">
+          <div className="fm-menu-scrollbar max-h-72 overflow-auto w-full">
             <table className="w-full text-sm min-w-0">
               <thead>
                 <tr className="border-b border-white/10">
@@ -1568,7 +1568,7 @@ function BrokerageTab({
           <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
             <SelectValue placeholder="Wybierz rachunek maklerski" />
           </SelectTrigger>
-          <SelectContent className="bg-slate-900 border-white/10 text-white">
+          <SelectContent className="fm-menu-scrollbar bg-slate-900 border-white/10 text-white">
             {brokerageAccounts.map((account) => (
               <SelectItem key={account.id} value={account.id}>
                 {account.walletName ? `${account.walletName} · ${account.name}` : account.name}
@@ -1747,7 +1747,7 @@ export function TransactionsDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="bg-slate-900/95 backdrop-blur-md border-white/10 text-white sm:max-w-xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+      <DialogContent className="fm-menu-scrollbar bg-slate-900/95 backdrop-blur-md border-white/10 text-white sm:max-w-xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-full bg-emerald-500/15 border border-emerald-500/30">

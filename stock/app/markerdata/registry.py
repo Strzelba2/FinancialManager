@@ -63,3 +63,11 @@ PROVIDERS = {
 
 def get_provider(provider_id: str):
     return PROVIDERS[provider_id]
+
+
+def get_configured_market_timezone(mic: str) -> str | None:
+    mic_norm = (mic or "").strip().upper()
+    for cfg in MARKETS.values():
+        if cfg.mic.upper() == mic_norm:
+            return str(cfg.time_zone)
+    return None

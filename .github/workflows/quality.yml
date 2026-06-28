@@ -89,6 +89,7 @@ jobs:
           CELERY_RESULT_BACKEND=redis://redis:6379/0
           AUTH_URL=http://session-auth:8000/
           STOCK_API_URL=http://stock:8001/
+          CPI_SYMBOL=CPIYPL.M
           ENV_TYPE=test
           EOF
 
@@ -165,12 +166,22 @@ jobs:
         id: quality
         run: make quality-test
 
-      - name: Reclaim CI Docker build cache
+      - name: Reclaim CI Docker resources before test pyramid
         if: always()
         run: |
-          docker buildx prune --all --force
+          echo "Disk usage before Docker cleanup:"
           df -h /
-          docker system df
+          docker system df || true
+
+          docker compose -f docker-compose.yml down --volumes --remove-orphans || true
+          docker compose -p financialmanager_tests -f docker-compose.yml -f tests/docker-compose.tests.yml down --volumes --remove-orphans || true
+
+          docker buildx prune --all --force
+          docker system prune --all --force --volumes
+
+          echo "Disk usage after Docker cleanup:"
+          df -h /
+          docker system df || true
 
       - name: Run test pyramid and reports
         id: tests

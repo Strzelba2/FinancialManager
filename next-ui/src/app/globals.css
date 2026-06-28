@@ -203,4 +203,29 @@
     cursor: pointer;
     filter: invert(1);
   }
+
+  .fm-menu-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(148 163 184 / 0.45) rgb(15 23 42 / 0.55);
+  }
+
+  .fm-menu-scrollbar::-webkit-scrollbar {
+    width: 0.5rem;
+  }
+
+  .fm-menu-scrollbar::-webkit-scrollbar-track {
+    margin-block: 0.375rem;
+    border-radius: 999px;
+    background: rgb(15 23 42 / 0.55);
+  }
+
+  .fm-menu-scrollbar::-webkit-scrollbar-thumb {
+    border: 2px solid rgb(15 23 42);
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgb(148 163 184 / 0.58), rgb(71 85 105 / 0.62));
+  }
+
+  .fm-menu-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgb(203 213 225 / 0.72), rgb(100 116 139 / 0.72));
+  }
 }

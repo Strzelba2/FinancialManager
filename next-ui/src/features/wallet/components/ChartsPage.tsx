@@ -65,7 +65,8 @@ type Layout = 'separate' | 'combined'
 type DateRange = '1M' | '3M' | '1Y' | 'ALL' | 'CUSTOM'
 type AggInterval = 'D' | 'W' | 'M'
 type DrawMode = 'cursor' | 'hline' | 'vline' | 'trend' | 'channel'
-type LineScaleMode = 'price' | 'percent' | 'index100'
+type LineScaleMode = 'price' | 'percent' | 'index100' | 'rangePercent'
+type LineScaleDomain = { base: number | null; min: number | null; max: number | null }
 type MarketOption = { mic: string; name: string }
 type SelectedSeries = { key: string; mic: string; symbol: string; shortname?: string | null }
 
@@ -524,7 +525,7 @@ function formatLineRawValue(value: number): string {
 }
 
 function formatLineValue(value: number, scaleMode: LineScaleMode): string {
-  if (scaleMode === 'percent') return `${value.toFixed(2)}%`
+  if (scaleMode === 'percent' || scaleMode === 'rangePercent') return `${value.toFixed(2)}%`
   if (scaleMode === 'index100') return value.toFixed(2)
   return value.toFixed(2)
 }
@@ -534,9 +535,41 @@ function firstFiniteNonZero(values: (number | null)[]): number | null {
   return first ?? null
 }
 
-function scaleLineValue(value: number | null, base: number | null, scaleMode: LineScaleMode): number | null {
+function lineScaleDomain(values: (number | null)[]): LineScaleDomain {
+  const finite = values.filter((value): value is number => value != null && Number.isFinite(value))
+  return {
+    base: firstFiniteNonZero(values),
+    min: finite.length > 0 ? Math.min(...finite) : null,
+    max: finite.length > 0 ? Math.max(...finite) : null,
+  }
+}
+
+function fillInteriorGaps(values: (number | null)[]): (number | null)[] {
+  const firstIdx = values.findIndex((value) => value != null && Number.isFinite(value))
+  if (firstIdx === -1) return values
+  let lastIdx = values.length - 1
+  while (lastIdx >= 0 && (values[lastIdx] == null || !Number.isFinite(values[lastIdx]))) lastIdx -= 1
+
+  let lastValue: number | null = null
+  return values.map((value, index) => {
+    if (index < firstIdx || index > lastIdx) return null
+    if (value != null && Number.isFinite(value)) {
+      lastValue = value
+      return value
+    }
+    return lastValue
+  })
+}
+
+function scaleLineValue(value: number | null, domain: LineScaleDomain, scaleMode: LineScaleMode): number | null {
   if (value == null || !Number.isFinite(value)) return null
   if (scaleMode === 'price') return value
+  if (scaleMode === 'rangePercent') {
+    if (domain.min == null || domain.max == null || !Number.isFinite(domain.min) || !Number.isFinite(domain.max)) return null
+    if (domain.max === domain.min) return 50
+    return ((value - domain.min) / (domain.max - domain.min)) * 100
+  }
+  const base = domain.base
   if (base == null || !Number.isFinite(base) || base === 0) return null
   if (scaleMode === 'percent') return ((value / base) - 1) * 100
   return (value / base) * 100
@@ -575,7 +608,7 @@ function tooltipFormatter(params: any[]): string {
       const data = (p.data ?? {}) as { value?: unknown; raw?: unknown; scaleMode?: unknown }
       const n = typeof v === 'number' ? v : Number(data.value)
       if (Number.isFinite(n)) {
-        const scaleMode = data.scaleMode === 'percent' || data.scaleMode === 'index100' || data.scaleMode === 'price'
+        const scaleMode = data.scaleMode === 'percent' || data.scaleMode === 'rangePercent' || data.scaleMode === 'index100' || data.scaleMode === 'price'
           ? data.scaleMode
           : 'price'
         display = formatLineValue(n, scaleMode)
@@ -844,39 +877,42 @@ function buildLineOption(
 
   for (const [sym, candles] of seriesMap) {
     const byDate = new Map(candles.map((c) => [c.date_quote, c]))
-    const closes = allDates.map((d) => { const v = byDate.get(d)?.close; return v != null ? Number(v) : null })
-    const base = firstFiniteNonZero(closes)
+    const closes = fillInteriorGaps(allDates.map((d) => { const v = byDate.get(d)?.close; return v != null ? Number(v) : null }))
+    const domain = lineScaleDomain(closes)
     const lineData = closes.map((value) => {
-      const scaled = scaleLineValue(value, base, lineScaleMode)
+      const scaled = scaleLineValue(value, domain, lineScaleMode)
       return scaled == null ? null : { value: scaled, raw: value, scaleMode: lineScaleMode }
     })
     const color = CHART_COLORS[colorIdx++ % CHART_COLORS.length] ?? '#3b82f6'
-    series.push({ name: sym, type: 'line', data: lineData, showSymbol: false, lineStyle: { width: 2, color }, color, connectNulls: false })
+    series.push({ name: sym, type: 'line', data: lineData, showSymbol: false, lineStyle: { width: 2, color }, color, connectNulls: true })
 
     const dateToIdx = new Map(candles.map((c, i) => [c.date_quote, i]))
     const candleCloses = candles.map((c) => Number(c.close))
     for (const p of SMA_PERIODS) {
       if (!indicators.has(`sma-${p}`)) continue
       const smaVals = sma(candleCloses, p)
-      const smaFull = allDates.map((d) => { const i = dateToIdx.get(d); return i !== undefined ? smaVals[i] ?? null : null })
+      const smaFull = fillInteriorGaps(allDates.map((d) => { const i = dateToIdx.get(d); return i !== undefined ? smaVals[i] ?? null : null }))
       const smaData = smaFull.map((value) => {
-        const scaled = scaleLineValue(value, base, lineScaleMode)
+        const scaled = scaleLineValue(value, domain, lineScaleMode)
         return scaled == null ? null : { value: scaled, raw: value, scaleMode: lineScaleMode }
       })
-      series.push({ name: `${sym} SMA${p}`, type: 'line', data: smaData, showSymbol: false, lineStyle: { width: 1.5, type: 'dashed', color }, color, connectNulls: false })
+      series.push({ name: `${sym} SMA${p}`, type: 'line', data: smaData, showSymbol: false, lineStyle: { width: 1.5, type: 'dashed', color }, color, connectNulls: true })
     }
     if (indicators.has('bb') && seriesMap.size === 1) {
       const bb = bollingerBands(candleCloses)
-      const mapBB = (arr: (number | null)[]) => allDates.map((d) => {
-        const i = dateToIdx.get(d)
-        if (i === undefined) return null
-        const raw = arr[i] ?? null
-        const scaled = scaleLineValue(raw, base, lineScaleMode)
-        return scaled == null ? null : { value: scaled, raw, scaleMode: lineScaleMode }
-      })
+      const mapBB = (arr: (number | null)[]) => {
+        const bbRaw = fillInteriorGaps(allDates.map((d) => {
+          const i = dateToIdx.get(d)
+          return i !== undefined ? arr[i] ?? null : null
+        }))
+        return bbRaw.map((raw) => {
+          const scaled = scaleLineValue(raw, domain, lineScaleMode)
+          return scaled == null ? null : { value: scaled, raw, scaleMode: lineScaleMode }
+        })
+      }
       series.push(
-        { name: 'BB Upper', type: 'line', data: mapBB(bb.map((b) => b.upper)), showSymbol: false, lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: false },
-        { name: 'BB Lower', type: 'line', data: mapBB(bb.map((b) => b.lower)), showSymbol: false, lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: false },
+        { name: 'BB Upper', type: 'line', data: mapBB(bb.map((b) => b.upper)), showSymbol: false, lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: true },
+        { name: 'BB Lower', type: 'line', data: mapBB(bb.map((b) => b.lower)), showSymbol: false, lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: true },
       )
     }
   }
@@ -950,6 +986,7 @@ function buildLineOption(
     {
       gridIndex: 0,
       scale: true,
+      ...(lineScaleMode === 'rangePercent' ? { min: 0, max: 100 } : {}),
       splitLine: SPLIT_LINE_STYLE,
       axisLabel: lineScaleMode === 'price'
         ? AXIS_LABEL_STYLE
@@ -1650,9 +1687,10 @@ const INDICATOR_ITEMS = [
 ]
 
 const LINE_SCALE_ITEMS: Array<{ key: LineScaleMode; label: string }> = [
-  { key: 'price', label: 'Cena' },
-  { key: 'percent', label: '% od startu' },
+  { key: 'rangePercent', label: 'Zakres 0-100%' },
   { key: 'index100', label: 'Indeks 100' },
+  { key: 'percent', label: 'Zmiana %' },
+  { key: 'price', label: 'Cena' },
 ]
 
 type ZoneLayerItem = { key: string; label: string; checked: boolean; onToggle: () => void; disabled?: boolean }
@@ -2314,7 +2352,7 @@ export function ChartsPage({ mic, instruments, preselectedSymbol, marketOptions 
   )
   const [chartType, setChartType]   = useState<ChartType>('candlestick')
   const [layout, setLayout]         = useState<Layout>('separate')
-  const [lineScaleMode, setLineScaleMode] = useState<LineScaleMode>('index100')
+  const [lineScaleMode, setLineScaleMode] = useState<LineScaleMode>('rangePercent')
   const [showVolume, setShowVolume] = useState(true)
   const [dateRange, setDateRange]   = useState<DateRange>('ALL')
   const [customFrom, setCustomFrom] = useState('')

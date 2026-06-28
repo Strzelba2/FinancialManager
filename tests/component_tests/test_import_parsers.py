@@ -183,6 +183,31 @@ class TestBankTransactionImportParserApi:
         assert Decimal(str(last_row["amount"])) == Decimal("-45.00")
         assert last_row["description"] == "Kontrahent 45 Transakcja po duzym przelewie 45"
 
+    def test_ing_bank_csv_parser_uses_blocked_amount_when_posted_amount_is_empty(self) -> None:
+        csv_payload = "\r\n".join([
+            '"Lista transakcji";;;;;"ING Bank �l�ski S.A."',
+            '"Data transakcji";"Data ksi�gowania";"Dane kontrahenta";"Tytu�";"Nr rachunku";"Nazwa banku";"Szczeg�y";"Nr transakcji";"Kwota transakcji (waluta rachunku)";"Waluta";"Kwota blokady/zwolnienie blokady";"Waluta";"Kwota p�atno�ci w walucie";"Waluta";"Saldo po transakcji";"Waluta"',
+            '2026-06-24;;" AZAN SP. Z O.O.  Skierniewice  POL ";" P�atno�� kart�  24.06.2026 Nr karty 4246xx9217";;;"";;;;-8,98;PLN;;;298,30;PLN',
+        ]).encode()
+
+        response = httpx.post(
+            "http://nice-ui:8501/api/import/parse",
+            data={"parser_name": "IngBank CSV", "mode": "transactions"},
+            files={"file": ("ing_pending_card.csv", csv_payload, "text/csv")},
+            timeout=10.0,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["mode"] == "transactions"
+        assert payload["count"] == 1
+        row = payload["rows"][0]
+        assert row["date"] == "2026-06-24"
+        assert Decimal(str(row["amount"])) == Decimal("-8.98")
+        assert Decimal(str(row["amount_after"])) == Decimal("298.30")
+        assert "AZAN SP. Z O.O." in row["description"]
+        assert "P�atno�� kart�" in row["description"]
+
     def test_ing_makler_csv_parser_sorts_transactions_by_date_and_balance_chain(self) -> None:
         csv_payload = "\r\n".join([
             "Data transakcji;Typ transakcji;Opis transakcji;Kwota transakcji;Saldo po operacji;Waluta",

@@ -16,6 +16,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.clients.gpw_client import GpwListingsClient
+from app.api.services.quotes import sync_daily_by_symbol
 from app.crud.quote_latest import get_latest_trade_date_by_symbol, trade_date_in_market_timezone
 from app.markerdata.config import MarketConfig, TableLayout
 from app.markerdata.historical_browser import (
@@ -127,6 +128,21 @@ class MarketDataParserTests(unittest.TestCase):
         self.assertEqual(rows[0].volume, None)
         self.assertEqual(rows[1].volume, 1000)
 
+    def test_parse_daily_csv_handles_polish_stooq_macro_export_without_volume(self) -> None:
+        csv_text = "\n".join(
+            [
+                "Data,Otwarcie,Najwyzszy,Najnizszy,Zamkniecie",
+                "2026-04-30,3.2,3.2,3.2,3.2",
+                "2026-05-29,3.1,3.1,3.1,3.1",
+            ]
+        )
+
+        rows = parse_daily_csv(csv_text)
+
+        self.assertEqual([row.date_quote for row in rows], [date(2026, 4, 30), date(2026, 5, 29)])
+        self.assertEqual(rows[-1].close, Decimal("3.10"))
+        self.assertIsNone(rows[-1].volume)
+
 
 @allure.epic("Unit Tests")
 @allure.feature("Stock Market Data")
@@ -181,6 +197,7 @@ class QuoteLatestCrudTests(unittest.IsolatedAsyncioTestCase):
                     one_or_none=lambda: (
                         datetime(2026, 6, 11, 22, 0, tzinfo=timezone.utc),
                         "Europe/Warsaw",
+                        "XWAR",
                     ),
                 ),
             ),
@@ -190,6 +207,76 @@ class QuoteLatestCrudTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, date(2026, 6, 12))
         session.execute.assert_awaited_once()
+
+    async def test_latest_trade_date_prefers_registry_timezone_for_configured_macro_market(self) -> None:
+        session = SimpleNamespace(
+            execute=AsyncMock(
+                return_value=SimpleNamespace(
+                    one_or_none=lambda: (
+                        datetime(2026, 5, 28, 22, 0, tzinfo=timezone.utc),
+                        "UTC",
+                        "MCRO",
+                    ),
+                ),
+            ),
+        )
+
+        result = await get_latest_trade_date_by_symbol(session, "CPIYPL.M")
+
+        self.assertEqual(result, date(2026, 5, 29))
+        session.execute.assert_awaited_once()
+
+
+@allure.epic("Unit Tests")
+@allure.feature("Stock Market Data")
+@allure.story("Daily candle sync records the actual upstream candle range")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("market-data", "candles", "sync", "stock")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+class DailyCandleSyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sync_success_end_uses_latest_returned_candle_when_upstream_lags_target(self) -> None:
+        instrument_id = uuid4()
+        session = SimpleNamespace()
+        instrument = SimpleNamespace(
+            id=instrument_id,
+            shortname="POLSKA",
+            historical_source="https://stooq.pl/q/d/l/?s=cpiypl.m&i=d",
+        )
+        state = SimpleNamespace(
+            daily_last_success_end=None,
+            daily_last_fetched_rows=None,
+            daily_last_attempt_end=None,
+            daily_last_attempt_at=None,
+            daily_last_error=None,
+        )
+        csv_text = "\n".join(
+            [
+                "Data,Otwarcie,Najwyzszy,Najnizszy,Zamkniecie",
+                "2026-03-31,3,3,3,3",
+                "2026-04-30,3.2,3.2,3.2,3.2",
+            ]
+        )
+
+        with (
+            patch("app.api.services.quotes.get_instrument_by_symbol", new=AsyncMock(return_value=instrument)),
+            patch("app.api.services.quotes.get_latest_trade_date_by_symbol", new=AsyncMock(return_value=date(2026, 5, 29))),
+            patch("app.api.services.quotes.get_min_max_date", new=AsyncMock(return_value=(date(2025, 1, 31), date(2026, 3, 31)))),
+            patch("app.api.services.quotes.requires_browser_fetch", return_value=False),
+            patch("app.api.services.quotes.download_text_csv", new=AsyncMock(return_value=csv_text)) as download_csv,
+            patch("app.api.services.quotes.get_or_create_sync_state", new=AsyncMock(return_value=state)),
+            patch("app.api.services.quotes.mark_daily_attempt", new=AsyncMock()) as mark_attempt,
+            patch("app.api.services.quotes.mark_daily_success", new=AsyncMock()) as mark_success,
+            patch("app.api.services.quotes._upsert_daily_row_batches", new=AsyncMock(return_value=2)),
+        ):
+            result = await sync_daily_by_symbol(session, "CPIYPL.M", overlap_days=7)
+
+        self.assertEqual(result.sync_end, date(2026, 4, 30))
+        mark_attempt.assert_awaited_once()
+        mark_success.assert_awaited_once()
+        requested_url = download_csv.await_args.kwargs["url"]
+        self.assertIn("d1=20260324", requested_url)
+        self.assertIn("d2=20260529", requested_url)
+        self.assertEqual(mark_success.await_args.kwargs["target_end"], date(2026, 4, 30))
 
 
 @allure.epic("Unit Tests")

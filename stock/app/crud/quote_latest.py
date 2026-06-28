@@ -11,6 +11,7 @@ import logging
 from app.models.models import Instrument, QuoteLatest, Market
 from app.models.enums import InstrumentStatus
 from app.schemas.schemas import QuoteLatesInput
+from app.markerdata.registry import get_configured_market_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ async def get_latest_trade_date_by_symbol(
     our DB.
     """
     stmt = (
-        select(QuoteLatest.last_trade_at, Market.timezone)
+        select(QuoteLatest.last_trade_at, Market.timezone, Market.mic)
         .join(Instrument, Instrument.id == QuoteLatest.instrument_id)
         .join(Market, Market.id == Instrument.market_id)
         .where(Instrument.symbol == symbol)
@@ -157,7 +158,8 @@ async def get_latest_trade_date_by_symbol(
     if row is None:
         return None
 
-    last_trade_at, market_timezone = row
+    last_trade_at, market_timezone, market_mic = row
+    market_timezone = get_configured_market_timezone(market_mic) or market_timezone
     return trade_date_in_market_timezone(last_trade_at, market_timezone)
 
 

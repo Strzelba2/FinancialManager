@@ -198,12 +198,14 @@ function MultiSelectFilter<T extends string>({
   selected,
   onChange,
   renderLabel,
+  wide = false,
 }: {
   label: string
   options: T[]
   selected: T[]
   onChange: (next: T[]) => void
   renderLabel?: (key: T) => string
+  wide?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -234,6 +236,7 @@ function MultiSelectFilter<T extends string>({
         onClick={() => setOpen((o) => !o)}
         className={[
           'flex items-center gap-1.5 h-8 px-3 rounded-lg border text-sm transition-colors',
+          wide ? 'min-w-[96px] justify-between' : '',
           open || selected.length > 0
             ? 'bg-emerald-600/20 border-emerald-500/30 text-white'
             : 'bg-slate-800/60 border-white/10 text-white/60 hover:text-white hover:border-white/20',
@@ -246,13 +249,16 @@ function MultiSelectFilter<T extends string>({
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-slate-900 border border-white/10 rounded-xl shadow-2xl min-w-[180px] max-h-64 overflow-y-auto py-1">
+        <div className={[
+          'fm-menu-scrollbar absolute top-full left-0 mt-1 z-50 max-h-64 overflow-y-auto rounded-xl border border-white/10 bg-slate-900 py-1 shadow-2xl',
+          wide ? 'min-w-[240px] max-w-[calc(100vw-2rem)]' : 'min-w-[180px]',
+        ].join(' ')}>
           {options.map((opt) => (
             <button
               key={opt}
               type="button"
               onClick={() => toggle(opt)}
-              className="w-full text-left flex items-center gap-2 px-3 py-2 text-sm hover:bg-white/5 transition-colors"
+              className="w-full text-left flex items-center gap-2 px-3 py-2 text-sm hover:bg-white/5 focus:bg-white/5 transition-colors"
             >
               <span className={[
                 'w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center',
@@ -538,6 +544,7 @@ export function TransactionsPage({ accounts, brokerageAccounts }: Props) {
           options={allAccountIds}
           selected={selectedAccountIds}
           onChange={applyFilter(setSelectedAccountIds)}
+          wide
           renderLabel={(id) => {
             const acc = accounts.find((a) => a.id === id)
             return acc ? `${acc.walletName} · ${acc.name}` : id

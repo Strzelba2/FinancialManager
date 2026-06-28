@@ -48,6 +48,8 @@ def sum_snapshots_into_monthly_totals(
             converted = fx_convert(amount, ccy, target_ccy, fx)
         except Exception:
             return
+        if converted is None:
+            return
         totals[wallet_id][month_key] += converted
 
     for r in dep_rows:

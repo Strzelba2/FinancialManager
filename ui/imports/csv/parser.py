@@ -42,6 +42,16 @@ def _description_without_interest_amount(description: str) -> str:
     return cleaned or description
 
 
+def _first_amount_value(*values: str | None) -> Decimal | None:
+    for value in values:
+        if value is None or not str(value).strip():
+            continue
+        amount = parse_amount(value)
+        if amount is not None:
+            return amount
+    return None
+
+
 def _money_key(value: Decimal) -> Decimal:
     return Decimal(value).quantize(Decimal("0.01"))
 
@@ -447,7 +457,10 @@ class IngBankParser(BaseBankParser):
             )
             if not date:
                 continue
-            amount = dec(parse_amount(r.get('Kwota transakcji (waluta rachunku)', '0')))
+            amount = dec(_first_amount_value(
+                r.get('Kwota transakcji (waluta rachunku)'),
+                r.get('Kwota blokady/zwolnienie blokady'),
+            ))
             amount_after = dec(parse_amount(r.get('Saldo po transakcji', '0')))
             desc = _join_non_empty(
                 r.get('Dane kontrahenta'),
