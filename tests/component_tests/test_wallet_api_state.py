@@ -344,6 +344,52 @@ def _get_deposit_monthly_snapshot_available(account_id: str, month_key: str) -> 
             return Decimal(str(row[0]))
 
 
+def _deposit_monthly_snapshot_exists(account_id: str, month_key: str) -> bool:
+    with _wallet_db_connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                  FROM deposit_account_monthly_snapshots
+                 WHERE account_id = %s
+                   AND month_key = %s
+                """,
+                (account_id, month_key),
+            )
+            return cursor.fetchone() is not None
+
+
+def _upsert_legacy_deposit_monthly_snapshot(
+    fixture: dict[str, str],
+    account_id: str,
+    month_key: str,
+    currency: str,
+    available: str,
+) -> None:
+    with _wallet_db_connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO deposit_account_monthly_snapshots (
+                    wallet_id, account_id, month_key, currency, available
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT ON CONSTRAINT uq_depacc_monthly_snapshot
+                DO UPDATE SET
+                    currency = EXCLUDED.currency,
+                    available = EXCLUDED.available,
+                    updated_at = now()
+                """,
+                (
+                    fixture["wallet_id"],
+                    account_id,
+                    month_key,
+                    currency,
+                    Decimal(available),
+                ),
+            )
+
+
 def _ensure_cpi_daily_candle(stock_url: str, quote_day: date, close: Decimal) -> str:
     market_response = httpx.post(
         f"{stock_url}/stock/markets",
@@ -503,24 +549,32 @@ class TestWalletApiPersistedState:
 @allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
 @allure.description(
     "Exercises the persisted API path from /wallet/snapshots/monthly to /wallet/sync/user. "
-    "The test seeds a local CPI candle in the stock test service, stores a wallet deposit "
-    "snapshot, verifies assets_8m_total and cpi_8m, and checks cross-user isolation."
+    "The test seeds a local CPI candle in the stock test service, stores wallet and brokerage "
+    "cash snapshots, verifies assets_8m_total and cpi_8m, ignores legacy duplicated "
+    "BROKERAGE deposit snapshots, and checks cross-user isolation."
 )
 class TestWalletMonthlySnapshotDashboardApi:
-    def test_snapshot_is_persisted_and_returned_with_cpi_without_cross_user_leakage(
+    def test_snapshot_excludes_brokerage_cash_from_deposit_totals_and_returns_cpi(
         self,
         wallet_url: str,
         stock_url: str,
     ) -> None:
         quote_day = datetime.now(timezone.utc).date() - timedelta(days=1)
         month_key = _ensure_cpi_daily_candle(stock_url, quote_day=quote_day, close=Decimal("3.10"))
-        owner = _seed_wallet_account("snapown", opening_balance="1234.50", currency="PLN")
+        owner = _seed_wallet_account("snapown", opening_balance="0.00", currency="PLN")
+        brokerage_account_id = _seed_brokerage_account_link(owner, currency="PLN")
+        brokerage_cash_id = _seed_brokerage_cash_account(
+            owner,
+            brokerage_account_id=brokerage_account_id,
+            currency="USD",
+            opening_balance="10.00",
+        )
         other = _seed_wallet_account("snapoth", opening_balance="9999.00", currency="PLN")
 
         snapshot_response = httpx.post(
             f"{wallet_url}/wallet/snapshots/monthly",
             headers=_auth_headers(owner["user_id"]),
-            json={"month_key": month_key, "currency_rate": {}},
+            json={"month_key": month_key, "currency_rate": {"USD/PLN": "4.00"}},
             timeout=10.0,
         )
 
@@ -529,13 +583,23 @@ class TestWalletMonthlySnapshotDashboardApi:
         assert snapshot["ok"] is True
         assert snapshot["month_key"] == month_key
         assert snapshot["dep_upserted"] == 1
-        assert _get_deposit_monthly_snapshot_available(owner["account_id"], month_key) == Decimal("1234.50")
+        assert snapshot["bro_upserted"] == 1
+        assert _get_deposit_monthly_snapshot_available(owner["account_id"], month_key) == Decimal("0.00")
+        assert not _deposit_monthly_snapshot_exists(brokerage_cash_id, month_key)
+
+        _upsert_legacy_deposit_monthly_snapshot(
+            owner,
+            account_id=brokerage_cash_id,
+            month_key=month_key,
+            currency="USD",
+            available="10.00",
+        )
 
         owner_sync = _sync_existing_wallet_user(wallet_url, owner)
         assets = owner_sync["assets_8m_total"]
         assert month_key in assets["months"]
         month_idx = assets["months"].index(month_key)
-        assert Decimal(str(assets["values"][month_idx])) == Decimal("1234.5")
+        assert Decimal(str(assets["values"][month_idx])) == Decimal("40.0")
         assert owner_sync["cpi_8m"]["index_by_month"][month_key] == pytest.approx(3.10)
 
         other_sync = _sync_existing_wallet_user(wallet_url, other)

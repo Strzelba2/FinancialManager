@@ -1,14 +1,14 @@
 import uuid
 from decimal import Decimal
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
 from app.models.models import (
     FxMonthlySnapshot, DepositAccountMonthlySnapshot, BrokerageAccountMonthlySnapshot,
-    MetalHoldingMonthlySnapshot, RealEstateMonthlySnapshot
+    MetalHoldingMonthlySnapshot, RealEstateMonthlySnapshot, DepositAccount
     )
-from app.models.enums import Currency
+from app.models.enums import AccountType, Currency
 from app.utils.utils import json_safe
 
 
@@ -26,9 +26,17 @@ async def list_deposit_monthly_snapshots(
 ) -> list[DepositAccountMonthlySnapshot]:
     if not wallet_ids or not month_keys:
         return []
-    stmt = select(DepositAccountMonthlySnapshot).where(
-        DepositAccountMonthlySnapshot.wallet_id.in_(wallet_ids),
-        DepositAccountMonthlySnapshot.month_key.in_(month_keys),
+    stmt = (
+        select(DepositAccountMonthlySnapshot)
+        .outerjoin(DepositAccount, DepositAccount.id == DepositAccountMonthlySnapshot.account_id)
+        .where(
+            DepositAccountMonthlySnapshot.wallet_id.in_(wallet_ids),
+            DepositAccountMonthlySnapshot.month_key.in_(month_keys),
+            or_(
+                DepositAccountMonthlySnapshot.account_id.is_(None),
+                DepositAccount.account_type != AccountType.BROKERAGE,
+            ),
+        )
     )
     res = await session.execute(stmt)
     return list(res.scalars().all())

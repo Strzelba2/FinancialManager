@@ -18,6 +18,13 @@ function conv(amount: number, from: string, to: string, rates: FxRates | null): 
   return amount
 }
 
+export type HoldingAccountBreakdown = {
+  accountId: string
+  accountName: string
+  quantity: number
+  costRaw: number
+}
+
 export type HoldingRawRow = {
   id: string
   accountId: string
@@ -26,6 +33,7 @@ export type HoldingRawRow = {
   name: string
   currency: string          
   accountsDisp: string      
+  accountBreakdown: HoldingAccountBreakdown[]
   quantity: number
   avgCostRaw: number        
   priceRaw: number         
@@ -75,7 +83,7 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
     symbol: string
     name: string
     currency: string
-    accounts: Set<string>
+    accounts: Map<string, HoldingAccountBreakdown>
     accountId: string
     instrumentMic: string
     totalQty: number
@@ -87,11 +95,13 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
     if (!symbol) continue
 
     const accountName = h.account_name ?? 'Account'
+    const accountId = h.account_id
     const ccy = (h.instrument_currency ?? '').trim() || '—'
     const qty = toNum(h.quantity)
     const avgCost = toNum(h.avg_cost)
+    const costRaw = qty * avgCost
 
-    const key = groupMode === 'ACCOUNT' ? `${h.account_id}::${symbol}` : symbol
+    const key = groupMode === 'ACCOUNT' ? `${accountId}::${symbol}` : symbol
 
     const rec = agg.get(key)
     if (!rec) {
@@ -100,16 +110,32 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
         symbol,
         name: h.instrument_name ?? '',
         currency: ccy,
-        accounts: new Set([accountName]),
-        accountId: h.account_id,
+        accounts: new Map([[accountId, {
+          accountId,
+          accountName,
+          quantity: qty,
+          costRaw,
+        }]]),
+        accountId,
         instrumentMic: h.instrument_mic ?? '',
         totalQty: qty,
-        totalCost: qty * avgCost,
+        totalCost: costRaw,
       })
     } else {
-      rec.accounts.add(accountName)
+      const account = rec.accounts.get(accountId)
+      if (account) {
+        account.quantity += qty
+        account.costRaw += costRaw
+      } else {
+        rec.accounts.set(accountId, {
+          accountId,
+          accountName,
+          quantity: qty,
+          costRaw,
+        })
+      }
       rec.totalQty += qty
-      rec.totalCost += qty * avgCost
+      rec.totalCost += costRaw
     }
   }
 
@@ -144,7 +170,10 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
     if (valueView !== null) totalValueView += valueView
     if (costView !== null) totalCostView += costView
 
-    const accountsArr = [...accounts].sort()
+    const accountBreakdown = [...accounts.values()].sort((a, b) =>
+      a.accountName.localeCompare(b.accountName)
+    )
+    const accountsArr = accountBreakdown.map((account) => account.accountName)
     const accountsDisp = accountsArr.length === 1
       ? accountsArr[0]!
       : `${accountsArr.length} rachunki`
@@ -157,6 +186,7 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
       name,
       currency: ccy,
       accountsDisp,
+      accountBreakdown,
       quantity: qty,
       avgCostRaw,
       priceRaw,

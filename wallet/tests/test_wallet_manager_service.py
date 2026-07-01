@@ -13,7 +13,7 @@ from app.api.services.wallet_manager_service import (
     create_monthly_snapshot_for_user_service,
     get_wallet_manager_tree_service,
 )
-from app.models.enums import Currency
+from app.models.enums import AccountType, Currency
 
 pytestmark = pytest.mark.unit
 
@@ -86,6 +86,7 @@ class WalletManagerServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         user_id = uuid4()
         wallet_id = uuid4()
         deposit_id = uuid4()
+        brokerage_cash_id = uuid4()
         brokerage_id = uuid4()
         holding_id = uuid4()
         month = "2026-05"
@@ -94,10 +95,18 @@ class WalletManagerServiceUnitTests(unittest.IsolatedAsyncioTestCase):
             id=deposit_id,
             wallet_id=wallet_id,
             currency=Currency.PLN,
+            account_type=AccountType.CURRENT,
             balance=SimpleNamespace(available=Decimal("100.00")),
         )
+        brokerage_cash = SimpleNamespace(
+            id=brokerage_cash_id,
+            wallet_id=wallet_id,
+            currency=Currency.PLN,
+            account_type=AccountType.BROKERAGE,
+            balance=SimpleNamespace(available=Decimal("25.00")),
+        )
         brokerage = SimpleNamespace(id=brokerage_id, wallet_id=wallet_id)
-        link = SimpleNamespace(brokerage_account_id=brokerage_id, deposit_account_id=deposit_id)
+        link = SimpleNamespace(brokerage_account_id=brokerage_id, deposit_account_id=brokerage_cash_id)
         instrument = SimpleNamespace(symbol="PKO", currency=Currency.PLN)
         holding = SimpleNamespace(
             id=holding_id,
@@ -120,7 +129,7 @@ class WalletManagerServiceUnitTests(unittest.IsolatedAsyncioTestCase):
             patch("app.api.services.wallet_manager_service.list_wallets", new=AsyncMock(return_value=[wallet])),
             patch(
                 "app.api.services.wallet_manager_service.list_deposit_accounts_for_wallets",
-                new=AsyncMock(return_value=[deposit]),
+                new=AsyncMock(return_value=[deposit, brokerage_cash]),
             ),
             patch(
                 "app.api.services.wallet_manager_service.upsert_depacc_monthly_snapshot_uow",
@@ -163,7 +172,7 @@ class WalletManagerServiceUnitTests(unittest.IsolatedAsyncioTestCase):
             brokerage_account_id=brokerage_id,
             month_key=month,
             currency="PLN",
-            cash=Decimal("100.00"),
+            cash=Decimal("25.00"),
             stocks=Decimal("60.00"),
         )
         stock_client.get_latest_quotes_for_symbols.assert_awaited_once_with(symbols=["PKO"])

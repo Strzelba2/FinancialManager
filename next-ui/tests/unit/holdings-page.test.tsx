@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '../msw-server'
@@ -8,6 +8,10 @@ import type { HoldingRawRow, HoldingsResult } from '@/lib/api/holdings'
 import { nextUiUnitStory } from '../allure'
 
 const brokerageAccounts = [{ id: 'brokerage-1', name: 'ING Makler' }]
+const multiBrokerageAccounts = [
+  { id: 'brokerage-1', name: 'ING Makler' },
+  { id: 'brokerage-2', name: 'XTB' },
+]
 const routerPush = vi.fn()
 
 vi.mock('next/navigation', () => ({
@@ -16,8 +20,18 @@ vi.mock('next/navigation', () => ({
   }),
 }))
 
+vi.mock('@/features/wallet/components/FavoritesDialog', () => ({
+  FavoritesDialog: ({ symbol, name, mic }: { symbol: string; name: string | null; mic: string }) => (
+    <div role="dialog" aria-label="Ulubione i alerty">
+      <p>Ulubione i alerty</p>
+      <p>{symbol} — {name ?? ''}</p>
+      <p>{mic}</p>
+    </div>
+  ),
+}))
+
 function row(overrides: Partial<HoldingRawRow>): HoldingRawRow {
-  return {
+  const holding: HoldingRawRow = {
     id: 'PKO',
     accountId: 'brokerage-1',
     symbol: 'PKO',
@@ -25,6 +39,12 @@ function row(overrides: Partial<HoldingRawRow>): HoldingRawRow {
     name: 'PKOBP',
     currency: 'PLN',
     accountsDisp: 'ING Makler',
+    accountBreakdown: [{
+      accountId: 'brokerage-1',
+      accountName: 'ING Makler',
+      quantity: 10,
+      costRaw: 100,
+    }],
     quantity: 10,
     avgCostRaw: 10,
     priceRaw: 20,
@@ -39,17 +59,68 @@ function row(overrides: Partial<HoldingRawRow>): HoldingRawRow {
     quoteMissing: false,
     ...overrides,
   }
+  if (
+    overrides.pnlPct !== undefined
+    && overrides.priceRaw === undefined
+    && overrides.valueRaw === undefined
+    && !holding.quoteMissing
+  ) {
+    holding.valueRaw = holding.costRaw * (1 + overrides.pnlPct)
+    holding.priceRaw = holding.quantity > 0 ? holding.valueRaw / holding.quantity : 0
+    holding.pnlAmountRaw = holding.valueRaw - holding.costRaw
+    holding.valueView = holding.valueRaw
+    holding.pnlView = holding.pnlAmountRaw
+  }
+  if (!overrides.accountBreakdown) {
+    holding.accountBreakdown = [{
+      accountId: holding.accountId,
+      accountName: holding.accountsDisp,
+      quantity: holding.quantity,
+      costRaw: holding.costRaw,
+    }]
+  }
+  return holding
 }
 
-function result(rows: HoldingRawRow[]): HoldingsResult {
+function openRowAccountMenu(symbol: string) {
+  const trigger = screen.getByRole('button', { name: `Wybierz rachunki dla ${symbol}` })
+  fireEvent.keyDown(trigger, { key: 'Enter', code: 'Enter' })
+  return trigger
+}
+
+function result(rows: HoldingRawRow[], accounts = brokerageAccounts): HoldingsResult {
   return {
     rows,
     totalValueView: rows.reduce((sum, item) => sum + (item.valueView ?? 0), 0),
     totalCostView: rows.reduce((sum, item) => sum + (item.costView ?? 0), 0),
     viewCcy: 'PLN',
     fxRates: null,
-    brokerageAccounts,
+    brokerageAccounts: accounts,
   }
+}
+
+function multiAccountRow(overrides: Partial<HoldingRawRow> = {}): HoldingRawRow {
+  return row({
+    id: 'PKO',
+    accountId: 'brokerage-1',
+    symbol: 'PKO',
+    accountsDisp: '2 rachunki',
+    quantity: 15,
+    avgCostRaw: 200 / 15,
+    priceRaw: 20,
+    costRaw: 200,
+    valueRaw: 300,
+    pnlAmountRaw: 100,
+    pnlPct: 0.5,
+    costView: 200,
+    valueView: 300,
+    pnlView: 100,
+    accountBreakdown: [
+      { accountId: 'brokerage-1', accountName: 'ING Makler', quantity: 10, costRaw: 100 },
+      { accountId: 'brokerage-2', accountName: 'XTB', quantity: 5, costRaw: 100 },
+    ],
+    ...overrides,
+  })
 }
 
 let holdingsResult = result([])
@@ -212,17 +283,83 @@ describe('HoldingsPage', () => {
     expect(screen.queryByText('OLD -100,00%')).not.toBeInTheDocument()
   })
 
+  it('recalculates a multi-account holding from the selected row account without changing row count', async () => {
+    await nextUiUnitStory('Brokerage holdings recalculate visible PnL for selected accounts inside one instrument row', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'holdings', 'money', 'filters', 'next-ui'],
+    })
+    const rows = [multiAccountRow()]
+    holdingsResult = result(rows, multiBrokerageAccounts)
+
+    render(
+      <HoldingsPage
+        initialRows={rows}
+        initialTotalValue={holdingsResult.totalValueView}
+        initialTotalCost={holdingsResult.totalCostView}
+        initialViewCcy="PLN"
+        fxRates={null}
+        brokerageAccounts={multiBrokerageAccounts}
+      />,
+    )
+
+    expect(screen.getByText('1 pozycja')).toBeInTheDocument()
+    expect(screen.getAllByText(/300,00\sPLN/)).toHaveLength(2)
+
+    openRowAccountMenu('PKO')
+    expect(await screen.findByRole('menuitemcheckbox', { name: 'ING Makler' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'XTB' }))
+
+    const holdingRow = screen.getByText('PKO').closest('tr')
+    expect(holdingRow).not.toBeNull()
+    await waitFor(() => {
+      expect(within(holdingRow!).getByText('10')).toBeInTheDocument()
+      expect(within(holdingRow!).getByText(/200,00\sPLN/)).toBeInTheDocument()
+      expect(within(holdingRow!).getByText(/\+100,00\sPLN/)).toBeInTheDocument()
+      expect(within(holdingRow!).getByText('+100,00%')).toBeInTheDocument()
+      expect(screen.getByText('1 pozycja')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/300,00\sPLN/)).not.toBeInTheDocument()
+  })
+
+  it('resets row account selections when the search query changes', async () => {
+    await nextUiUnitStory('Brokerage holdings reset row account selection when search changes', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'holdings', 'search', 'filters', 'next-ui'],
+    })
+    const rows = [multiAccountRow()]
+    holdingsResult = result(rows, multiBrokerageAccounts)
+
+    render(
+      <HoldingsPage
+        initialRows={rows}
+        initialTotalValue={holdingsResult.totalValueView}
+        initialTotalCost={holdingsResult.totalCostView}
+        initialViewCcy="PLN"
+        fxRates={null}
+        brokerageAccounts={multiBrokerageAccounts}
+      />,
+    )
+
+    openRowAccountMenu('PKO')
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'XTB' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Wybierz rachunki dla PKO' })).toHaveTextContent('ING Makler')
+    })
+
+    fireEvent.change(screen.getByPlaceholderText('Szukaj instrumentu…'), { target: { value: 'pk' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Wybierz rachunki dla PKO' })).toHaveTextContent('2 rachunki')
+      expect(screen.getAllByText(/300,00\sPLN/)).toHaveLength(2)
+      expect(screen.getByText('1 pozycja')).toBeInTheDocument()
+    })
+  })
+
   it('opens favorites dialog from the holding context menu', async () => {
     await nextUiUnitStory('Brokerage holdings context menu opens favorites for a held instrument', {
       severity: 'normal',
       tags: ['wallet', 'brokerage', 'holdings', 'favorites', 'next-ui'],
     })
-    server.use(
-      http.get('*/api/wallet/favorites', () => HttpResponse.json([
-        { id: 'favorites-1', name: 'Obserwowane', description: null },
-      ])),
-      http.get('*/api/wallet/favorites/favorites-1', () => HttpResponse.json([])),
-    )
     const rows = [
       row({
         id: 'FAV',
@@ -252,7 +389,7 @@ describe('HoldingsPage', () => {
 
     expect(await screen.findByText('Ulubione i alerty')).toBeInTheDocument()
     expect(screen.getByText('FAV — Favorite Holding')).toBeInTheDocument()
-    expect(screen.getByText('Obserwowane')).toBeInTheDocument()
+    expect(screen.getByText('XWAR')).toBeInTheDocument()
   })
 
   it('opens a holding correction dialog and sends an audited ADJUSTMENT event', async () => {

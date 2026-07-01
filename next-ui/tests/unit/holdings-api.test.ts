@@ -82,6 +82,10 @@ describe('holdings API aggregation', () => {
     expect(result.rows[0]).toMatchObject({
       symbol: 'LNGA',
       accountsDisp: '2 rachunki',
+      accountBreakdown: [
+        { accountId: 'account-1', accountName: 'Makler PLN', quantity: 10, costRaw: 20 },
+        { accountId: 'account-2', accountName: 'Makler USD', quantity: 5, costRaw: 20 },
+      ],
       quantity: 15,
       avgCostRaw: 40 / 15,
       valueRaw: 75,
@@ -171,6 +175,10 @@ describe('holdings API aggregation', () => {
     expect(result.rows).toHaveLength(12)
     expect(result.rows.find((item) => item.symbol === 'GAIN-1')).toMatchObject({
       accountsDisp: '2 rachunki',
+      accountBreakdown: [
+        { accountId: 'alpha', accountName: 'Portfel Alpha', quantity: 2, costRaw: 100 },
+        { accountId: 'beta', accountName: 'Portfel Beta', quantity: 3, costRaw: 300 },
+      ],
       quantity: 5,
       avgCostRaw: 80,
       costRaw: 400,
@@ -181,6 +189,10 @@ describe('holdings API aggregation', () => {
     })
     expect(result.rows.find((item) => item.symbol === 'LOSS-1')).toMatchObject({
       accountsDisp: '2 rachunki',
+      accountBreakdown: [
+        { accountId: 'alpha', accountName: 'Portfel Alpha', quantity: 2, costRaw: 200 },
+        { accountId: 'beta', accountName: 'Portfel Beta', quantity: 2, costRaw: 100 },
+      ],
       quantity: 4,
       avgCostRaw: 75,
       costRaw: 300,

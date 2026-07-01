@@ -25,7 +25,7 @@ from app.crud.real_estate_crud import list_real_estates
 from app.api.services.real_estate import get_latest_price_with_fallback
 
 from app.models.models import DepositAccount, BrokerageAccount
-from app.models.enums import Currency
+from app.models.enums import AccountType, Currency
 
 from app.utils.money import dec, fx_convert, safe_ccy
 from app.utils.date import month_key, last_n_month_keys
@@ -472,6 +472,9 @@ async def create_monthly_snapshot_for_user_service(
             bal = getattr(a, "balance", None)
             available = dec(getattr(bal, "available", 0))
             dep_map[a.id] = (a.currency.value, available)
+
+            if getattr(a, "account_type", None) == AccountType.BROKERAGE:
+                continue
 
             await upsert_depacc_monthly_snapshot_uow(
                 session,

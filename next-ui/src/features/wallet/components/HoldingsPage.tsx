@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, useTransition } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { RefreshCw, Search, TrendingUp, TrendingDown, ChevronUp, ChevronDown as ChevronDownIcon, Minus, SlidersHorizontal, LoaderCircle, BarChart2, FileText, Star } from 'lucide-react'
-import type { HoldingRawRow, HoldingsResult } from '@/lib/api/holdings'
+import type { HoldingAccountBreakdown, HoldingRawRow, HoldingsResult } from '@/lib/api/holdings'
 import type { FxRates } from '@/lib/api/nbp'
 import { FavoritesDialog } from './FavoritesDialog'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,15 @@ function fmtPct(v: number, unit = true): string {
   const val = unit ? v * 100 : v
   const sign = val > 0 ? '+' : val < 0 ? '-' : ''
   return sign + fmtNum(Math.abs(val)) + '%'
+}
+
+function convertAmount(amount: number, from: string, to: string, rates: FxRates | null): number {
+  if (from === to || !rates || !from || from === '—') return amount
+  const direct = rates[`${from}/${to}` as keyof FxRates]
+  if (typeof direct === 'number') return amount * direct
+  const inverse = rates[`${to}/${from}` as keyof FxRates]
+  if (typeof inverse === 'number') return amount / inverse
+  return amount
 }
 
 type SortField = 'symbol' | 'quantity' | 'value' | 'pnl_pct' | 'pnl_amount' | 'name'
@@ -176,22 +185,80 @@ type Props = {
 }
 
 type GroupMode = 'SYMBOL' | 'ACCOUNT'
+type RowAccountSelections = Record<string, string[]>
+
+function allRowAccounts(row: HoldingRawRow): HoldingAccountBreakdown[] {
+  const breakdown = row.accountBreakdown ?? []
+  return breakdown.length > 0
+    ? breakdown
+    : [{
+        accountId: row.accountId,
+        accountName: row.accountsDisp,
+        quantity: row.quantity,
+        costRaw: row.costRaw,
+      }]
+}
+
+function activeRowAccounts(row: HoldingRawRow, selections: RowAccountSelections): HoldingAccountBreakdown[] {
+  const accounts = allRowAccounts(row)
+  const selectedIds = selections[row.id]
+  if (!selectedIds || selectedIds.length === 0) return accounts
+
+  const selected = accounts.filter((account) => selectedIds.includes(account.accountId))
+  return selected.length > 0 ? selected : accounts
+}
+
+function accountDisplay(accounts: HoldingAccountBreakdown[]): string {
+  if (accounts.length === 1) return accounts[0]?.accountName ?? 'Rachunek'
+  return `${accounts.length} rachunki`
+}
+
+function buildEffectiveRows(
+  rows: HoldingRawRow[],
+  selections: RowAccountSelections,
+  viewCcy: ViewCcy,
+  rates: FxRates | null,
+): HoldingRawRow[] {
+  return rows.map((row) => {
+    const selectedAccounts = activeRowAccounts(row, selections)
+    const quantity = selectedAccounts.reduce((sum, account) => sum + account.quantity, 0)
+    const costRaw = selectedAccounts.reduce((sum, account) => sum + account.costRaw, 0)
+    const valueRaw = row.quoteMissing ? 0 : quantity * row.priceRaw
+    const pnlAmountRaw = row.quoteMissing ? 0 : valueRaw - costRaw
+    const canConvert = !row.quoteMissing && row.currency && row.currency !== '—'
+    const firstAccount = selectedAccounts[0]
+
+    return {
+      ...row,
+      accountId: firstAccount?.accountId ?? row.accountId,
+      accountsDisp: accountDisplay(selectedAccounts),
+      quantity,
+      avgCostRaw: quantity > 0 ? costRaw / quantity : 0,
+      costRaw,
+      valueRaw,
+      pnlAmountRaw,
+      pnlPct: !row.quoteMissing && costRaw > 0 ? pnlAmountRaw / costRaw : 0,
+      costView: canConvert ? convertAmount(costRaw, row.currency, viewCcy, rates) : null,
+      valueView: canConvert ? convertAmount(valueRaw, row.currency, viewCcy, rates) : null,
+      pnlView: canConvert ? convertAmount(pnlAmountRaw, row.currency, viewCcy, rates) : null,
+    }
+  })
+}
 
 export function HoldingsPage({
   initialRows,
-  initialTotalValue,
-  initialTotalCost,
   initialViewCcy,
+  fxRates: initialFxRates,
   brokerageAccounts,
 }: Props) {
   const [rows, setRows] = useState<HoldingRawRow[]>(initialRows)
-  const [totalValue, setTotalValue] = useState(initialTotalValue)
-  const [totalCost, setTotalCost] = useState(initialTotalCost)
+  const [fxRates, setFxRates] = useState<FxRates | null>(initialFxRates)
 
   const [viewCcy, setViewCcy] = useState<ViewCcy>(initialViewCcy)
   const [accountIds, setAccountIds] = useState<string[]>([])
   const [query, setQuery] = useState('')
   const [groupMode, setGroupMode] = useState<GroupMode>('SYMBOL')
+  const [rowAccountSelections, setRowAccountSelections] = useState<RowAccountSelections>({})
   const [sortField, setSortField] = useState<SortField>('value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
@@ -244,8 +311,7 @@ export function HoldingsPage({
       if (!res.ok) { setError('Błąd pobierania danych'); return }
       const data = await res.json() as HoldingsResult
       setRows(data.rows)
-      setTotalValue(data.totalValueView)
-      setTotalCost(data.totalCostView)
+      setFxRates(data.fxRates)
     } catch {
       setError('Błąd połączenia')
     } finally {
@@ -266,11 +332,56 @@ export function HoldingsPage({
     else { setSortField(field); setSortDir('desc') }
   }
 
-  const sorted = sortRows(rows, sortField, sortDir)
+  const handleQueryChange = (value: string) => {
+    setRowAccountSelections({})
+    setQuery(value)
+  }
+
+  const updateGlobalAccounts = (updater: (prev: string[]) => string[]) => {
+    setRowAccountSelections({})
+    setAccountIds(updater)
+  }
+
+  const updateGroupMode = (mode: GroupMode) => {
+    setRowAccountSelections({})
+    setGroupMode(mode)
+  }
+
+  const toggleRowAccount = (row: HoldingRawRow, accountId: string, checked: boolean) => {
+    const allIds = allRowAccounts(row).map((account) => account.accountId)
+
+    setRowAccountSelections((prev) => {
+      const current = prev[row.id]?.length ? prev[row.id]! : allIds
+      const next = checked
+        ? [...new Set([...current, accountId])]
+        : current.filter((id) => id !== accountId)
+
+      if (next.length === 0) return prev
+      const normalizedNext = allIds.filter((id) => next.includes(id))
+      const nextSelections = { ...prev }
+      delete nextSelections[row.id]
+      if (normalizedNext.length === allIds.length) return nextSelections
+      return { ...nextSelections, [row.id]: normalizedNext }
+    })
+  }
+
+  const isRowAccountSelected = (row: HoldingRawRow, accountId: string) => {
+    const selectedIds = rowAccountSelections[row.id]
+    return !selectedIds || selectedIds.length === 0 || selectedIds.includes(accountId)
+  }
+
+  const effectiveRows = useMemo(
+    () => buildEffectiveRows(rows, rowAccountSelections, viewCcy, fxRates),
+    [rows, rowAccountSelections, viewCcy, fxRates],
+  )
+
+  const totalValue = effectiveRows.reduce((sum, row) => sum + (row.valueView ?? 0), 0)
+  const totalCost = effectiveRows.reduce((sum, row) => sum + (row.costView ?? 0), 0)
+  const sorted = sortRows(effectiveRows, sortField, sortDir)
   const totalPnl = totalValue - totalCost
   const totalPnlPct = totalCost > 0 ? totalPnl / totalCost : 0
 
-  const priced = rows.filter((r) => !r.quoteMissing && r.priceRaw > 0)
+  const priced = effectiveRows.filter((r) => !r.quoteMissing && r.priceRaw > 0)
   const topGainers = priced.filter((r) => r.pnlPct > 0).sort((a, b) => b.pnlPct - a.pnlPct).slice(0, 5)
   const topLosers = priced.filter((r) => r.pnlPct < 0).sort((a, b) => a.pnlPct - b.pnlPct).slice(0, 5)
   const posCount = priced.filter((r) => r.pnlPct > 0).length
@@ -444,7 +555,7 @@ export function HoldingsPage({
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30" />
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => handleQueryChange(e.target.value)}
               placeholder="Szukaj instrumentu…"
               className="w-full pl-7 pr-3 py-1.5 text-sm bg-slate-900/60 border border-white/10 rounded-lg text-white placeholder-white/30 focus:outline-none focus:border-blue-500/50"
             />
@@ -469,8 +580,8 @@ export function HoldingsPage({
                     key={acc.id}
                     checked={accountIds.includes(acc.id)}
                     onCheckedChange={(checked) =>
-                      setAccountIds((prev) =>
-                        checked ? [...prev, acc.id] : prev.filter((x) => x !== acc.id)
+                      updateGlobalAccounts((prev) =>
+                        checked === true ? [...prev, acc.id] : prev.filter((x) => x !== acc.id)
                       )
                     }
                     className="text-xs text-white/80 focus:bg-white/10 focus:text-white"
@@ -490,7 +601,7 @@ export function HoldingsPage({
             {(['SYMBOL', 'ACCOUNT'] as GroupMode[]).map((m) => (
               <button
                 key={m}
-                onClick={() => setGroupMode(m)}
+                onClick={() => updateGroupMode(m)}
                 className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                   groupMode === m ? 'bg-blue-600 text-white' : 'text-white/50 hover:text-white hover:bg-white/5'
                 }`}
@@ -693,7 +804,34 @@ export function HoldingsPage({
 
                         {/* Account */}
                         <td className="px-4 py-3 text-center hidden lg:table-cell">
-                          <span className="text-xs text-white/40">{row.accountsDisp}</span>
+                          {allRowAccounts(row).length > 1 ? (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  aria-label={`Wybierz rachunki dla ${row.symbol}`}
+                                  className="inline-flex max-w-[180px] items-center gap-1.5 rounded-lg border border-white/10 bg-slate-900/40 px-2.5 py-1 text-xs text-white/60 transition-colors hover:border-white/20 hover:text-white"
+                                >
+                                  <span className="truncate">{row.accountsDisp}</span>
+                                  <ChevronDownIcon className="h-3 w-3 shrink-0 opacity-50" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent className="bg-slate-900 border-white/10 text-white min-w-[220px]">
+                                {allRowAccounts(row).map((account) => (
+                                  <DropdownMenuCheckboxItem
+                                    key={account.accountId}
+                                    checked={isRowAccountSelected(row, account.accountId)}
+                                    onCheckedChange={(checked) => toggleRowAccount(row, account.accountId, checked === true)}
+                                    className="text-xs text-white/80 focus:bg-white/10 focus:text-white"
+                                  >
+                                    {account.accountName}
+                                  </DropdownMenuCheckboxItem>
+                                ))}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          ) : (
+                            <span className="text-xs text-white/40">{row.accountsDisp}</span>
+                          )}
                         </td>
 
                         {/* Actions */}

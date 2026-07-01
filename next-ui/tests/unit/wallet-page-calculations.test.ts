@@ -47,6 +47,10 @@ function performanceFixture(symbol: string, pnlPct: number, pnlAmount: number): 
     name: symbol,
     currency: 'PLN',
     accountsDisp: '2 rachunki',
+    accountBreakdown: [
+      { accountId: 'account-1', accountName: 'Rachunek 1', quantity: 5, costRaw: cost / 2 },
+      { accountId: 'account-2', accountName: 'Rachunek 2', quantity: 5, costRaw: cost / 2 },
+    ],
     quantity: 10,
     avgCostRaw: cost / 10,
     priceRaw: value / 10,
