@@ -249,6 +249,7 @@ class BrokerageCashLinkResult(BaseModel):
     
 class QuoteBySymbolItem(BaseModel):
     symbol: str
+    name: Optional[str] = None
     price: Decimal
     currency: InstrumentCurrency
     change_pct: Decimal

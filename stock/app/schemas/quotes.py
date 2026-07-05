@@ -32,6 +32,7 @@ class BulkQuotesOut(RootModel[Dict[str, QuotePayloadOut]]):
 
 class LatestQuoteBySymbol(BaseModel):
     symbol: str
+    name: Optional[str] = None
     price: Decimal
     currency: Currency
     change_pct: Decimal

@@ -101,6 +101,41 @@ describe('holdings API aggregation', () => {
     })
   })
 
+  it('uses quote display name when wallet mirror still stores a stale symbol-like name', async () => {
+    await nextUiUnitStory('Holdings API prefers quote display names over stale wallet mirrors', {
+      severity: 'critical',
+      tags: ['wallet', 'brokerage', 'holdings', 'quotes', 'financial-data'],
+    })
+    vi.mocked(listHoldings).mockResolvedValue([
+      {
+        account_id: 'account-1',
+        account_name: 'Makler PLN',
+        instrument_id: 'instrument-inp',
+        instrument_symbol: 'INP',
+        instrument_mic: 'XWAR',
+        instrument_name: 'inp',
+        instrument_currency: 'PLN',
+        quantity: '100',
+        avg_cost: '7.00',
+      },
+    ])
+    vi.mocked(listBrokerageAccounts).mockResolvedValue([{ id: 'account-1', name: 'Makler PLN' }])
+    vi.mocked(getFxRates).mockResolvedValue(null)
+    vi.mocked(getQuotesBySymbols).mockResolvedValue({
+      INP: { symbol: 'INP', name: 'INPRO', price: '8.25', currency: 'PLN', change_pct: '1.5' },
+    } as never)
+
+    const result = await fetchHoldings({ userId: 'user-1', view_ccy: 'PLN' })
+
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0]).toMatchObject({
+      symbol: 'INP',
+      name: 'INPRO',
+      valueRaw: 825,
+      quoteMissing: false,
+    })
+  })
+
   it('aggregates twelve ranked symbols across accounts from different wallets', async () => {
     await nextUiUnitStory('Holdings API aggregates cross-wallet quantities and costs before ranking', {
       severity: 'critical',

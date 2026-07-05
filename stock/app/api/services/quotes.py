@@ -188,6 +188,7 @@ async def get_latest_quotes_by_symbols(
         out.append(
             LatestQuoteBySymbol(
                 symbol=inst.symbol,
+                name=inst.shortname,
                 price=ql.last_price,
                 currency=inst.currency,
                 change_pct=ql.change_pct

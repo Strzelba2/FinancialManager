@@ -247,6 +247,7 @@ export function processQuotes(raw: Record<string, BulkQuote>): QuoteRow[] {
 
 export type QuoteBySymbol = {
   symbol: string
+  name?: string | null
   price: string | number
   currency: string
   change_pct: string | number

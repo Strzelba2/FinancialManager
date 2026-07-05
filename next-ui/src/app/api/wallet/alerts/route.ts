@@ -9,6 +9,18 @@ function mapAlertError(message: string): string {
   return message
 }
 
+function normalizeAlertPrice(value: string | number | null | undefined, field: string): { value: string | null; error?: string } {
+  const raw = value == null ? '' : String(value).trim()
+  if (!raw) return { value: null }
+
+  const normalized = raw.replace(',', '.')
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
+    return { value: null, error: `${field} musi być liczbą, np. 10,99 albo 10.99` }
+  }
+
+  return { value: normalized }
+}
+
 export async function POST(req: NextRequest) {
   const userId = await resolveWalletUserId()
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -25,14 +37,19 @@ export async function POST(req: NextRequest) {
   if (!body.symbol?.trim()) {
     return NextResponse.json({ error: 'symbol jest wymagany' }, { status: 400 })
   }
-  if (!body.below_price && !body.above_price) {
+  const below = normalizeAlertPrice(body.below_price, 'below_price')
+  if (below.error) return NextResponse.json({ error: below.error }, { status: 400 })
+  const above = normalizeAlertPrice(body.above_price, 'above_price')
+  if (above.error) return NextResponse.json({ error: above.error }, { status: 400 })
+
+  if (!below.value && !above.value) {
     return NextResponse.json({ error: 'Podaj below_price lub above_price' }, { status: 400 })
   }
 
   const result = await upsertAlert(userId, {
     symbol: body.symbol.trim().toUpperCase(),
-    below_price: body.below_price ?? null,
-    above_price: body.above_price ?? null,
+    below_price: below.value,
+    above_price: above.value,
     enabled: body.enabled ?? true,
     one_shot: body.one_shot ?? false,
     expires_at: body.expires_at ?? null,

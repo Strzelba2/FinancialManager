@@ -422,7 +422,7 @@ describe('wallet resource route handlers', () => {
   })
 
   it('normalizes alert payloads and maps missing-instrument errors for users', async () => {
-    await nextUiUnitStory('Wallet alert routes normalize symbols and map missing instrument messages', {
+    await nextUiUnitStory('Wallet alert routes normalize symbols, decimal separators and missing instrument messages', {
       severity: 'critical',
       tags: ['wallet', 'alerts', 'api-route', 'validation'],
     })
@@ -435,6 +435,7 @@ describe('wallet resource route handlers', () => {
 
     const response = await postAlert(jsonRequest('http://localhost/api/wallet/alerts', {
       symbol: ' pko ',
+      below_price: '10,99',
       above_price: '100.00',
     }))
 
@@ -444,7 +445,7 @@ describe('wallet resource route handlers', () => {
     })
     expect(upsertAlert).toHaveBeenCalledWith('user-1', {
       symbol: 'PKO',
-      below_price: null,
+      below_price: '10.99',
       above_price: '100.00',
       enabled: true,
       one_shot: false,

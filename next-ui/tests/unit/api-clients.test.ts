@@ -483,7 +483,7 @@ describe('stock API client', () => {
     server.use(http.post('http://stock:8001/stock/quotes/latest/symbols', ({ request }) => {
       requests.push(request)
       return HttpResponse.json([
-        { symbol: 'PKO', price: '55.12', currency: 'PLN', change_pct: '1.20' },
+        { symbol: 'PKO', name: 'PKO BP', price: '55.12', currency: 'PLN', change_pct: '1.20' },
       ])
     }))
     process.env.STOCK_API_URL = 'http://stock:8001'
@@ -491,7 +491,7 @@ describe('stock API client', () => {
 
     await expect(getQuotesBySymbols([])).resolves.toEqual({})
     await expect(getQuotesBySymbols(['PKO'])).resolves.toEqual({
-      PKO: { symbol: 'PKO', price: '55.12', currency: 'PLN', change_pct: '1.20' },
+      PKO: { symbol: 'PKO', name: 'PKO BP', price: '55.12', currency: 'PLN', change_pct: '1.20' },
     })
     expect(requests).toHaveLength(1)
   })

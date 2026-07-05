@@ -18,6 +18,12 @@ function conv(amount: number, from: string, to: string, rates: FxRates | null): 
   return amount
 }
 
+function displayNameFromQuote(symbol: string, storedName: string, quoteName: string | null | undefined): string {
+  const qn = (quoteName ?? '').trim()
+  if (qn && qn.toUpperCase() !== symbol.toUpperCase()) return qn
+  return storedName
+}
+
 export type HoldingAccountBreakdown = {
   accountId: string
   accountName: string
@@ -152,6 +158,7 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
     const cost = rec.totalCost
 
     const quote = quotesMap[symbol]
+    const displayName = displayNameFromQuote(symbol, name, quote?.name)
     const quoteMissing = !quote
     const quoteCcy = quote?.currency ?? rec.currency
     const ccy = quoteCcy || rec.currency
@@ -183,7 +190,7 @@ export async function fetchHoldings(params: HoldingsParams): Promise<HoldingsRes
       accountId: rec.accountId,
       symbol,
       instrumentMic: rec.instrumentMic,
-      name,
+      name: displayName,
       currency: ccy,
       accountsDisp,
       accountBreakdown,

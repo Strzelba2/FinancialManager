@@ -66,18 +66,18 @@ class TestBrokerageEventService(unittest.IsolatedAsyncioTestCase):
         stock_client.resolve_instrument.assert_awaited_once_with("xlon", "lnga.uk")
         stock_client_ctor.assert_not_called()
 
-    async def test_stock_backed_mirror_uses_resolved_stock_instrument(self) -> None:
+    async def test_stock_backed_mirror_uses_stock_shortname_as_display_name(self) -> None:
         session = Mock()
         resolved = StockInstrumentRead(
-            mic="XLON",
-            symbol="LNGA.UK",
-            shortname="LNGA.UK",
-            name="WisdomTree Natural Gas",
-            currency="USD",
-            type="ETF",
+            mic="XWAR",
+            symbol="INP",
+            shortname="INPRO",
+            name="inp",
+            currency="PLN",
+            type="STOCK",
             status="ACTIVE",
         )
-        instrument = SimpleNamespace(id=uuid4(), symbol="LNGA.UK")
+        instrument = SimpleNamespace(id=uuid4(), symbol="INP")
         stock_client = object()
 
         with (
@@ -92,20 +92,20 @@ class TestBrokerageEventService(unittest.IsolatedAsyncioTestCase):
         ):
             result = await get_or_create_stock_backed_instrument(
                 session,
-                mic="XLON",
-                symbol="LNGA.UK",
+                mic="XWAR",
+                symbol="INP",
                 stock_client=stock_client,
             )
 
         assert result is instrument
-        resolve_mock.assert_awaited_once_with("XLON", "LNGA.UK", stock_client=stock_client)
+        resolve_mock.assert_awaited_once_with("XWAR", "INP", stock_client=stock_client)
         mirror_mock.assert_awaited_once()
         call_kwargs = mirror_mock.await_args.kwargs
-        assert call_kwargs["mic"] == "XLON"
-        assert call_kwargs["symbol"] == "LNGA.UK"
-        assert call_kwargs["name"] == "WisdomTree Natural Gas"
-        assert call_kwargs["currency"] == Currency.USD
-        assert call_kwargs["instrument_type"].value == "ETF"
+        assert call_kwargs["mic"] == "XWAR"
+        assert call_kwargs["symbol"] == "INP"
+        assert call_kwargs["name"] == "INPRO"
+        assert call_kwargs["currency"] == Currency.PLN
+        assert call_kwargs["instrument_type"].value == "STOCK"
 
     async def test_event_rejects_instrument_missing_from_stock_before_writes(self) -> None:
         brokerage_account_id = uuid4()

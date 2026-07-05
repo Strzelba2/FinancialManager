@@ -121,7 +121,7 @@ async def get_or_create_stock_backed_instrument(
         session,
         mic=stock_instrument.mic,
         symbol=stock_instrument.symbol,
-        name=stock_instrument.name or stock_instrument.shortname or stock_instrument.symbol,
+        name=stock_instrument.shortname or stock_instrument.name or stock_instrument.symbol,
         currency=_wallet_currency(stock_instrument.currency),
         instrument_type=_wallet_instrument_type(stock_instrument.type),
     )

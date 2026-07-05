@@ -16,7 +16,10 @@ import pytest
 
 from app.core.config import settings
 from app.core.clients.gpw_client import GpwListingsClient
-from app.api.services.quotes import sync_daily_by_symbol
+from app.api.services.quotes import (
+    get_latest_quotes_by_symbols as get_latest_quotes_by_symbols_service,
+    sync_daily_by_symbol,
+)
 from app.crud.quote_latest import get_latest_trade_date_by_symbol, trade_date_in_market_timezone
 from app.markerdata.config import MarketConfig, TableLayout
 from app.markerdata.historical_browser import (
@@ -225,6 +228,29 @@ class QuoteLatestCrudTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, date(2026, 5, 29))
         session.execute.assert_awaited_once()
+
+    async def test_latest_quotes_by_symbols_returns_shortname_display_name(self) -> None:
+        instrument = SimpleNamespace(
+            id=uuid4(),
+            symbol="INP",
+            shortname="INPRO",
+            currency=Currency.PLN,
+        )
+        quote = SimpleNamespace(
+            last_price=Decimal("8.25"),
+            change_pct=Decimal("1.50"),
+        )
+
+        with patch(
+            "app.api.services.quotes.fetch_latest_quotes_by_symbols",
+            new=AsyncMock(return_value=[(instrument, SimpleNamespace(mic="XWAR"), quote)]),
+        ):
+            result = await get_latest_quotes_by_symbols_service(SimpleNamespace(), ["INP"])
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].symbol, "INP")
+        self.assertEqual(result[0].name, "INPRO")
+        self.assertEqual(result[0].price, Decimal("8.25"))
 
 
 @allure.epic("Unit Tests")
