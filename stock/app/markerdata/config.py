@@ -23,6 +23,7 @@ class MarketConfig(BaseModel):
     start_path: str      
     mic: str   
     instrument_type: InstrumentType              
+    shortname_prefix: Optional[str] = None
     row_selector: str = 'tr[id^="r_"]'
     help_selector: str = 'td a[href="pomoc/"]'
     time_zone: ZoneInfo = ZoneInfo("Europe/Warsaw")

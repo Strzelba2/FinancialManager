@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     ST_START_NC_QUOTE_URL: str = ""
     ST_START_COMMODITIES_QUOTE_URL: str = ""
     ST_START_CPI_QUOTE_URL: str = ""
+    ST_START_PMI_QUOTE_URL: str = ""
+    ST_START_PKB_QUOTE_URL: str = ""
+    ST_START_UNR_QUOTE_URL: str = ""
     ST_START_PLN_CURRENCY_QUOTE_URL: str = ""
     ST_START_PLN_INDEXS_QUOTE_URL: str = ""
     TIME_ZONE: ZoneInfo = ZoneInfo("Europe/Warsaw")

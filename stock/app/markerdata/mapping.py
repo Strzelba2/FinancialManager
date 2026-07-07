@@ -8,11 +8,18 @@ from app.schemas.schemas import InstrumentCreate, QuoteLatesInput
 from app.models.enums import InstrumentType, InstrumentStatus
 
 
+def _instrument_shortname(row: IndexRow, cfg: MarketConfig) -> str:
+    if cfg.shortname_prefix:
+        return f"{cfg.shortname_prefix.strip()}{row.name.strip()}"[:40]
+    return row.name[:12]
+
+
 def row_to_instrument(row: IndexRow, cfg: MarketConfig, market_id: uuid.UUID) -> InstrumentCreate:
     """
     Convert an index row into an `InstrumentCreate` payload.
 
-    - Truncates `symbol` and `shortname` to 12 characters.
+    - Truncates `symbol` to 12 characters.
+    - Builds a prefixed `shortname` when the market configuration asks for one.
     - Builds a `historical_source` URL using `historical_url(row.href, cfg)`.
     - Sets default values such as type=STOCK and status=ACTIVE.
 
@@ -29,7 +36,7 @@ def row_to_instrument(row: IndexRow, cfg: MarketConfig, market_id: uuid.UUID) ->
         isin=None,        
         market_id=market_id,
         symbol=row.symbol[:12],
-        shortname=row.name[:12],
+        shortname=_instrument_shortname(row, cfg),
         name=None,
         type=cfg.instrument_type,      
         status=InstrumentStatus.ACTIVE,  

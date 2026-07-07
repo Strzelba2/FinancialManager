@@ -329,6 +329,29 @@ class MarketDataMappingTests(unittest.TestCase):
         self.assertEqual(str(result.historical_source), f"{ST_BASE_URL}/q/d/l/?s=PBX&i=d")
         self.assertEqual(result.type, InstrumentType.STOCK)
 
+    def test_row_to_instrument_adds_configured_shortname_prefix(self) -> None:
+        row = IndexRow(
+            symbol="PPIYPL.M",
+            name="Polska",
+            href="/q/?s=ppiypl.m",
+            provider=ST_BASE_URL,
+        )
+        market_id = uuid4()
+        cfg = _market_config().model_copy(
+            update={
+                "id": "pmi",
+                "mic": "MCRO",
+                "instrument_type": InstrumentType.MACRO,
+                "shortname_prefix": "PMI_",
+            }
+        )
+
+        result = row_to_instrument(row, cfg, market_id)
+
+        self.assertEqual(result.symbol, "PPIYPL.M")
+        self.assertEqual(result.shortname, "PMI_POLSKA")
+        self.assertEqual(result.type, InstrumentType.MACRO)
+
     def test_row_to_quote_latest_defaults_missing_values_and_preserves_source(self) -> None:
         row = IndexRow(
             symbol="PKO",

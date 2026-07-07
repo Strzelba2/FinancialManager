@@ -7,10 +7,11 @@ import {
   BarChart2, TrendingUp, RefreshCw, Search, X, ChevronDown,
   CandlestickChart, LineChart, MousePointer2, Minus, Layers,
   Undo2, Save, Trash2, Upload, Check, Crosshair, Maximize2, Minimize2, Info,
+  SlidersHorizontal,
 } from 'lucide-react'
 import type { CandleDay, SyncCandlesResult, VolumeZonesResponse } from '@/lib/api/stock'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   Select,
   SelectContent,
@@ -57,6 +58,10 @@ const CHART_COLORS = [
   '#ef4444', '#06b6d4', '#f97316', '#84cc16',
 ]
 const SMA_PERIODS = [7, 20, 50, 100, 200] as const
+const DEFAULT_BOLLINGER_SETTINGS = { period: 20, standardDeviations: 2, channelFill: false } as const
+const BB_SERIES_IDS = new Set(['bb-upper', 'bb-mid', 'bb-lower'])
+const BB_SERIES_NAMES = new Set(['BB Upper', 'BB Mid', 'BB Lower'])
+const BB_FILL_COLOR = 'rgba(245,158,11,0.10)'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -69,6 +74,8 @@ type LineScaleMode = 'price' | 'percent' | 'index100' | 'rangePercent'
 type LineScaleDomain = { base: number | null; min: number | null; max: number | null }
 type MarketOption = { mic: string; name: string }
 type SelectedSeries = { key: string; mic: string; symbol: string; shortname?: string | null }
+type BollingerSettings = { period: number; standardDeviations: number; channelFill: boolean }
+type IndicatorSettings = { bollinger: BollingerSettings }
 
 type AnnoStyle = { color: string; width: number }
 type XAnchor = { date: string; offset?: number }
@@ -158,6 +165,64 @@ function nextAnnoId(): string { return `a${Date.now().toString(36)}_${++_annoId}
 
 function deepClone<T>(x: T): T {
   try { return JSON.parse(JSON.stringify(x)) as T } catch { return x }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function defaultIndicatorSettings(): IndicatorSettings {
+  return {
+    bollinger: {
+      period: DEFAULT_BOLLINGER_SETTINGS.period,
+      standardDeviations: DEFAULT_BOLLINGER_SETTINGS.standardDeviations,
+      channelFill: DEFAULT_BOLLINGER_SETTINGS.channelFill,
+    },
+  }
+}
+
+function normalizeIntegerRange(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(max, Math.max(min, Math.round(parsed)))
+}
+
+function normalizeNumberRange(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(max, Math.max(min, parsed))
+}
+
+function normalizeIndicatorSettings(value: unknown): IndicatorSettings {
+  const fallback = defaultIndicatorSettings()
+  if (!isRecord(value)) return fallback
+  const bollinger = isRecord(value.bollinger) ? value.bollinger : {}
+
+  return {
+    bollinger: {
+      period: normalizeIntegerRange(bollinger.period, fallback.bollinger.period, 2, 300),
+      standardDeviations: normalizeNumberRange(
+        bollinger.standardDeviations,
+        fallback.bollinger.standardDeviations,
+        0.1,
+        10,
+      ),
+      channelFill: typeof bollinger.channelFill === 'boolean'
+        ? bollinger.channelFill
+        : fallback.bollinger.channelFill,
+    },
+  }
+}
+
+function isBollingerSeriesClick(params: unknown): boolean {
+  if (!isRecord(params)) return false
+  if (params.componentType !== 'series') return false
+  const seriesId = params.seriesId
+  const seriesName = params.seriesName
+  return (
+    (typeof seriesId === 'string' && BB_SERIES_IDS.has(seriesId)) ||
+    (typeof seriesName === 'string' && BB_SERIES_NAMES.has(seriesName))
+  )
 }
 
 function sma(data: number[], period: number): (number | null)[] {
@@ -447,12 +512,14 @@ function fileToBase64(file: File): Promise<string> {
 }
 
 type PersistedChartState = {
-  v: 1
+  v: 2
   ts: number
   draw: Anno[]
   indicators: string[]
+  indicatorSettings: IndicatorSettings
   interval: AggInterval
 }
+type ChartState = Omit<PersistedChartState, 'v' | 'ts'>
 
 function legacyAnnotationsKey(sym: string): string {
   return `chart_annos_${sym}`
@@ -462,13 +529,14 @@ function chartStateKey(sym: string): string {
   return `chart_state_${sym}`
 }
 
-function saveChartState(sym: string, state: Omit<PersistedChartState, 'v' | 'ts'>) {
+function saveChartState(sym: string, state: ChartState) {
   try {
     const payload: PersistedChartState = {
-      v: 1,
+      v: 2,
       ts: Date.now(),
       draw: state.draw,
       indicators: state.indicators,
+      indicatorSettings: normalizeIndicatorSettings(state.indicatorSettings),
       interval: state.interval,
     }
     localStorage.setItem(chartStateKey(sym), JSON.stringify(payload))
@@ -485,10 +553,11 @@ function loadLegacyAnnotations(sym: string): Anno[] {
   }
 }
 
-function loadChartState(sym: string): Omit<PersistedChartState, 'v' | 'ts'> {
+function loadChartState(sym: string): ChartState {
   const fallback = {
     draw: loadLegacyAnnotations(sym),
     indicators: [],
+    indicatorSettings: defaultIndicatorSettings(),
     interval: 'D' as AggInterval,
   }
 
@@ -504,8 +573,9 @@ function loadChartState(sym: string): Omit<PersistedChartState, 'v' | 'ts'> {
     const interval = parsed.interval === 'D' || parsed.interval === 'W' || parsed.interval === 'M'
       ? parsed.interval
       : 'D'
+    const indicatorSettings = normalizeIndicatorSettings(parsed.indicatorSettings)
 
-    return { draw, indicators, interval }
+    return { draw, indicators, indicatorSettings, interval }
   } catch {
     return fallback
   }
@@ -711,11 +781,55 @@ const dataZoomOpt = (xAxisCount: number) => {
   ]
 }
 
+function buildBollingerFillSeries(
+  lower: (number | null)[],
+  upper: (number | null)[],
+  axisOptions: Record<string, unknown> = {},
+): Record<string, unknown>[] {
+  const fill = upper.map((value, index) => {
+    const base = lower[index]
+    return value == null || base == null ? null : value - base
+  })
+
+  return [
+    {
+      id: 'bb-fill-base',
+      name: 'BB Fill Base',
+      type: 'line',
+      data: lower,
+      stack: 'bb-fill',
+      showSymbol: false,
+      silent: true,
+      lineStyle: { opacity: 0 },
+      tooltip: { show: false },
+      emphasis: { disabled: true },
+      z: 1,
+      ...axisOptions,
+    },
+    {
+      id: 'bb-fill',
+      name: 'BB Fill',
+      type: 'line',
+      data: fill,
+      stack: 'bb-fill',
+      showSymbol: false,
+      silent: true,
+      lineStyle: { opacity: 0 },
+      areaStyle: { color: BB_FILL_COLOR, opacity: 1 },
+      tooltip: { show: false },
+      emphasis: { disabled: true },
+      z: 1,
+      ...axisOptions,
+    },
+  ]
+}
+
 function buildCandlestickOption(
   symbol: string,
   candles: CandleDay[],
   showVolume: boolean,
   indicators: Set<string>,
+  indicatorSettings: IndicatorSettings = defaultIndicatorSettings(),
   volumeZones: VolumeZonesResponse | null = null,
   volumeZoneOptions: VolumeZoneChartOptions = { showZones: false, showProfile: false, profileOpacity: 0.14 },
   crosshairOn = true,
@@ -782,11 +896,18 @@ function buildCandlestickOption(
     series.push({ name: `SMA ${p}`, type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: sma(closes, p), smooth: true, showSymbol: false, lineStyle: { width: 1.5, opacity: 0.9 } })
   }
   if (indicators.has('bb')) {
-    const bb = bollingerBands(closes)
+    const bbSettings = indicatorSettings.bollinger
+    const bb = bollingerBands(closes, bbSettings.period, bbSettings.standardDeviations)
+    const upper = bb.map((b) => b.upper)
+    const mid = bb.map((b) => b.mid)
+    const lower = bb.map((b) => b.lower)
+    if (bbSettings.channelFill) {
+      series.push(...buildBollingerFillSeries(lower, upper, { xAxisIndex: 0, yAxisIndex: 0 }))
+    }
     series.push(
-      { name: 'BB Upper', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: bb.map((b) => b.upper), showSymbol: false, lineStyle: { width: 1, opacity: 0.6 }, color: '#f59e0b' },
-      { name: 'BB Mid',   type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: bb.map((b) => b.mid),   showSymbol: false, lineStyle: { width: 1, type: 'dashed', opacity: 0.5 }, color: '#f59e0b' },
-      { name: 'BB Lower', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: bb.map((b) => b.lower), showSymbol: false, lineStyle: { width: 1, opacity: 0.6 }, color: '#f59e0b' },
+      { id: 'bb-upper', name: 'BB Upper', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: upper, showSymbol: false, triggerLineEvent: true, cursor: 'pointer', lineStyle: { width: 1, opacity: 0.6 }, color: '#f59e0b', z: 2 },
+      { id: 'bb-mid', name: 'BB Mid',   type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: mid,   showSymbol: false, triggerLineEvent: true, cursor: 'pointer', lineStyle: { width: 1, type: 'dashed', opacity: 0.5 }, color: '#f59e0b', z: 2 },
+      { id: 'bb-lower', name: 'BB Lower', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: lower, showSymbol: false, triggerLineEvent: true, cursor: 'pointer', lineStyle: { width: 1, opacity: 0.6 }, color: '#f59e0b', z: 2 },
     )
   }
 
@@ -868,6 +989,7 @@ function buildCandlestickOption(
 
 function buildLineOption(
   seriesMap: Map<string, CandleDay[]>, showVolume: boolean, indicators: Set<string>,
+  indicatorSettings: IndicatorSettings = defaultIndicatorSettings(),
   crosshairOn = true,
   lineScaleMode: LineScaleMode = 'price',
 ): object {
@@ -899,20 +1021,34 @@ function buildLineOption(
       series.push({ name: `${sym} SMA${p}`, type: 'line', data: smaData, showSymbol: false, lineStyle: { width: 1.5, type: 'dashed', color }, color, connectNulls: true })
     }
     if (indicators.has('bb') && seriesMap.size === 1) {
-      const bb = bollingerBands(candleCloses)
+      const bbSettings = indicatorSettings.bollinger
+      const bb = bollingerBands(candleCloses, bbSettings.period, bbSettings.standardDeviations)
+      const mapBBValue = (arr: (number | null)[]) => {
+        const bbRaw = fillInteriorGaps(allDates.map((d) => {
+          const i = dateToIdx.get(d)
+          return i !== undefined ? arr[i] ?? null : null
+        }))
+        return bbRaw.map((raw) => scaleLineValue(raw, domain, lineScaleMode))
+      }
       const mapBB = (arr: (number | null)[]) => {
         const bbRaw = fillInteriorGaps(allDates.map((d) => {
           const i = dateToIdx.get(d)
           return i !== undefined ? arr[i] ?? null : null
         }))
-        return bbRaw.map((raw) => {
-          const scaled = scaleLineValue(raw, domain, lineScaleMode)
+        const bbScaled = mapBBValue(arr)
+        return bbRaw.map((raw, index) => {
+          const scaled = bbScaled[index]
           return scaled == null ? null : { value: scaled, raw, scaleMode: lineScaleMode }
         })
       }
+      const upper = bb.map((b) => b.upper)
+      const lower = bb.map((b) => b.lower)
+      if (bbSettings.channelFill) {
+        series.push(...buildBollingerFillSeries(mapBBValue(lower), mapBBValue(upper)))
+      }
       series.push(
-        { name: 'BB Upper', type: 'line', data: mapBB(bb.map((b) => b.upper)), showSymbol: false, lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: true },
-        { name: 'BB Lower', type: 'line', data: mapBB(bb.map((b) => b.lower)), showSymbol: false, lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: true },
+        { id: 'bb-upper', name: 'BB Upper', type: 'line', data: mapBB(upper), showSymbol: false, triggerLineEvent: true, cursor: 'pointer', lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: true, z: 2 },
+        { id: 'bb-lower', name: 'BB Lower', type: 'line', data: mapBB(lower), showSymbol: false, triggerLineEvent: true, cursor: 'pointer', lineStyle: { width: 1, color: '#f59e0b', opacity: 0.6 }, color: '#f59e0b', connectNulls: true, z: 2 },
       )
     }
   }
@@ -1679,12 +1815,14 @@ function InstrumentSearch({
   )
 }
 
-const INDICATOR_ITEMS = [
-  ...SMA_PERIODS.map((p) => ({ key: `sma-${p}`, label: `SMA ${p}` })),
-  { key: 'bb',   label: 'Bollinger Bands (20)' },
-  { key: 'rsi',  label: 'RSI (14)' },
-  { key: 'macd', label: 'MACD (12,26,9)' },
-]
+function indicatorItems(settings: IndicatorSettings) {
+  return [
+    ...SMA_PERIODS.map((p) => ({ key: `sma-${p}`, label: `SMA ${p}` })),
+    { key: 'bb', label: `Bollinger Bands (${settings.bollinger.period})` },
+    { key: 'rsi', label: 'RSI (14)' },
+    { key: 'macd', label: 'MACD (12,26,9)' },
+  ]
+}
 
 const LINE_SCALE_ITEMS: Array<{ key: LineScaleMode; label: string }> = [
   { key: 'rangePercent', label: 'Zakres 0-100%' },
@@ -1695,14 +1833,18 @@ const LINE_SCALE_ITEMS: Array<{ key: LineScaleMode; label: string }> = [
 
 type ZoneLayerItem = { key: string; label: string; checked: boolean; onToggle: () => void; disabled?: boolean }
 
-function IndicatorDropdown({ indicators, onChange, zoneLayers }: {
+function IndicatorDropdown({ indicators, indicatorSettings, onChange, onConfigureIndicator, onSelectItem, zoneLayers }: {
   indicators: Set<string>
+  indicatorSettings: IndicatorSettings
   onChange: (key: string) => void
+  onConfigureIndicator: (key: string) => void
+  onSelectItem: () => void
   zoneLayers?: ZoneLayerItem[]
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const activeCount = INDICATOR_ITEMS.filter((i) => indicators.has(i.key)).length
+  const items = useMemo(() => indicatorItems(indicatorSettings), [indicatorSettings])
+  const activeCount = items.filter((i) => indicators.has(i.key)).length
     + (zoneLayers?.filter((z) => z.checked).length ?? 0)
 
   return (
@@ -1718,14 +1860,23 @@ function IndicatorDropdown({ indicators, onChange, zoneLayers }: {
       </button>
       {open && (
         <div className="absolute top-full mt-1 right-0 z-50 w-52 bg-slate-900 border border-white/10 rounded-xl shadow-2xl py-1">
-          {INDICATOR_ITEMS.map((item) => (
-            <button key={item.key} onMouseDown={(e) => { e.preventDefault(); onChange(item.key) }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors text-white/70 hover:text-white">
-              <span className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${indicators.has(item.key) ? 'bg-blue-600 border-blue-500' : 'border-white/20'}`}>
-                {indicators.has(item.key) && <Check className="w-2.5 h-2.5 text-white" />}
-              </span>
-              {item.label}
-            </button>
+          {items.map((item) => (
+            <div key={item.key} className="flex items-center">
+              <button onMouseDown={(e) => { e.preventDefault(); onChange(item.key); onSelectItem(); setOpen(false) }}
+                className="min-w-0 flex-1 flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors text-white/70 hover:text-white">
+                <span className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${indicators.has(item.key) ? 'bg-blue-600 border-blue-500' : 'border-white/20'}`}>
+                  {indicators.has(item.key) && <Check className="w-2.5 h-2.5 text-white" />}
+                </span>
+                <span className="truncate">{item.label}</span>
+              </button>
+              {item.key === 'bb' && indicators.has('bb') && (
+                <button type="button" aria-label={`Ustawienia ${item.label}`}
+                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onConfigureIndicator(item.key) }}
+                  className="mr-1 flex h-7 w-7 items-center justify-center rounded-md text-white/35 transition-colors hover:bg-white/5 hover:text-white">
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           ))}
           {zoneLayers && zoneLayers.length > 0 && (
             <>
@@ -1733,7 +1884,7 @@ function IndicatorDropdown({ indicators, onChange, zoneLayers }: {
               <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-white/30">Strefy wolumenowe</div>
               {zoneLayers.map((item) => (
                 <button key={item.key} disabled={item.disabled}
-                  onMouseDown={(e) => { e.preventDefault(); if (!item.disabled) item.onToggle() }}
+                  onMouseDown={(e) => { e.preventDefault(); if (!item.disabled) { item.onToggle(); onSelectItem(); setOpen(false) } }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors text-white/70 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed">
                   <span className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${item.checked ? 'bg-emerald-600 border-emerald-500' : 'border-white/20'}`}>
                     {item.checked && <Check className="w-2.5 h-2.5 text-white" />}
@@ -1746,6 +1897,129 @@ function IndicatorDropdown({ indicators, onChange, zoneLayers }: {
         </div>
       )}
     </div>
+  )
+}
+
+function formatBollingerParam(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/u, '')
+}
+
+function BollingerSettingsForm({ settings, onCancel, onSave }: {
+  settings: BollingerSettings
+  onCancel: () => void
+  onSave: (settings: BollingerSettings) => void
+}) {
+  const [periodText, setPeriodText] = useState(String(settings.period))
+  const [stdDevText, setStdDevText] = useState(String(settings.standardDeviations))
+  const [channelFill, setChannelFill] = useState(settings.channelFill)
+
+  const period = Number(periodText)
+  const stdDev = Number(stdDevText)
+  const periodValid = Number.isInteger(period) && period >= 2 && period <= 300
+  const stdDevValid = Number.isFinite(stdDev) && stdDev >= 0.1 && stdDev <= 10
+  const canSave = periodValid && stdDevValid
+
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!canSave) return
+    onSave({
+      period: normalizeIntegerRange(periodText, settings.period, 2, 300),
+      standardDeviations: normalizeNumberRange(stdDevText, settings.standardDeviations, 0.1, 10),
+      channelFill,
+    })
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="grid gap-3">
+        <label className="grid grid-cols-[150px_minmax(0,1fr)] items-center gap-3 text-sm text-white/70" htmlFor="bollinger-period">
+          <span>Period</span>
+          <input
+            id="bollinger-period"
+            type="number"
+            min={2}
+            max={300}
+            step={1}
+            value={periodText}
+            onChange={(event) => setPeriodText(event.target.value)}
+            className="h-9 w-full rounded-md border border-white/15 bg-slate-950/50 px-3 text-sm text-white outline-none transition-colors focus:border-blue-500/70"
+            aria-invalid={!periodValid}
+            autoFocus
+          />
+        </label>
+        <label className="grid grid-cols-[150px_minmax(0,1fr)] items-center gap-3 text-sm text-white/70" htmlFor="bollinger-std-dev">
+          <span>Standard deviations</span>
+          <input
+            id="bollinger-std-dev"
+            type="number"
+            min={0.1}
+            max={10}
+            step={0.1}
+            value={stdDevText}
+            onChange={(event) => setStdDevText(event.target.value)}
+            className="h-9 w-full rounded-md border border-white/15 bg-slate-950/50 px-3 text-sm text-white outline-none transition-colors focus:border-blue-500/70"
+            aria-invalid={!stdDevValid}
+          />
+        </label>
+        <label className="grid grid-cols-[150px_minmax(0,1fr)] items-center gap-3 text-sm text-white/70" htmlFor="bollinger-channel-fill">
+          <span>Channel fill</span>
+          <span className="flex items-center">
+            <input
+              id="bollinger-channel-fill"
+              type="checkbox"
+              checked={channelFill}
+              onChange={(event) => setChannelFill(event.target.checked)}
+              className="h-4 w-4 rounded border-white/20 bg-slate-950/50 accent-blue-600"
+            />
+          </span>
+        </label>
+      </div>
+      {(!periodValid || !stdDevValid) && (
+        <p className="rounded-md border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/80">
+          Period: 2-300, standard deviations: 0.1-10.
+        </p>
+      )}
+      <div className="flex justify-end gap-2 border-t border-white/10 pt-4">
+        <button type="button" onClick={onCancel}
+          className="px-3 py-2 text-xs text-white/50 transition-colors hover:text-white">
+          Anuluj
+        </button>
+        <button type="submit" disabled={!canSave}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+          OK
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function BollingerSettingsDialog({ open, settings, onOpenChange, onSave }: {
+  open: boolean
+  settings: BollingerSettings
+  onOpenChange: (open: boolean) => void
+  onSave: (settings: BollingerSettings) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-slate-900/95 backdrop-blur-md border-white/10 text-white sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-white text-base">
+            Bollinger Bands ({settings.period}, {formatBollingerParam(settings.standardDeviations)})
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            Zmien parametry wskaznika Bollinger Bands dla biezacego wykresu.
+          </DialogDescription>
+        </DialogHeader>
+        {open && (
+          <BollingerSettingsForm
+            key={`${settings.period}:${settings.standardDeviations}:${settings.channelFill}`}
+            settings={settings}
+            onCancel={() => onOpenChange(false)}
+            onSave={onSave}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1807,7 +2081,7 @@ function DrawToolbar({
       <button title="Cofnij ostatni" onClick={onUndo} className="w-7 h-7 flex items-center justify-center rounded-md text-white/30 hover:text-white hover:bg-white/5 transition-colors">
         <Undo2 className="w-3.5 h-3.5" />
       </button>
-      <button title="Zapisz rysunki" onClick={onSave} className="w-7 h-7 flex items-center justify-center rounded-md text-white/30 hover:text-white hover:bg-white/5 transition-colors">
+      <button title="Zapisz rysunki i wskaźniki" onClick={onSave} className="w-7 h-7 flex items-center justify-center rounded-md text-white/30 hover:text-white hover:bg-white/5 transition-colors">
         <Save className="w-3.5 h-3.5" />
       </button>
       <button title="Wyczyść wszystkie" onClick={onClear} className="w-7 h-7 flex items-center justify-center rounded-md text-white/30 hover:text-red-400 hover:bg-white/5 transition-colors">
@@ -1849,6 +2123,8 @@ type ZoneControls = {
 function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, candles, seriesMap, volumeZones, volumeZoneOptions, zoneLayers, zoneControls }: ChartPanelProps) {
   const [interval, setIntervalState] = useState<AggInterval>('D')
   const [indicators, setIndicators] = useState<Set<string>>(new Set())
+  const [indicatorSettings, setIndicatorSettings] = useState<IndicatorSettings>(() => defaultIndicatorSettings())
+  const [bollingerSettingsOpen, setBollingerSettingsOpen] = useState(false)
   const [zoneDetailsOpen, setZoneDetailsOpen] = useState(false)
   const [drawMode, setDrawMode] = useState<DrawMode>('cursor')
   const [stage, setStage] = useState(0)
@@ -1863,6 +2139,7 @@ function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, ca
       const saved = loadChartState(sym)
       setIntervalState(saved.interval)
       setIndicators(new Set(saved.indicators))
+      setIndicatorSettings(saved.indicatorSettings)
     }, 0)
 
     return () => window.clearTimeout(timer)
@@ -1874,6 +2151,16 @@ function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, ca
       if (next.has(key)) next.delete(key); else next.add(key)
       return next
     })
+  }, [])
+
+  const handleIndicatorMenuSelection = useCallback(() => {
+    setCrosshairOn(false)
+    const eng = engineRef.current
+    if (eng) eng.crosshairOn = false
+  }, [])
+
+  const configureIndicator = useCallback((key: string) => {
+    if (key === 'bb') setBollingerSettingsOpen(true)
   }, [])
 
   const aggCandles = useMemo(
@@ -1895,12 +2182,18 @@ function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, ca
 
   const option = useMemo(() => {
     if (aggCandles && chartType === 'candlestick') {
-      return buildCandlestickOption(sym, aggCandles, showVolume, indicators, volumeZones ?? null, volumeZoneOptions, crosshairOn)
+      return buildCandlestickOption(sym, aggCandles, showVolume, indicators, indicatorSettings, volumeZones ?? null, volumeZoneOptions, crosshairOn)
     }
     const sm = aggSeriesMap ?? (aggCandles ? new Map([[sym, aggCandles]]) : null)
     if (!sm) return null
-    return buildLineOption(sm, showVolume, indicators, crosshairOn, lineScaleMode)
-  }, [aggCandles, aggSeriesMap, chartType, showVolume, indicators, sym, volumeZones, volumeZoneOptions, crosshairOn, lineScaleMode])
+    return buildLineOption(sm, showVolume, indicators, indicatorSettings, crosshairOn, lineScaleMode)
+  }, [aggCandles, aggSeriesMap, chartType, showVolume, indicators, indicatorSettings, sym, volumeZones, volumeZoneOptions, crosshairOn, lineScaleMode])
+
+  const chartEvents = useMemo(() => ({
+    click: (params: unknown) => {
+      if (isBollingerSeriesClick(params)) setBollingerSettingsOpen(true)
+    },
+  }), [])
 
   const setMode = useCallback((mode: DrawMode) => {
     setDrawMode(mode)
@@ -1935,14 +2228,15 @@ function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, ca
 
   const handleSave = useCallback(() => {
     const eng = engineRef.current
-    if (!eng) return
+    const savedDraw = typeof window !== 'undefined' ? loadChartState(sym).draw : []
     saveChartState(sym, {
-      draw: eng.annos,
+      draw: eng?.annos ?? savedDraw,
       indicators: [...indicators],
+      indicatorSettings,
       interval,
     })
     toast.success('Rysunki i ustawienia wykresu zapisane')
-  }, [indicators, interval, sym])
+  }, [indicatorSettings, indicators, interval, sym])
 
   const handleClear = useCallback(() => {
     const eng = engineRef.current
@@ -1953,10 +2247,11 @@ function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, ca
     saveChartState(sym, {
       draw: [],
       indicators: [...indicators],
+      indicatorSettings,
       interval,
     })
     scheduleRender(eng)
-  }, [indicators, interval, sym])
+  }, [indicatorSettings, indicators, interval, sym])
 
   useEffect(() => {
     const eng = engineRef.current
@@ -1968,7 +2263,7 @@ function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, ca
   const onChartReady = useCallback((instance: unknown) => {
     const savedState = typeof window !== 'undefined'
       ? loadChartState(sym)
-      : { draw: [], indicators: [], interval: 'D' as AggInterval }
+      : { draw: [], indicators: [], indicatorSettings: defaultIndicatorSettings(), interval: 'D' as AggInterval }
     const savedDraw = normalizePersistedAnnotations(savedState.draw, rawDates, savedState.interval)
     engineRef.current = attachDrawEngine(instance, savedDraw, xScale, {
       onStageChange: setStage,
@@ -2062,7 +2357,14 @@ function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, ca
             ))}
           </div>
           {/* Indicators dropdown */}
-          <IndicatorDropdown indicators={indicators} onChange={toggleIndicator} zoneLayers={zoneLayers} />
+          <IndicatorDropdown
+            indicators={indicators}
+            indicatorSettings={indicatorSettings}
+            onChange={toggleIndicator}
+            onConfigureIndicator={configureIndicator}
+            onSelectItem={handleIndicatorMenuSelection}
+            zoneLayers={zoneLayers}
+          />
           {/* Candle count */}
           {aggCount > 0 && <span className="text-xs text-white/25">{aggCount} {intervalLabel}</span>}
           {/* Fullscreen toggle */}
@@ -2093,9 +2395,19 @@ function ChartPanel({ sym, name, chartType, showVolume, lineScaleMode, color, ca
             notMerge
             lazyUpdate={false}
             onChartReady={onChartReady}
+            onEvents={chartEvents}
           />
         </div>
       </div>
+      <BollingerSettingsDialog
+        open={bollingerSettingsOpen}
+        settings={indicatorSettings.bollinger}
+        onOpenChange={setBollingerSettingsOpen}
+        onSave={(next) => {
+          setIndicatorSettings((prev) => ({ ...prev, bollinger: next }))
+          setBollingerSettingsOpen(false)
+        }}
+      />
       {volumeZones && chartType === 'candlestick' && (
         <ZoneDetailsDialog
           open={zoneDetailsOpen}

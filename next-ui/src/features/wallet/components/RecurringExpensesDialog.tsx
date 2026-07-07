@@ -26,6 +26,14 @@ import type { RecurringExpenseOut } from '@/lib/types/wallet'
 export type ExpenseWalletOpt = {
   id: string
   name: string
+  accounts: ExpenseAccountOpt[]
+}
+
+export type ExpenseAccountOpt = {
+  id: string
+  name: string
+  currency: 'PLN' | 'USD' | 'EUR'
+  accountType: string
 }
 
 type Props = {
@@ -49,6 +57,57 @@ type EditableRow = RecurringExpenseOut & {
 }
 
 const CURRENCIES = ['PLN', 'USD', 'EUR'] as const
+const NONE_SELECT_VALUE = '__none__'
+const DEFAULT_CATEGORY_OPTIONS = [
+  'Mieszkanie',
+  'Rachunki',
+  'Żywność',
+  'Transport',
+  'Paliwo',
+  'Zdrowie',
+  'Ubezpieczenia',
+  'Subskrypcje',
+  'Telefon',
+  'Internet',
+  'Edukacja',
+  'Sport',
+  'Dzieci',
+  'Prezenty',
+  'Podatki',
+  'Inne',
+]
+
+type SelectOption = { value: string; label: string }
+
+function uniqueTextOptions(values: string[]): SelectOption[] {
+  const byValue = new Map<string, SelectOption>()
+  for (const raw of values) {
+    const value = raw.trim()
+    if (!value || byValue.has(value)) continue
+    byValue.set(value, { value, label: value })
+  }
+  return [...byValue.values()]
+}
+
+function categoryOptions(expenses: RecurringExpenseOut[]): SelectOption[] {
+  return uniqueTextOptions([
+    ...DEFAULT_CATEGORY_OPTIONS,
+    ...expenses.map((expense) => expense.category ?? ''),
+  ])
+}
+
+function accountOptionsForWallet(wallets: ExpenseWalletOpt[], walletId: string): SelectOption[] {
+  const wallet = wallets.find((item) => item.id === walletId)
+  if (!wallet) return []
+  const byName = new Map<string, SelectOption>()
+  for (const account of wallet.accounts) {
+    if (account.accountType === 'BROKERAGE') continue
+    const name = account.name.trim()
+    if (!name || byName.has(name)) continue
+    byName.set(name, { value: name, label: `${name} · ${account.currency}` })
+  }
+  return [...byName.values()]
+}
 
 async function apiFetch(url: string, method: string, body?: unknown) {
   const res = await fetch(url, {
@@ -63,11 +122,13 @@ async function apiFetch(url: string, method: string, body?: unknown) {
 
 function AddExpenseForm({
   wallets,
+  categories,
   viewCurrency,
   onSuccess,
   onCancel,
 }: {
   wallets: ExpenseWalletOpt[]
+  categories: SelectOption[]
   viewCurrency: string
   onSuccess: () => void
   onCancel: () => void
@@ -84,6 +145,7 @@ function AddExpenseForm({
   const [account, setAccount] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState<string>()
+  const accountOptions = useMemo(() => accountOptionsForWallet(wallets, walletId), [walletId, wallets])
 
   function submit(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -126,7 +188,7 @@ function AddExpenseForm({
         {wallets.length > 1 && (
           <div className="space-y-1 col-span-2">
             <Label className="text-white/70 text-xs">Portfel *</Label>
-            <Select value={walletId} onValueChange={setWalletId}>
+            <Select value={walletId} onValueChange={(value) => { setWalletId(value); setAccount('') }}>
               <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
                 <SelectValue />
               </SelectTrigger>
@@ -149,22 +211,32 @@ function AddExpenseForm({
 
         <div className="space-y-1">
           <Label className="text-white/70 text-xs">Kategoria</Label>
-          <Input
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            placeholder="np. Mieszkanie"
-            className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
-          />
+          <Select value={category || NONE_SELECT_VALUE} onValueChange={(value) => setCategory(value === NONE_SELECT_VALUE ? '' : value)}>
+            <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
+              <SelectValue placeholder="Wybierz kategorię" />
+            </SelectTrigger>
+            <SelectContent className="bg-slate-900 border-white/10 text-white">
+              <SelectItem value={NONE_SELECT_VALUE}>Brak kategorii</SelectItem>
+              {categories.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="space-y-1">
           <Label className="text-white/70 text-xs">Konto</Label>
-          <Input
-            value={account}
-            onChange={(e) => setAccount(e.target.value)}
-            placeholder="np. mBank"
-            className="bg-slate-800 border-white/10 text-white placeholder:text-white/30 h-8 text-sm"
-          />
+          <Select value={account || NONE_SELECT_VALUE} onValueChange={(value) => setAccount(value === NONE_SELECT_VALUE ? '' : value)}>
+            <SelectTrigger className="bg-slate-800 border-white/10 text-white text-sm h-8">
+              <SelectValue placeholder="Wybierz konto" />
+            </SelectTrigger>
+            <SelectContent className="bg-slate-900 border-white/10 text-white">
+              <SelectItem value={NONE_SELECT_VALUE}>Brak konta</SelectItem>
+              {accountOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="space-y-1">
@@ -260,6 +332,7 @@ export function RecurringExpensesDialog({
         .map(toEditableRow),
     [initialExpenses],
   )
+  const categories = useMemo(() => categoryOptions(initialExpenses), [initialExpenses])
 
   const originalById = useMemo(
     () => Object.fromEntries(initialExpenses.map((e) => [e.id, e])),
@@ -350,6 +423,7 @@ export function RecurringExpensesDialog({
         {view.mode === 'add' ? (
           <AddExpenseForm
             wallets={wallets}
+            categories={categories}
             viewCurrency={viewCurrency}
             onSuccess={handleAddSuccess}
             onCancel={() => setView({ mode: 'list' })}
@@ -439,11 +513,20 @@ export function RecurringExpensesDialog({
                               )}
                             </td>
                             <td className="px-2 py-1.5 align-middle hidden md:table-cell">
-                              <Input
-                                value={row._category}
-                                onChange={(e) => updateRow(row.id, { _category: e.target.value })}
-                                className="bg-transparent border-transparent h-7 px-1 text-xs text-white/60 focus-visible:border-white/20 focus-visible:bg-slate-700/50 max-w-[110px]"
-                              />
+                              <Select
+                                value={row._category || NONE_SELECT_VALUE}
+                                onValueChange={(value) => updateRow(row.id, { _category: value === NONE_SELECT_VALUE ? '' : value })}
+                              >
+                                <SelectTrigger className="bg-transparent border-transparent h-7 px-1 text-xs text-white/60 focus:ring-0 w-[128px]">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent className="bg-slate-900 border-white/10 text-white">
+                                  <SelectItem value={NONE_SELECT_VALUE}>Brak kategorii</SelectItem>
+                                  {categories.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             </td>
                             <td className="px-2 py-1.5 align-middle">
                               <Input
@@ -475,11 +558,20 @@ export function RecurringExpensesDialog({
                               />
                             </td>
                             <td className="px-2 py-1.5 align-middle hidden lg:table-cell">
-                              <Input
-                                value={row._account}
-                                onChange={(e) => updateRow(row.id, { _account: e.target.value })}
-                                className="bg-transparent border-transparent h-7 px-1 text-xs text-white/50 focus-visible:border-white/20 focus-visible:bg-slate-700/50 max-w-[100px]"
-                              />
+                              <Select
+                                value={row._account || NONE_SELECT_VALUE}
+                                onValueChange={(value) => updateRow(row.id, { _account: value === NONE_SELECT_VALUE ? '' : value })}
+                              >
+                                <SelectTrigger className="bg-transparent border-transparent h-7 px-1 text-xs text-white/50 focus:ring-0 w-[132px]">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent className="bg-slate-900 border-white/10 text-white">
+                                  <SelectItem value={NONE_SELECT_VALUE}>Brak konta</SelectItem>
+                                  {accountOptionsForWallet(wallets, row.wallet_id).map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             </td>
                             <td className="px-2 py-1.5 align-middle">
                               {deletingId === row.id ? (

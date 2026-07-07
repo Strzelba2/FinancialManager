@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 
@@ -8,18 +8,29 @@ import { server } from '../msw-server'
 import { nextUiUnitStory } from '../allure'
 
 type ChartDataPoint = number | null | { value?: number | null; raw?: number | null; scaleMode?: string }
-type ChartSeries = { name?: string; data?: ChartDataPoint[]; connectNulls?: boolean }
+type ChartSeries = {
+  id?: string
+  name?: string
+  data?: ChartDataPoint[]
+  connectNulls?: boolean
+  stack?: string
+  areaStyle?: { color?: string; opacity?: number }
+}
 type ChartOption = {
   series?: ChartSeries[]
-  tooltip?: { formatter?: (params: unknown[]) => string }
+  tooltip?: { show?: boolean; formatter?: (params: unknown[]) => string }
+  axisPointer?: { show?: boolean }
   yAxis?: Array<{ axisLabel?: { formatter?: (value: number) => string } }>
 }
+type ChartEvents = { click?: (params: unknown) => void }
 
 const chartOptions = vi.hoisted(() => [] as ChartOption[])
+const chartEvents = vi.hoisted(() => [] as ChartEvents[])
 
 vi.mock('echarts-for-react', () => ({
-  default: ({ option }: { option: ChartOption }) => {
+  default: ({ option, onEvents }: { option: ChartOption; onEvents?: ChartEvents }) => {
     chartOptions.push(option)
+    if (onEvents) chartEvents.push(onEvents)
     return <div data-testid="charts-page-echarts" />
   },
 }))
@@ -225,6 +236,10 @@ function latestSeries(name: string): ChartSeries | undefined {
   return (chartOptions.at(-1)?.series ?? []).find((series) => series.name === name)
 }
 
+function clickChartSeries(seriesName: string) {
+  chartEvents.at(-1)?.click?.({ componentType: 'series', seriesName })
+}
+
 function pointValue(point: ChartDataPoint | undefined): number | null {
   if (point == null) return null
   if (typeof point === 'number') return point
@@ -239,7 +254,9 @@ function pointRaw(point: ChartDataPoint | undefined): number | null {
 describe('ChartsPage volume-zone controls', () => {
   beforeEach(() => {
     chartOptions.length = 0
+    chartEvents.length = 0
     routerPush.mockClear()
+    localStorage.clear()
     Element.prototype.scrollIntoView = vi.fn()
   })
 
@@ -362,12 +379,19 @@ describe('ChartsPage volume-zone controls', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Wskaźniki/ }))
     fireEvent.mouseDown(screen.getByRole('button', { name: 'SMA 7' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'SMA 7' })).not.toBeInTheDocument()
+      expect(latestOption().axisPointer?.show).toBe(false)
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Wskaźniki/ }))
     fireEvent.mouseDown(screen.getByRole('button', { name: 'Bollinger Bands (20)' }))
 
     await waitFor(() => {
       expect(latestSeriesNames()).toContain('PKN · GPW SMA7')
       expect(latestSeriesNames()).toContain('BB Upper')
       expect(latestSeriesNames()).toContain('BB Lower')
+      expect(screen.queryByRole('button', { name: 'Bollinger Bands (20)' })).not.toBeInTheDocument()
+      expect(latestOption().axisPointer?.show).toBe(false)
     })
 
     const smaPoint = latestSeries('PKN · GPW SMA7')?.data?.[6]
@@ -377,6 +401,11 @@ describe('ChartsPage volume-zone controls', () => {
     const bbPoint = latestSeries('BB Upper')?.data?.[19]
     expect(pointRaw(bbPoint)).not.toBeNull()
     expect(pointValue(bbPoint)).not.toBeNull()
+
+    fireEvent.click(screen.getByTitle('Crosshair'))
+    await waitFor(() => {
+      expect(latestOption().axisPointer?.show).toBe(true)
+    })
 
     const indexAxisFormatter = latestOption().yAxis?.[0]?.axisLabel?.formatter
     expect(indexAxisFormatter?.(12.345)).toBe('12.35%')
@@ -399,6 +428,68 @@ describe('ChartsPage volume-zone controls', () => {
       const index100AxisFormatter = latestOption().yAxis?.[0]?.axisLabel?.formatter
       expect(index100AxisFormatter?.(123.456)).toBe('123.46')
     })
+  })
+
+  it('opens Bollinger settings from a band line and persists the edited period with chart settings', async () => {
+    await nextUiUnitStory('Charts page edits and saves Bollinger indicator settings from the chart line', {
+      severity: 'normal',
+      tags: ['stock', 'charts', 'indicators', 'bollinger', 'next-ui', 'page'],
+    })
+
+    const closes = Array.from({ length: 40 }, (_, index) => 10 + index)
+    server.use(
+      http.post('*/api/stock/candles/sync', () => (
+        HttpResponse.json(syncCandlesFixture('PKN', 'PKNORLEN', closes))
+      )),
+    )
+
+    render(
+      <ChartsPage
+        mic="XWAR"
+        instruments={[{ symbol: 'PKN', shortname: 'PKNORLEN' }]}
+        preselectedSymbol="PKN"
+      />,
+    )
+
+    await screen.findByTestId('charts-page-echarts')
+
+    fireEvent.click(screen.getByRole('button', { name: /Wskaźniki/ }))
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Bollinger Bands (20)' }))
+
+    await waitFor(() => {
+      expect(pointValue(latestSeries('BB Upper')?.data?.[19])).not.toBeNull()
+      expect(screen.queryByRole('button', { name: 'Bollinger Bands (20)' })).not.toBeInTheDocument()
+      expect(latestOption().axisPointer?.show).toBe(false)
+    })
+
+    act(() => clickChartSeries('BB Upper'))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Bollinger Bands (20, 2)' })
+    fireEvent.change(within(dialog).getByLabelText('Period'), { target: { value: '33' } })
+    fireEvent.click(within(dialog).getByLabelText('Channel fill'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'OK' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Bollinger Bands (20, 2)' })).not.toBeInTheDocument()
+      expect(pointValue(latestSeries('BB Upper')?.data?.[19])).toBeNull()
+      expect(pointValue(latestSeries('BB Upper')?.data?.[32])).not.toBeNull()
+      expect(latestSeriesNames()).toContain('BB Fill')
+    })
+    expect(latestSeries('BB Fill')?.stack).toBe('bb-fill')
+    expect(latestSeries('BB Fill')?.areaStyle?.color).toBe('rgba(245,158,11,0.10)')
+
+    fireEvent.click(screen.getByTitle('Zapisz rysunki i wskaźniki'))
+
+    const rawSaved = localStorage.getItem('chart_state_PKN · GPW')
+    expect(rawSaved).not.toBeNull()
+    const saved = JSON.parse(rawSaved ?? '{}') as {
+      indicators?: string[]
+      indicatorSettings?: { bollinger?: { period?: number; standardDeviations?: number; channelFill?: boolean } }
+    }
+    expect(saved.indicators).toContain('bb')
+    expect(saved.indicatorSettings?.bollinger?.period).toBe(33)
+    expect(saved.indicatorSettings?.bollinger?.standardDeviations).toBe(2)
+    expect(saved.indicatorSettings?.bollinger?.channelFill).toBe(true)
   })
 
   it('loads volume-zone analysis from the chart screen and keeps A/D disabling in the indicators menu', async () => {
@@ -440,6 +531,8 @@ describe('ChartsPage volume-zone controls', () => {
 
     await waitFor(() => {
       expect(volumeZoneUrls).toHaveLength(1)
+      expect(screen.queryByRole('button', { name: 'Strefa wolumenowa' })).not.toBeInTheDocument()
+      expect(latestOption().axisPointer?.show).toBe(false)
     })
     const url = new URL(volumeZoneUrls[0]!)
     expect(url.searchParams.get('mic')).toBe('XWAR')
@@ -459,6 +552,7 @@ describe('ChartsPage volume-zone controls', () => {
       expect(latestSeriesNames()).toContain('Wyniki faz A/D')
     })
 
+    fireEvent.click(screen.getByRole('button', { name: /Wskaźniki/ }))
     fireEvent.mouseDown(screen.getByRole('button', { name: 'Fazy A/D' }))
     await waitFor(() => {
       expect(latestSeriesNames()).not.toContain('Fazy A/D')

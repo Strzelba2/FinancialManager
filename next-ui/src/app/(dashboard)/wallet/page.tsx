@@ -24,6 +24,7 @@ import type { BrokerageTxRow } from '@/features/wallet/components/BrokerageTrans
 import { RecurringExpensesCard } from '@/features/wallet/components/RecurringExpensesCard'
 import type { RecurringExpenseRow } from '@/features/wallet/components/RecurringExpensesCard'
 import { RecurringExpensesDialogWrapper } from '@/features/wallet/components/RecurringExpensesDialogWrapper'
+import type { ExpenseWalletOpt } from '@/features/wallet/components/RecurringExpensesDialog'
 import { AssetsLineCard } from '@/features/wallet/components/AssetsLineCard'
 import type { AssetsChartData } from '@/features/wallet/components/AssetsLineCard'
 import { DashFlowCard } from '@/features/wallet/components/DashFlowCard'
@@ -694,6 +695,19 @@ export default async function WalletPage({
     })),
   )
 
+  const recurringWallets: ExpenseWalletOpt[] = wallets.map((wallet) => ({
+    id: wallet.id,
+    name: wallet.name,
+    accounts: wallet.accounts
+      .filter((account) => account.account_type !== 'BROKERAGE')
+      .map((account) => ({
+        id: account.id,
+        name: account.name,
+        currency: account.currency,
+        accountType: account.account_type,
+      })),
+  }))
+
   return (
     <div className="px-4 py-4">
       <CreateWalletDialogWrapper open={modal === 'create'} />
@@ -736,7 +750,7 @@ export default async function WalletPage({
       <RecurringExpensesDialogWrapper
         open={modal === 'recurring'}
         initialExpenses={allRecurringExpenses}
-        wallets={wallets.map((w) => ({ id: w.id, name: w.name }))}
+        wallets={recurringWallets}
         viewCurrency={viewCurrency}
       />
 
