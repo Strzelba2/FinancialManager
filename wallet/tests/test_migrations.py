@@ -118,6 +118,12 @@ class WalletMigrationTests(unittest.TestCase):
         self.assertIn("c2.event_id = c.event_id) = 1", source)
         self.assertIn("c3.transaction_id = c.transaction_id) = 1", source)
         self.assertIn("op.execute(BACKFILL_SQL)", source)
+        # On a fresh database 'DIV' is added to brokerage_event_kind in the same Alembic
+        # transaction; comparing the enum column with a 'DIV' literal raises
+        # UnsafeNewEnumValueUsageError, so kind must be compared as text.
+        self.assertIn("be.kind::text IN ('TRADE_BUY', 'TRADE_SELL', 'DIV')", source)
+        self.assertIn("CASE be.kind::text", source)
+        self.assertNotIn("be.kind IN (", source)
 
     def test_cash_holdings_migration_reuses_instrument_currency_enum_and_guards_amount(self) -> None:
         source = _cash_holdings_migration_source()

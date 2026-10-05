@@ -23,6 +23,8 @@ depends_on: Union[str, Sequence[str], None] = None
 # "<BUY|SELL|DIV> <symbol> <quantity> @ <price>" on a deposit account linked to the
 # brokerage account and dated exactly at the event trade_at. Only unambiguous
 # one-to-one matches are linked; anything else stays unlinked.
+# kind is compared as text: on a fresh database 'DIV' is added to the enum earlier in
+# the same transaction, and PostgreSQL rejects using an uncommitted enum value.
 BACKFILL_SQL = r"""
 WITH trade_transactions AS (
     SELECT
@@ -42,11 +44,11 @@ candidates AS (
     JOIN instruments AS i ON i.id = be.instrument_id
     JOIN brokerage_deposit_links AS l ON l.brokerage_account_id = be.brokerage_account_id
     JOIN trade_transactions AS tt ON tt.account_id = l.deposit_account_id
-    WHERE be.kind IN ('TRADE_BUY', 'TRADE_SELL', 'DIV')
+    WHERE be.kind::text IN ('TRADE_BUY', 'TRADE_SELL', 'DIV')
       AND be.transaction_id IS NULL
       AND tt.parts IS NOT NULL
       AND tt.date_transaction = be.trade_at
-      AND tt.parts[1] = CASE be.kind
+      AND tt.parts[1] = CASE be.kind::text
             WHEN 'TRADE_BUY' THEN 'BUY'
             WHEN 'TRADE_SELL' THEN 'SELL'
             ELSE 'DIV'

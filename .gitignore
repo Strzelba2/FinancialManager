@@ -29,6 +29,7 @@ deploy/infra/prod/terraform.tfstate.backup
 commends.txt
 *.fontconfig
 *.pki
+stock/.config/
 html_dumps
 backups/
 .pytest_cache/
