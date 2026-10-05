@@ -1144,7 +1144,7 @@ class TestWalletAndManagerRoutes(unittest.IsolatedAsyncioTestCase):
 
         with patch(
             "app.api.routes.wallet_manager.create_monthly_snapshot_for_user_service",
-            new=AsyncMock(return_value=("2026-06", True, 2, 1, 3, 4)),
+            new=AsyncMock(return_value=("2026-06", True, 2, 1, 3, 4, 5)),
         ) as service:
             response = await manager_routes.api_create_monthly_snapshot(
                 payload=payload,
@@ -1157,4 +1157,5 @@ class TestWalletAndManagerRoutes(unittest.IsolatedAsyncioTestCase):
         assert response.month_key == "2026-06"
         assert response.dep_upserted == 2
         assert response.re_upserted == 4
+        assert response.cash_upserted == 5
         service.assert_awaited_once()

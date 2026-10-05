@@ -12,8 +12,9 @@ from app.crud.snapshots_crude import (
     list_fx_rows_for_months, list_deposit_monthly_snapshots, list_brokerage_monthly_snapshots,
     list_metal_monthly_snapshots, list_real_estate_monthly_snapshots, upsert_fx_monthly_snapshot_uow,
     upsert_broacc_monthly_snapshot_uow, upsert_depacc_monthly_snapshot_uow, upsert_metal_monthly_snapshot,
-    upsert_real_estate_monthly_snapshot
+    upsert_real_estate_monthly_snapshot, list_cash_monthly_snapshots, upsert_cash_monthly_snapshot
     )
+from app.crud.cash_holding_crud import list_cash_holdings_for_wallets
 from app.crud.deposit_account_crud import list_deposit_accounts_for_wallets
 from app.crud.transaction_crud import count_transactions_since
 from app.crud.brokerage_account_crud import list_brokerage_accounts
@@ -52,6 +53,7 @@ async def get_wallet_manager_tree_service(
       - brokerage accounts with linked cash accounts, holdings valuation, event counts and monthly snapshots
       - metals holdings with quote valuation (fallback to cost basis) and monthly snapshots
       - real estate holdings with price-per-m2 valuation (fallback to purchase price) and monthly snapshots
+      - physical cash holdings converted with current FX and monthly snapshots
       - FX tables per month (for snapshot conversion) + "current FX" (for live conversion)
 
     Args:
@@ -146,6 +148,11 @@ async def get_wallet_manager_tree_service(
     re_snaps = await list_real_estate_monthly_snapshots(session, wallet_ids=wallet_ids, month_keys=keys)
     for s in re_snaps:
         re_snaps_by_wallet_month.setdefault((s.wallet_id, s.month_key), []).append((dec(s.value), s.currency.value))
+
+    cash_snaps_by_wallet_month: dict[tuple[uuid.UUID, str], list[tuple[Decimal, str]]] = {}
+    cash_snaps = await list_cash_monthly_snapshots(session, wallet_ids=wallet_ids, month_keys=keys)
+    for s in cash_snaps:
+        cash_snaps_by_wallet_month.setdefault((s.wallet_id, s.month_key), []).append((dec(s.value), s.currency.value))
 
     dep_by_wallet: dict[uuid.UUID, list[dict]] = {wid: [] for wid in wallet_ids}
     for acc in dep_rows:
@@ -346,6 +353,34 @@ async def get_wallet_manager_tree_service(
             }
         )
 
+    cash_by_wallet: dict[uuid.UUID, dict] = {
+        wid: {"count": 0, "value": Decimal("0"), "ccy": base_by_wallet[wid], "health": {"missing_fx": 0}, "items": []}
+        for wid in wallet_ids
+    }
+    cash_rows = await list_cash_holdings_for_wallets(session, wallet_ids=wallet_ids)
+    for c in cash_rows:
+        wid = c.wallet_id
+        base = base_by_wallet[wid]
+        c_ccy = safe_ccy(getattr(c, "currency", None), base)
+        amount = dec(getattr(c, "amount", 0))
+        v_in_base = amount if c_ccy == base else fx_convert(amount, c_ccy, base, fx_now)
+        if v_in_base is None:
+            cash_by_wallet[wid]["health"]["missing_fx"] += 1
+            v_in_base = Decimal("0")
+
+        cash_by_wallet[wid]["count"] += 1
+        cash_by_wallet[wid]["value"] += v_in_base
+        cash_by_wallet[wid]["items"].append(
+            {
+                "id": str(c.id),
+                "name": str(getattr(c, "name", "")),
+                "amount": amount,
+                "amount_ccy": c_ccy,
+                "value": v_in_base,
+                "ccy": base,
+            }
+        )
+
     out: list[dict] = []
 
     for w in wallets:
@@ -360,6 +395,7 @@ async def get_wallet_manager_tree_service(
             "brokerage_accounts": bro_by_wallet.get(w.id, []),
             "metals": metal_by_wallet.get(w.id, {"count": 0, "value": Decimal("0"), "ccy": base, "health": {}}),
             "real_estate": re_by_wallet.get(w.id, {"count": 0, "value": Decimal("0"), "ccy": base, "health": {}}),
+            "physical_cash": cash_by_wallet.get(w.id, {"count": 0, "value": Decimal("0"), "ccy": base, "health": {}}),
             "snapshots": {},
             "fx_by_month": {k: fx_by_month.get(k, {}) for k in keys},  
         }
@@ -405,9 +441,16 @@ async def get_wallet_manager_tree_service(
                 if v is not None:
                     real_estate += v
 
+            cash_physical = Decimal("0")
+            for val, src_ccy in cash_snaps_by_wallet_month.get((w.id, mk), []):
+                v = fx_convert(dec(val), src_ccy, base, fx)
+                if v is not None:
+                    cash_physical += v
+
             wallet_dict["snapshots"][mk] = {
                 "ccy": base,
                 "cash_deposit": cash_deposit,
+                "cash_physical": cash_physical,
                 "cash_broker": cash_broker,
                 "stocks": stocks,
                 "metals": metals,
@@ -437,6 +480,7 @@ async def create_monthly_snapshot_for_user_service(
           * brokerage monthly snapshots (cash + stocks)
           * metal monthly snapshots
           * real-estate monthly snapshots
+          * physical cash monthly snapshots (original currency)
 
     Notes:
       - External calls (quotes/CPI sync) are executed BEFORE the DB transaction
@@ -450,7 +494,7 @@ async def create_monthly_snapshot_for_user_service(
         stock_client: Client that can fetch quotes and trigger candle sync.
 
     Returns:
-        (month_key, fx_saved, dep_count, bro_count, metal_count, re_count)
+        (month_key, fx_saved, dep_count, bro_count, metal_count, re_count, cash_count)
     """
     mk = month_key_snap or month_key()
 
@@ -459,7 +503,7 @@ async def create_monthly_snapshot_for_user_service(
 
         wallets = await list_wallets(session, user_id=user_id)
         if not wallets:
-            return {"month_key": mk, "ok": True, "counts": {"deposit": 0, "brokerage": 0, "metal": 0, "real_estate": 0}}
+            return mk, True, 0, 0, 0, 0, 0
 
         wallet_ids = [w.id for w in wallets]
         base_by_wallet = {w.id: safe_ccy(getattr(w, "currency", None), "PLN") for w in wallets}
@@ -630,4 +674,17 @@ async def create_monthly_snapshot_for_user_service(
             )
             re_count += 1
 
-        return mk, True, dep_count, bro_count, metal_count, re_count
+        cash_rows = await list_cash_holdings_for_wallets(session, wallet_ids=wallet_ids)
+        cash_count = 0
+        for c in cash_rows:
+            await upsert_cash_monthly_snapshot(
+                session,
+                wallet_id=c.wallet_id,
+                cash_holding_id=c.id,
+                month_key=mk,
+                currency=c.currency,
+                value=dec(c.amount),
+            )
+            cash_count += 1
+
+        return mk, True, dep_count, bro_count, metal_count, re_count, cash_count

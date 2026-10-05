@@ -13,6 +13,7 @@ def sum_snapshots_into_monthly_totals(
     bro_rows,
     metal_rows,
     re_rows,
+    cash_rows=(),
 ) -> dict[uuid.UUID, dict[str, Decimal]]:
     """
     Sum snapshot rows into monthly totals per wallet in a target currency.
@@ -26,6 +27,7 @@ def sum_snapshots_into_monthly_totals(
             - brokerage: cash + stocks
             - metals: value
             - real_estate: value
+            - physical cash: value
 
     Args:
         fx_by_month: Mapping of month_key -> FX table (used by `fx_convert`).
@@ -34,6 +36,7 @@ def sum_snapshots_into_monthly_totals(
         bro_rows: Brokerage snapshot rows.
         metal_rows: Metals snapshot rows.
         re_rows: Real estate snapshot rows.
+        cash_rows: Physical cash snapshot rows.
 
     Returns:
         Mapping: wallet_id -> { month_key -> total_in_target_ccy }.
@@ -62,6 +65,9 @@ def sum_snapshots_into_monthly_totals(
         add(r.wallet_id, r.month_key, r.currency.value, Decimal(str(r.value or 0)))
 
     for r in re_rows:
+        add(r.wallet_id, r.month_key, r.currency.value, Decimal(str(r.value or 0)))
+
+    for r in cash_rows:
         add(r.wallet_id, r.month_key, r.currency.value, Decimal(str(r.value or 0)))
 
     return totals

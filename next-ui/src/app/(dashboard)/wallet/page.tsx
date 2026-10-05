@@ -38,10 +38,12 @@ import { DeleteWalletDialogWrapper } from '@/features/wallet/components/DeleteWa
 import { CreateAccountDialogWrapper } from '@/features/wallet/components/CreateAccountDialogWrapper'
 import { InvestmentsDialogWrapper } from '@/features/wallet/components/InvestmentsDialogWrapper'
 import { DebtsDialogWrapper } from '@/features/wallet/components/DebtsDialogWrapper'
+import { CashDialogWrapper } from '@/features/wallet/components/CashDialogWrapper'
 import { NotesDialogWrapper } from '@/features/wallet/components/NotesDialogWrapper'
 import { TransactionsDialogWrapper } from '@/features/wallet/components/TransactionsDialogWrapper'
 import type { RealEstateRow, MetalRow, WalletOpt } from '@/features/wallet/components/InvestmentsDialog'
 import type { DebtRow, DebtWalletOpt } from '@/features/wallet/components/DebtsDialog'
+import type { CashRow, CashWalletOpt } from '@/features/wallet/components/CashDialog'
 import type {
   TransactionAccountOpt,
   TransactionBrokerageAccountOpt,
@@ -62,6 +64,14 @@ function computeCash(wallets: WalletListItem[], ccy: Currency, rates: NullableFx
       const amount = dec(a.available)
       return sum.plus(conv(amount, a.currency, ccy, rates))
     }, total),
+  new Decimal(0))
+}
+
+export function computePhysicalCash(wallets: WalletListItem[], ccy: Currency, rates: NullableFxRates): Decimal {
+  return wallets.reduce((total, w) =>
+    w.cash_holdings.reduce((sum, c) =>
+      sum.plus(conv(dec(c.amount), c.currency, ccy, rates)),
+    total),
   new Decimal(0))
 }
 
@@ -151,7 +161,7 @@ function debtSubtitle(wallets: WalletListItem[]): string {
   return `${debts.length} ${label} · średn. ${avgRate.toFixed(1)}%`
 }
 
-function computeAllocationSeries(
+export function computeAllocationSeries(
   wallets: WalletListItem[],
   ccy: Currency,
   rates: NullableFxRates,
@@ -167,6 +177,7 @@ function computeAllocationSeries(
 
   for (const w of wallets) {
     for (const a of w.accounts) add(a.currency, dec(a.available))
+    for (const c of w.cash_holdings) add(c.currency, dec(c.amount))
     for (const ba of w.brokerage_accounts) {
       for (const [cur, amount] of Object.entries(ba.totals_by_currency)) add(cur, dec(amount))
     }
@@ -593,7 +604,9 @@ export default async function WalletPage({
   const hasBrokerageExposure = selected.some((wallet) => wallet.brokerage_accounts.length > 0)
   const showMarketDataNotice = hasBrokerageExposure && !stockStatus.available
 
-  const cash = computeCash(selected, viewCurrency, rates)
+  const accountsCash = computeCash(selected, viewCurrency, rates)
+  const physicalCash = computePhysicalCash(selected, viewCurrency, rates)
+  const cash = accountsCash.plus(physicalCash)
   const brokerage = computeBrokerage(selected, viewCurrency, rates)
   const estates = computeEstates(selected, viewCurrency, rates, estatePriceMap)
   const metals = computeMetals(selected, viewCurrency, rates)
@@ -672,6 +685,27 @@ export default async function WalletPage({
     name: wallet.name,
   }))
 
+  const cashRows: CashRow[] = selected.flatMap((wallet) =>
+    wallet.cash_holdings.map((item) => ({
+      id: item.id,
+      walletId: wallet.id,
+      walletName: wallet.name,
+      name: item.name,
+      amount: item.amount,
+      currency: item.currency,
+      note: item.note ?? '',
+      valueFmt: fmtKpi(conv(dec(item.amount), item.currency, viewCurrency, rates), viewCurrency),
+    })),
+  )
+
+  const cashWallets: CashWalletOpt[] = selected.map((wallet) => ({
+    id: wallet.id,
+    name: wallet.name,
+  }))
+  const cashSub = physicalCash.gt(0)
+    ? `${totalAccounts} kont · ${fmtKpi(physicalCash, viewCurrency)} w gotówce`
+    : `${totalAccounts} kont`
+
   const transactionAccounts: TransactionAccountOpt[] = wallets.flatMap((wallet) =>
     wallet.accounts.map((account) => {
       const latestTransaction = account.last_transactions?.[0] ?? null
@@ -730,6 +764,16 @@ export default async function WalletPage({
         wallets={invWallets}
         viewCurrency={viewCurrency}
       />
+      <CashDialogWrapper
+        open={modal === 'cash'}
+        totalFmt={fmtKpi(cash, viewCurrency)}
+        accountsFmt={fmtKpi(accountsCash, viewCurrency)}
+        physicalFmt={fmtKpi(physicalCash, viewCurrency)}
+        accountsCount={totalAccounts}
+        cashHoldings={cashRows}
+        wallets={cashWallets}
+        viewCurrency={viewCurrency}
+      />
       <DebtsDialogWrapper
         open={modal === 'debts'}
         totalFmt={hasDebts ? `−${fmtKpi(debts, viewCurrency)}` : `0 ${viewCurrency}`}
@@ -772,7 +816,8 @@ export default async function WalletPage({
           <KpiCard
             title="Gotówka"
             value={fmtKpi(cash, viewCurrency)}
-            sub={`${totalAccounts} kont`}
+            sub={cashSub}
+            href="?modal=cash"
           />
 
           <KpiCard

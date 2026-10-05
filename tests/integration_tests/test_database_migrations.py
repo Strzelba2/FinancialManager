@@ -389,6 +389,7 @@ def test_service_database_is_migrated_to_current_head(
                 "favorite_lists",
                 "favorite_items",
                 "price_alerts",
+                "cash_holdings",
             },
         ),
         (
@@ -423,6 +424,30 @@ def test_test_database_contains_expected_business_tables(
 @pytest.mark.db
 @allure.epic("System Tests")
 @allure.feature("Integration")
+@allure.story("Wallet bank reference data includes Bank Millennium for deposit accounts")
+@allure.severity(allure.severity_level.NORMAL)
+@allure.tag("database", "migration", "wallet", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+def test_wallet_database_contains_bank_millennium_reference_data() -> None:
+    with _wallet_db_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT name, shortname, bic
+                FROM banks
+                WHERE name = %s
+                """,
+                ("Bank Millennium",),
+            )
+            bank = cursor.fetchone()
+
+    assert bank == ("Bank Millennium", "MIL", "BIGBPLPW")
+
+
+@pytest.mark.integration
+@pytest.mark.db
+@allure.epic("System Tests")
+@allure.feature("Integration")
 @allure.story("Test databases start without persisted business records")
 @allure.severity(allure.severity_level.CRITICAL)
 @allure.tag("database", "clean-state", "session", "wallet", "stock")
@@ -450,6 +475,7 @@ def test_test_database_contains_expected_business_tables(
                 "favorite_lists",
                 "favorite_items",
                 "price_alerts",
+                "cash_holdings",
             },
         ),
         (
@@ -501,6 +527,7 @@ def test_test_database_starts_without_business_rows(
                 "favorite_lists",
                 "favorite_items",
                 "price_alerts",
+                "cash_holdings",
             },
             {
                 "uq_wallet_owner_name",
@@ -508,6 +535,7 @@ def test_test_database_starts_without_business_rows(
                 "uq_fav_item_unique",
                 "uq_alert_user_instr",
                 "ck_alert_prices_nonneg",
+                "ck_cash_holding_amount_nonneg",
             },
         ),
         (
@@ -564,10 +592,14 @@ def test_service_database_has_core_business_constraints(
                 ("brokerage_accounts", "wallets"),
                 ("brokerage_events", "brokerage_accounts"),
                 ("brokerage_events", "instruments"),
+                ("brokerage_events", "transactions"),
                 ("brokerage_deposit_links", "brokerage_accounts"),
                 ("brokerage_deposit_links", "deposit_accounts"),
                 ("holdings", "brokerage_accounts"),
                 ("holdings", "instruments"),
+                ("cash_holdings", "wallets"),
+                ("cash_holding_monthly_snapshots", "wallets"),
+                ("cash_holding_monthly_snapshots", "cash_holdings"),
                 ("favorite_lists", "users"),
                 ("favorite_items", "favorite_lists"),
                 ("favorite_items", "instruments"),

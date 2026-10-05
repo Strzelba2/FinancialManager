@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '../msw-server'
 import { toast } from 'sonner'
@@ -126,5 +126,135 @@ describe('TransactionsDialog – manual form', () => {
 
     await screen.findByText(/Saldo po operacji/i)
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
+})
+
+const SECOND_ACCOUNT: TransactionAccountOpt = {
+  id: 'account-2',
+  name: 'Konto oszczędnościowe',
+  walletName: 'Portfel',
+  currency: 'EUR',
+  available: '500.00',
+}
+
+const LAST_ACCOUNT_KEY = 'transactions_last_manual_account'
+
+function renderManual(accounts: TransactionAccountOpt[] = [ACCOUNT, SECOND_ACCOUNT]) {
+  return render(
+    <TransactionsDialog
+      open
+      onOpenChange={vi.fn()}
+      accounts={accounts}
+      brokerageAccounts={[]}
+    />,
+  )
+}
+
+function accountTrigger() {
+  return screen.getAllByRole('combobox')[0]!
+}
+
+function selectSecondAccount() {
+  fireEvent.click(accountTrigger())
+  fireEvent.click(screen.getByRole('option', { name: /Konto oszczędnościowe/ }))
+}
+
+describe('TransactionsDialog – manual form remembers the last account', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Element.prototype.scrollIntoView = vi.fn()
+    server.resetHandlers()
+    window.localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('preselects the remembered account when it still exists', async () => {
+    await nextUiUnitStory('Wallet manual transaction form preselects the remembered account', {
+      severity: 'normal',
+      tags: ['wallet', 'transactions', 'manual', 'usability', 'next-ui'],
+    })
+    window.localStorage.setItem(LAST_ACCOUNT_KEY, 'account-2')
+
+    renderManual()
+
+    expect(accountTrigger()).toHaveTextContent('Konto oszczędnościowe (EUR)')
+  })
+
+  it('falls back to the first account when the remembered account no longer exists', async () => {
+    await nextUiUnitStory('Wallet manual transaction form falls back to the first account', {
+      severity: 'normal',
+      tags: ['wallet', 'transactions', 'manual', 'usability', 'next-ui'],
+    })
+    window.localStorage.setItem(LAST_ACCOUNT_KEY, 'deleted-account')
+
+    renderManual()
+
+    expect(accountTrigger()).toHaveTextContent('Konto osobiste (PLN)')
+  })
+
+  it('remembers the account after a successful add and preselects it on the next open', async () => {
+    await nextUiUnitStory('Wallet manual transaction form remembers the account after a successful add', {
+      severity: 'normal',
+      tags: ['wallet', 'transactions', 'manual', 'usability', 'next-ui'],
+    })
+    const requests: unknown[] = []
+    server.use(
+      http.post('*/api/wallet/transactions', async ({ request }) => {
+        requests.push(await request.json())
+        return HttpResponse.json({ success: true, summary: { created: 1 } })
+      }),
+    )
+
+    const { unmount } = renderManual()
+    selectSecondAccount()
+    fillManualForm()
+    fireEvent.click(screen.getByRole('button', { name: /Dodaj transakcję/i }))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Pomyślnie dodano transakcję'))
+    expect(requests).toEqual([expect.objectContaining({ account_id: 'account-2' })])
+    expect(window.localStorage.getItem(LAST_ACCOUNT_KEY)).toBe('account-2')
+
+    unmount()
+    renderManual()
+
+    expect(accountTrigger()).toHaveTextContent('Konto oszczędnościowe (EUR)')
+  })
+
+  it('does not remember the account when the backend rejects the transaction', async () => {
+    await nextUiUnitStory('Wallet manual transaction form keeps the remembered account on failure', {
+      severity: 'normal',
+      tags: ['wallet', 'transactions', 'manual', 'error-state', 'next-ui'],
+    })
+    server.use(
+      http.post('*/api/wallet/transactions', () =>
+        HttpResponse.json({ error: 'This insert would make the account balance negative.' }, { status: 422 }),
+      ),
+    )
+
+    renderManual()
+    selectSecondAccount()
+    fillManualForm()
+    fireEvent.click(screen.getByRole('button', { name: /Dodaj transakcję/i }))
+
+    await screen.findByText(/would make the account balance negative/i)
+    expect(window.localStorage.getItem(LAST_ACCOUNT_KEY)).toBeNull()
+  })
+
+  it('uses the first account when browser storage is blocked', async () => {
+    await nextUiUnitStory('Wallet manual transaction form works without browser storage', {
+      severity: 'minor',
+      tags: ['wallet', 'transactions', 'manual', 'resilience', 'next-ui'],
+    })
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage blocked')
+    })
+
+    renderManual()
+
+    expect(accountTrigger()).toHaveTextContent('Konto osobiste (PLN)')
   })
 })

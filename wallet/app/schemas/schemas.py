@@ -10,7 +10,7 @@ from app.models.base import (UserBase, UUIDMixin, TimestampMixin, PartialUpdateM
                              InstrumentBase, HoldingBase, TransactionBase, RealEstateBase, 
                              MetalHoldingBase, WalletBase, BrokerageDepositLinkBase,
                              BrokerageEventBase, CapitalGainBase, RealEstatePriceBase,
-                             DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase,
+                             DebtBase, CashHoldingBase, RecurringExpenseBase, UserNoteBase, YearGoalBase,
                              DepositAccountMonthlySnapshotBase, BrokerageAccountMonthlySnapshotBase,
                              MetalHoldingMonthlySnapshotBase, RealEstateMonthlySnapshotBase,
                              FavoriteListBase, PriceAlertBase)
@@ -22,7 +22,7 @@ from app.validators.validators import (
 )
 
 from app.models.enums import (
-    AccountType, Currency, InstrumentType,  MetalType,
+    AccountType, Currency, InstrumentCurrency, InstrumentType,  MetalType,
     PropertyType, CapitalGainKind, BrokerageEventKind
     )
 
@@ -467,6 +467,28 @@ class DebtUpdate(PartialUpdateMixin):
     
     __update_require_any__ = {"name", "lander", "amount", "type", "currency", "interest_rate_pct", "monthly_payment", "end_date"}
     
+
+class CashHoldingCreate(CashHoldingBase):
+    model_config = ConfigDict(from_attributes=False)
+
+    wallet_id: uuid.UUID
+
+
+class CashHoldingRead(CashHoldingBase, UUIDMixin, TimestampMixin):
+    model_config = ConfigDict(from_attributes=True, validate_assignment=False)
+
+    wallet_id: uuid.UUID
+
+
+class CashHoldingUpdate(PartialUpdateMixin):
+
+    name: Optional[NonEmptyStr] = None
+    amount: Optional[Q2NonNeg] = None
+    currency: Optional[InstrumentCurrency] = None
+    note: NoneIfEmpty = None
+
+    __update_require_any__ = {"name", "amount", "currency", "note"}
+
 
 class RecurringExpenseCreate(RecurringExpenseBase):
     wallet_id: uuid.UUID

@@ -6,10 +6,10 @@ from datetime import date, datetime
 from decimal import Decimal
 import uuid
 
-from app.models.models import BrokerageEvent, Instrument, BrokerageAccount, Holding, Wallet
-from app.models.enums import BrokerageEventKind
+from app.models.models import BrokerageEvent, Instrument, BrokerageAccount, Wallet
 from app.schemas.schemas import BrokerageEventCreate
-from app.crud.holding_crud import apply_conversion_to_holding_pair, apply_event_to_holding
+from app.crud.holding_crud import rebuild_account_holdings_from_events
+from app.crud.transaction_crud import delete_transaction_for_user_rebalance
 
 
 async def create_brokerage_event(
@@ -262,56 +262,6 @@ async def list_brokerage_events_page(
     return rows, total, page, size, sum_by_ccy
 
 
-async def rebuild_account_holdings_from_events(
-    session: AsyncSession,
-    account_id: uuid.UUID,
-) -> None:
-    """
-    Rebuild all holdings for a brokerage account from its event history.
-
-    Account-level replay is required for CONVERSION events because one event touches
-    both a source instrument and a target instrument.
-    """
-    event_rows = await session.execute(
-        select(BrokerageEvent)
-        .where(BrokerageEvent.brokerage_account_id == account_id)
-        .order_by(BrokerageEvent.trade_at.asc(), BrokerageEvent.id.asc())
-    )
-    events = list(event_rows.scalars().all())
-
-    current_rows = await session.execute(select(Holding).where(Holding.account_id == account_id))
-    for holding in current_rows.scalars().all():
-        await session.delete(holding)
-    await session.flush()
-
-    states: dict[uuid.UUID, Holding] = {}
-
-    def state_for(instrument_id: uuid.UUID) -> Holding:
-        return states.setdefault(
-            instrument_id,
-            Holding(
-                account_id=account_id,
-                instrument_id=instrument_id,
-                quantity=Decimal("0"),
-                avg_cost=Decimal("0"),
-            ),
-        )
-
-    for ev in events:
-        source = state_for(ev.instrument_id)
-        if ev.kind == BrokerageEventKind.CONVERSION and ev.target_instrument_id is not None:
-            target = state_for(ev.target_instrument_id)
-            apply_conversion_to_holding_pair(source, target, ev)
-        else:
-            apply_event_to_holding(source, ev)
-
-    for holding in states.values():
-        if holding.quantity == 0:
-            continue
-        session.add(holding)
-    await session.flush()
-
-
 async def batch_patch_brokerage_events(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -380,6 +330,9 @@ async def delete_brokerage_event_and_rebuild_holding(
     """
     Delete a brokerage event (if owned by the user) and rebuild the affected holding.
 
+    When the event has a linked cash settlement transaction, the transaction is
+    deleted too and the deposit account balance chain is rebalanced.
+
     Args:
         session: SQLAlchemy async session.
         user_id: Owner user UUID.
@@ -398,6 +351,15 @@ async def delete_brokerage_event_and_rebuild_holding(
     w = await session.get(Wallet, acc.wallet_id)
     if w is None or w.user_id != user_id:
         return False
+
+    if ev.transaction_id is not None:
+        # Deletes the linked event and rebuilds holdings as part of the cash rebalance.
+        if await delete_transaction_for_user_rebalance(
+            session=session,
+            user_id=user_id,
+            transaction_id=ev.transaction_id,
+        ):
+            return True
 
     account_id = ev.brokerage_account_id
     await session.delete(ev)

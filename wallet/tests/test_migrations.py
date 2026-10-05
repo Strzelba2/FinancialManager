@@ -26,6 +26,21 @@ def _brokerage_conversion_migration_source() -> str:
     return migration.read_text(encoding="utf-8")
 
 
+def _brokerage_event_transaction_link_migration_source() -> str:
+    migration = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "a3c5e7f9b1d2_link_brokerage_events_to_transactions.py"
+    return migration.read_text(encoding="utf-8")
+
+
+def _cash_holdings_migration_source() -> str:
+    migration = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "b6d8f0a2c4e6_create_cash_holdings_table.py"
+    return migration.read_text(encoding="utf-8")
+
+
+def _cash_snapshot_migration_source() -> str:
+    migration = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "c8e0a2b4d6f8_create_cash_holding_monthly_snapshots.py"
+    return migration.read_text(encoding="utf-8")
+
+
 def _year_goal_capital_target_migration_source() -> str:
     migration = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "4f2b8c1d9a0e_add_capital_gain_target_to_year_goals.py"
     return migration.read_text(encoding="utf-8")
@@ -88,6 +103,41 @@ class WalletMigrationTests(unittest.TestCase):
         self.assertIn('sa.Column("target_instrument_id", pg.UUID(as_uuid=True), nullable=True)', source)
         self.assertIn('"fk_brokerage_events_target_instrument_id"', source)
         self.assertIn('ondelete="SET NULL"', source)
+
+    def test_brokerage_event_transaction_link_migration_adds_unique_fk_and_safe_backfill(self) -> None:
+        source = _brokerage_event_transaction_link_migration_source()
+
+        self.assertIn('sa.Column("transaction_id", pg.UUID(as_uuid=True), nullable=True)', source)
+        self.assertIn('"ix_brokerage_events_transaction_id"', source)
+        self.assertIn("unique=True", source)
+        self.assertIn('"fk_brokerage_events_transaction_id"', source)
+        self.assertIn('ondelete="SET NULL"', source)
+        # Backfill links only the manual cash settlement description and one-to-one matches.
+        self.assertIn("'^(BUY|SELL|DIV) (\\S+) ([0-9]+(?:\\.[0-9]+)?) @ ([0-9]+(?:\\.[0-9]+)?)$'", source)
+        self.assertIn("tt.date_transaction = be.trade_at", source)
+        self.assertIn("c2.event_id = c.event_id) = 1", source)
+        self.assertIn("c3.transaction_id = c.transaction_id) = 1", source)
+        self.assertIn("op.execute(BACKFILL_SQL)", source)
+
+    def test_cash_holdings_migration_reuses_instrument_currency_enum_and_guards_amount(self) -> None:
+        source = _cash_holdings_migration_source()
+
+        self.assertIn('"cash_holdings"', source)
+        self.assertIn('name="instrument_currency_enum"', source)
+        self.assertIn("create_type=False", source)
+        self.assertIn('"PLN", "USD", "EUR", "GBP", "CHF"', source)
+        self.assertIn('sa.CheckConstraint("amount >= 0", name="ck_cash_holding_amount_nonneg")', source)
+        self.assertIn('sa.ForeignKeyConstraint(["wallet_id"], ["wallets.id"], ondelete="CASCADE")', source)
+
+    def test_cash_snapshot_migration_keeps_original_currency_and_survives_holding_delete(self) -> None:
+        source = _cash_snapshot_migration_source()
+
+        self.assertIn('"cash_holding_monthly_snapshots"', source)
+        self.assertIn('name="instrument_currency_enum"', source)
+        self.assertIn("create_type=False", source)
+        self.assertIn('sa.ForeignKeyConstraint(["cash_holding_id"], ["cash_holdings.id"], ondelete="SET NULL")', source)
+        self.assertIn('sa.ForeignKeyConstraint(["wallet_id"], ["wallets.id"], ondelete="CASCADE")', source)
+        self.assertIn('sa.UniqueConstraint("cash_holding_id", "month_key", name="uq_cash_monthly_snapshot")', source)
 
     def test_year_goal_migration_adds_capital_gain_target_with_default(self) -> None:
         source = _year_goal_capital_target_migration_source()

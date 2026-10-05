@@ -9,10 +9,11 @@ from .base import (UserBase, UUIDMixin, TimestampMixin, BankBase,
                    InstrumentBase, HoldingBase, TransactionBase, RealEstateBase, 
                    MetalHoldingBase, WalletBase, BrokerageDepositLinkBase,
                    BrokerageEventBase, CapitalGainBase, RealEstatePriceBase,
-                   DebtBase, RecurringExpenseBase, UserNoteBase, YearGoalBase,
+                   DebtBase, CashHoldingBase, RecurringExpenseBase, UserNoteBase, YearGoalBase,
                    FxMonthlySnapshotBase, DepositAccountMonthlySnapshotBase,
                    BrokerageAccountMonthlySnapshotBase, RealEstateMonthlySnapshotBase,
-                   MetalHoldingMonthlySnapshotBase, FavoriteListBase, PriceAlertBase
+                   MetalHoldingMonthlySnapshotBase, CashHoldingMonthlySnapshotBase,
+                   FavoriteListBase, PriceAlertBase
                    )
 
 
@@ -123,7 +124,15 @@ class BrokerageEvent(BrokerageEventBase, UUIDMixin, table=True):
                             sa.ForeignKey("instruments.id", ondelete="CASCADE"),
                             nullable=False, index=True)
     )
-    
+
+    # Cash settlement transaction created together with this event (BUY/SELL/DIV).
+    transaction_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=sa.Column(pg.UUID(as_uuid=True),
+                            sa.ForeignKey("transactions.id", ondelete="SET NULL"),
+                            nullable=True, unique=True, index=True)
+    )
+
     account_event: "BrokerageAccount" = Relationship(back_populates="events")
     
     __table_args__ = (
@@ -341,6 +350,9 @@ class Wallet(WalletBase, UUIDMixin, TimestampMixin, table=True):
     debts: list["Debt"] = Relationship(back_populates="wallet",
                                        sa_relationship_kwargs={"cascade": "all, delete-orphan", 
                                                                "passive_deletes": True})
+    cash_holdings: list["CashHolding"] = Relationship(back_populates="wallet",
+                                                      sa_relationship_kwargs={"cascade": "all, delete-orphan",
+                                                                              "passive_deletes": True})
     
     __table_args__ = (
         sa.UniqueConstraint("user_id", "name", name="uq_wallet_owner_name"),
@@ -348,6 +360,26 @@ class Wallet(WalletBase, UUIDMixin, TimestampMixin, table=True):
     )
     
     
+class CashHolding(CashHoldingBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "cash_holdings"
+
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True
+        )
+    )
+
+    wallet: "Wallet" = Relationship(back_populates="cash_holdings")
+
+    __table_args__ = (
+        sa.CheckConstraint("char_length(btrim(name)) > 0", name="ck_cash_holding_name_not_empty"),
+        sa.CheckConstraint("amount >= 0", name="ck_cash_holding_amount_nonneg"),
+    )
+
+
 class Debt(DebtBase, UUIDMixin, TimestampMixin, table=True):
     __tablename__ = "debt"
 
@@ -494,6 +526,24 @@ class MetalHoldingMonthlySnapshot(MetalHoldingMonthlySnapshotBase, UUIDMixin, Ti
         sa.UniqueConstraint("metal_holding_id", "month_key", name="uq_metal_monthly_snapshot"),
         sa.Index("ix_metal_wallet_month", "wallet_id", "month_key"),
         sa.Index("ix_metal_wallet_month_id", "wallet_id", "month_key", "metal_holding_id"),
+    )
+
+
+class CashHoldingMonthlySnapshot(CashHoldingMonthlySnapshotBase, UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "cash_holding_monthly_snapshots"
+
+    wallet_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True), sa.ForeignKey("wallets.id", ondelete="CASCADE"),
+                            nullable=False, index=True)
+    )
+    cash_holding_id: uuid.UUID = Field(
+        sa_column=sa.Column(pg.UUID(as_uuid=True), sa.ForeignKey("cash_holdings.id", ondelete="SET NULL"),
+                            nullable=True, index=True)
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("cash_holding_id", "month_key", name="uq_cash_monthly_snapshot"),
+        sa.Index("ix_cash_wallet_month", "wallet_id", "month_key"),
     )
 
 

@@ -66,6 +66,7 @@ async def api_create_monthly_snapshot(
       - brokerage snapshot rows
       - metals snapshot rows
       - real estate snapshot rows
+      - physical cash snapshot rows
 
     Args:
         payload: Request body containing:
@@ -78,7 +79,7 @@ async def api_create_monthly_snapshot(
     Returns:
         `CreateMonthlySnapshotOut` with counts of upserted rows and ok=True on success.
     """
-    mk, fx_saved, dep_up, bro_up, metal_up, re_up = await create_monthly_snapshot_for_user_service(
+    mk, fx_saved, dep_up, bro_up, metal_up, re_up, cash_up = await create_monthly_snapshot_for_user_service(
         session=session,
         user_id=user_id,
         month_key_snap=payload.month_key,
@@ -93,4 +94,5 @@ async def api_create_monthly_snapshot(
         bro_upserted=int(bro_up),
         metal_upserted=int(metal_up),
         re_upserted=int(re_up),
+        cash_upserted=int(cash_up),
     )

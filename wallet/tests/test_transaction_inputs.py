@@ -729,6 +729,7 @@ class TransactionDeleteCrudUnitTests(unittest.IsolatedAsyncioTestCase):
             AccountType.CURRENT, # account type
             bal,                 # balance row
             None,                # prev tx (none — tx is first)
+            None,                # linked brokerage event (plain cash transaction)
         ])
         session.scalars = AsyncMock(return_value=scalars_result)
         session.execute = AsyncMock()

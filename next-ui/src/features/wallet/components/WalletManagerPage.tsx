@@ -12,6 +12,7 @@ import type {
   ManagerBrokerageAccount,
   ManagerMetals,
   ManagerRealEstate,
+  ManagerPhysicalCash,
   ManagerHealth,
 } from '@/lib/api/wallet'
 import type { FxRates } from '@/lib/api/nbp'
@@ -100,6 +101,7 @@ function normalizeCashId(value: string): string {
 
 type Breakdown = {
   cashDeposit: number
+  cashPhysical: number
   cashBroker: number
   stocks: number
   metals: number
@@ -112,7 +114,7 @@ function walletBreakdown(
   viewCcy: ViewCcy,
   conv: (a: number, f: string, t: string) => number,
 ): Breakdown {
-  let cashDeposit = 0, cashBroker = 0, stocks = 0, metals = 0, realEstate = 0
+  let cashDeposit = 0, cashPhysical = 0, cashBroker = 0, stocks = 0, metals = 0, realEstate = 0
 
   for (const a of w.deposit_accounts ?? []) {
     cashDeposit += conv(toNum(a.available), a.ccy, viewCcy)
@@ -122,10 +124,19 @@ function walletBreakdown(
     cashBroker += conv(toNum(b.sum_cash_accounts), src, viewCcy)
     stocks += conv(toNum(b.positions_value), src, viewCcy)
   }
+  if (w.physical_cash) cashPhysical = conv(toNum(w.physical_cash.value), w.physical_cash.ccy ?? viewCcy, viewCcy)
   if (w.metals) metals = conv(toNum(w.metals.value), w.metals.ccy ?? viewCcy, viewCcy)
   if (w.real_estate) realEstate = conv(toNum(w.real_estate.value), w.real_estate.ccy ?? viewCcy, viewCcy)
 
-  return { cashDeposit, cashBroker, stocks, metals, realEstate, total: cashDeposit + cashBroker + stocks + metals + realEstate }
+  return {
+    cashDeposit,
+    cashPhysical,
+    cashBroker,
+    stocks,
+    metals,
+    realEstate,
+    total: cashDeposit + cashPhysical + cashBroker + stocks + metals + realEstate,
+  }
 }
 
 function walletMoM(
@@ -139,6 +150,7 @@ function walletMoM(
   const src = snap.ccy ?? viewCcy
   const prevTotal =
     conv(toNum(snap.cash_deposit), src, viewCcy) +
+    conv(toNum(snap.cash_physical), src, viewCcy) +
     conv(toNum(snap.cash_broker), src, viewCcy) +
     conv(toNum(snap.stocks), src, viewCcy) +
     conv(toNum(snap.metals), src, viewCcy) +
@@ -166,6 +178,7 @@ function HealthChips({ health }: { health?: ManagerHealth }) {
   if (health.stale_quotes) chips.push({ label: 'Nieaktualne kursy', cls: 'bg-amber-500/20 text-amber-300' })
   if (health.projection_mismatch) chips.push({ label: 'Niezgodność', cls: 'bg-red-500/20 text-red-300' })
   if (health.needs_review) chips.push({ label: 'Do weryfikacji', cls: 'bg-amber-500/20 text-amber-300' })
+  if (health.missing_fx) chips.push({ label: `Brak kursu waluty: ${health.missing_fx}`, cls: 'bg-red-500/20 text-red-300' })
   if (!chips.length) return null
   return (
     <>
@@ -786,6 +799,62 @@ function MetalsSection({
   )
 }
 
+function PhysicalCashSection({
+  cash, viewCcy, conv,
+}: {
+  cash: ManagerPhysicalCash
+  viewCcy: ViewCcy
+  conv: (a: number, f: string, t: string) => number
+}) {
+  const [open, setOpen] = useState(true)
+  const total = conv(toNum(cash.value), cash.ccy ?? viewCcy, viewCcy)
+  const items = cash.items ?? []
+
+  return (
+    <div>
+      <SectionToggle
+        label="Gotówka fizyczna"
+        count={cash.count ?? items.length}
+        totalFmt={fmtMoney(total, viewCcy)}
+        mom={null}
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+      />
+      {open && (
+        <div className="mt-1 ml-2 bg-slate-900/50 border border-white/5 rounded-lg overflow-hidden">
+          <HealthChips health={cash.health} />
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-white/5">
+                <th className="text-left px-3 py-2 text-white/30 font-medium">Nazwa</th>
+                <th className="text-right px-3 py-2 text-white/30 font-medium">Kwota</th>
+                <th className="text-right px-3 py-2 text-white/30 font-medium">Wartość ({viewCcy})</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, i) => {
+                const amountCcy = it.amount_ccy ?? cash.ccy ?? viewCcy
+                const val = conv(toNum(it.value), it.ccy ?? cash.ccy ?? viewCcy, viewCcy)
+                return (
+                  <tr key={it.id ?? i} className="border-b border-white/5 last:border-0">
+                    <td className="px-3 py-2 text-white/70">{it.name ?? '—'}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-white/60">
+                      {fmtMoney(toNum(it.amount), amountCcy)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-white/70 font-medium">
+                      {fmtMoney(val, viewCcy)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function RealEstateSection({
   re, viewCcy, conv,
 }: {
@@ -856,7 +925,7 @@ function WalletCard({
   const bd = walletBreakdown(wallet, viewCcy, conv)
   const mom = walletMoM(wallet, bd.total, viewCcy, conv)
 
-  const cashPct = bd.total > 0 ? ((bd.cashDeposit + bd.cashBroker) / bd.total) * 100 : 0
+  const cashPct = bd.total > 0 ? ((bd.cashDeposit + bd.cashPhysical + bd.cashBroker) / bd.total) * 100 : 0
   const stocksPct = bd.total > 0 ? (bd.stocks / bd.total) * 100 : 0
   const metalsPct = bd.total > 0 ? (bd.metals / bd.total) * 100 : 0
   const rePct = bd.total > 0 ? (bd.realEstate / bd.total) * 100 : 0
@@ -903,6 +972,9 @@ function WalletCard({
           {depositAccounts.length > 0 && (
             <DepositSection accounts={depositAccounts} viewCcy={viewCcy} conv={conv} />
           )}
+          {wallet.physical_cash && (wallet.physical_cash.count ?? 0) > 0 && (
+            <PhysicalCashSection cash={wallet.physical_cash} viewCcy={viewCcy} conv={conv} />
+          )}
           {brokerageAccounts.length > 0 && (
             <BrokerageSection accounts={brokerageAccounts} viewCcy={viewCcy} conv={conv} onRefresh={onRefresh} />
           )}
@@ -913,7 +985,7 @@ function WalletCard({
             <RealEstateSection re={wallet.real_estate} viewCcy={viewCcy} conv={conv} />
           )}
           {depositAccounts.length === 0 && brokerageAccounts.length === 0 &&
-            !wallet.metals?.count && !wallet.real_estate?.count && (
+            !wallet.metals?.count && !wallet.real_estate?.count && !wallet.physical_cash?.count && (
               <p className="text-sm text-white/30 py-2 pl-1">Brak kont w tym portfelu.</p>
             )}
         </div>

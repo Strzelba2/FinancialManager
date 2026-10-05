@@ -133,6 +133,31 @@ sequenceDiagram
     Next-->>Browser: Rendered page
 ```
 
+### Report favorites flow
+
+The equity report header reads favorite status through
+`GET /api/wallet/favorites?symbol={symbol}`. This authenticated Next route returns
+`{"isFavorite": boolean}` after checking all user-owned favorite lists directly in
+`wallet`; the existing request without `symbol` continues to return the list collection.
+Clicking the report star opens the shared favorites dialog, which uses the existing add
+and remove item routes and reports the updated state back to the header.
+
+```mermaid
+sequenceDiagram
+    actor Browser
+    participant Report as Equity report
+    participant Next as favorites route handler
+    participant Wallet as wallet API
+
+    Browser->>Report: Open equity report
+    Report->>Next: GET /api/wallet/favorites?symbol=PKO
+    Next->>Wallet: Read user lists and their items
+    Wallet-->>Next: User-scoped favorite data
+    Next-->>Report: isFavorite true or false
+    Browser->>Report: Click gray or yellow star
+    Report-->>Browser: Open shared favorites dialog
+```
+
 ### Transaction import handoff
 
 ```mermaid

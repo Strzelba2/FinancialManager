@@ -33,7 +33,7 @@ flowchart TB
 | Source of truth | Owned data |
 |---|---|
 | `session` | Django users, credentials, activation state, 2FA enabled flag, Django sessions, blocked IP rows, user key material |
-| `wallet` | Financial ownership and money state for wallets, deposit and brokerage accounts, balances, transactions, brokerage events, holdings, capital gains, real estate, metal holdings, debts, recurring expenses, goals, notes, favorites, alerts |
+| `wallet` | Financial ownership and money state for wallets, deposit and brokerage accounts, balances, transactions, brokerage events, holdings, capital gains, real estate, metal holdings, debts, physical cash holdings, recurring expenses, goals, notes, favorites, alerts |
 | `stock` | Market catalog, stock instruments, latest quotes, daily candles, market ingest state, report input/output snapshots |
 
 `wallet` also has wallet-side `Instrument` rows used by brokerage events and holdings.

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
 from app.models.models import (
-    Transaction, DepositAccount, Wallet, DepositAccountBalance, CapitalGain
+    Transaction, DepositAccount, Wallet, DepositAccountBalance, CapitalGain, BrokerageEvent
     )
 from app.schemas.schemas import (
     TransactionCreate, TransactionRead,
@@ -22,6 +22,7 @@ from app.schemas.response import (
 )
 from app.core.exceptions import ImportMismatchError
 from app.utils.money import account_type_allows_negative_balance
+from app.crud.holding_crud import rebuild_account_holdings_from_events
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,17 @@ async def delete_transaction_for_user_rebalance(
     user_id: uuid.UUID,
     transaction_id: uuid.UUID,
 ) -> bool:
+    """
+    Delete a user's transaction and rebalance the deposit account balance chain.
+
+    When the transaction is the cash settlement of a brokerage event, the linked
+    event is deleted too and the brokerage account holdings are rebuilt from the
+    remaining events.
+
+    Raises:
+        ImportMismatchError: if the rebalanced chain would go negative.
+        HoldingQuantityExceeded: if a later SELL would exceed the rebuilt holding.
+    """
     tx = await session.scalar(
         select(Transaction)
         .join(DepositAccount, DepositAccount.id == Transaction.account_id)
@@ -310,6 +322,12 @@ async def delete_transaction_for_user_rebalance(
         .with_for_update()
     )
 
+    linked_event = await session.scalar(
+        select(BrokerageEvent)
+        .where(BrokerageEvent.transaction_id == tx_id)
+        .with_for_update()
+    )
+
     later = list(
         (await session.scalars(
             select(Transaction)
@@ -328,6 +346,11 @@ async def delete_transaction_for_user_rebalance(
     await session.execute(
         delete(CapitalGain).where(CapitalGain.transaction_id == tx_id)
     )
+
+    brokerage_account_id = None
+    if linked_event is not None:
+        brokerage_account_id = linked_event.brokerage_account_id
+        await session.delete(linked_event)
 
     await session.delete(tx)
     await session.flush()
@@ -348,6 +371,12 @@ async def delete_transaction_for_user_rebalance(
             )
 
     bal.available = running
+
+    if brokerage_account_id is not None:
+        await rebuild_account_holdings_from_events(
+            session=session,
+            account_id=brokerage_account_id,
+        )
 
     await session.flush()
     return True

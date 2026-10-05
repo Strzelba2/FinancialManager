@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   buildPerfRowsFromHoldings,
+  computeAllocationSeries,
   computeAssetsChartData,
   computeDashFlowData,
   computeExpensesYtd,
   computeGoalsProgress,
+  computePhysicalCash,
 } from '@/app/(dashboard)/wallet/page'
+import type { FxRates } from '@/lib/api/nbp'
 import { computeDashFlowProfit } from '@/features/wallet/components/DashFlowCard'
 import type { HoldingRawRow } from '@/lib/api/holdings'
 import type { WalletListItem, YearGoalOut } from '@/lib/types/wallet'
@@ -19,6 +22,7 @@ function walletFixture(overrides: Partial<WalletListItem> = {}): WalletListItem 
     accounts: [],
     brokerage_accounts: [],
     debts: [],
+    cash_holdings: [],
     real_estates: [],
     metal_holdings: [],
     capital_gains_deposit_ytd: {},
@@ -34,6 +38,25 @@ function walletFixture(overrides: Partial<WalletListItem> = {}): WalletListItem 
     dash_flow_8m: [],
     ...overrides,
   }
+}
+
+const fxRates: FxRates = {
+  'USD/PLN': 4,
+  'EUR/PLN': 4.25,
+  'PLN/USD': 0.25,
+  'PLN/EUR': 0.2353,
+  'USD/EUR': 0.9412,
+  'EUR/USD': 1.0625,
+  'CHF/PLN': 4.5,
+  'CHF/USD': 1.125,
+  'CHF/EUR': 1.0588,
+  'GBP/PLN': 5,
+  'GBP/USD': 1.25,
+  'GBP/EUR': 1.1765,
+}
+
+function cashHolding(id: string, amount: string, currency: WalletListItem['cash_holdings'][number]['currency']) {
+  return { id, wallet_id: 'wallet-1', name: id, amount, currency, note: null }
 }
 
 function performanceFixture(symbol: string, pnlPct: number, pnlAmount: number): HoldingRawRow {
@@ -97,6 +120,40 @@ describe('wallet page calculations', () => {
     expect(losers.every((row) => row.pl_pct < 0)).toBe(true)
     expect(gainers[0]).toMatchObject({ pl_pct: 100, pl_abs_fmt: '+1\u00a0000 PLN' })
     expect(losers[0]).toMatchObject({ pl_pct: -90, pl_abs_fmt: '-900 PLN' })
+  })
+
+  it('converts physical cash in PLN, GBP and CHF into the view currency across wallets', async () => {
+    await nextUiUnitStory('Wallet dashboard sums physical cash in the view currency', {
+      severity: 'critical',
+      tags: ['wallet', 'cash', 'money', 'next-ui'],
+    })
+
+    const wallets = [
+      walletFixture({ cash_holdings: [cashHolding('Sejf', '1000.00', 'PLN'), cashHolding('Koperta', '100.00', 'GBP')] }),
+      walletFixture({ id: 'wallet-2', cash_holdings: [cashHolding('Szwajcaria', '200.00', 'CHF')] }),
+      walletFixture({ id: 'wallet-3' }),
+    ]
+
+    // 1000 PLN + 100 GBP * 5 + 200 CHF * 4.5 = 2400 PLN
+    expect(computePhysicalCash(wallets, 'PLN', fxRates).toFixed(2)).toBe('2400.00')
+    expect(computePhysicalCash([walletFixture()], 'PLN', fxRates).toFixed(2)).toBe('0.00')
+  })
+
+  it('includes physical cash in the allocation by original currency', async () => {
+    await nextUiUnitStory('Wallet dashboard allocation includes physical cash', {
+      severity: 'normal',
+      tags: ['wallet', 'cash', 'allocation', 'next-ui'],
+    })
+
+    const series = computeAllocationSeries([
+      walletFixture({ cash_holdings: [cashHolding('Sejf', '500.00', 'PLN'), cashHolding('Koperta', '100.00', 'GBP')] }),
+    ], 'PLN', fxRates, new Map())
+
+    // 500 PLN and 100 GBP = 500 PLN, so each currency is 50% of the allocation.
+    expect(series).toEqual([
+      { name: 'PLN', value: 50 },
+      { name: 'GBP', value: 50 },
+    ])
   })
 
   it('shows YTD expenses as an absolute value while preserving the existing aggregate', async () => {

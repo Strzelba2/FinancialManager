@@ -6,9 +6,9 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.models.models import (
     FxMonthlySnapshot, DepositAccountMonthlySnapshot, BrokerageAccountMonthlySnapshot,
-    MetalHoldingMonthlySnapshot, RealEstateMonthlySnapshot, DepositAccount
+    MetalHoldingMonthlySnapshot, RealEstateMonthlySnapshot, DepositAccount, CashHoldingMonthlySnapshot
     )
-from app.models.enums import AccountType, Currency
+from app.models.enums import AccountType, Currency, InstrumentCurrency
 from app.utils.utils import json_safe
 
 
@@ -67,6 +67,21 @@ async def list_metal_monthly_snapshots(
     stmt = select(MetalHoldingMonthlySnapshot).where(
         MetalHoldingMonthlySnapshot.wallet_id.in_(wallet_ids),
         MetalHoldingMonthlySnapshot.month_key.in_(month_keys),
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+
+async def list_cash_monthly_snapshots(
+    session: AsyncSession,
+    wallet_ids: list[uuid.UUID],
+    month_keys: list[str],
+) -> list[CashHoldingMonthlySnapshot]:
+    if not wallet_ids or not month_keys:
+        return []
+    stmt = select(CashHoldingMonthlySnapshot).where(
+        CashHoldingMonthlySnapshot.wallet_id.in_(wallet_ids),
+        CashHoldingMonthlySnapshot.month_key.in_(month_keys),
     )
     res = await session.execute(stmt)
     return list(res.scalars().all())
@@ -199,6 +214,31 @@ async def upsert_real_estate_monthly_snapshot(
         )
         .on_conflict_do_update(
             constraint="uq_re_monthly_snapshot",
+            set_={"currency": currency, "value": value, "updated_at": func.now()},
+        )
+    )
+    await session.execute(stmt)
+
+
+async def upsert_cash_monthly_snapshot(
+    session: AsyncSession,
+    wallet_id: uuid.UUID,
+    cash_holding_id: uuid.UUID,
+    month_key: str,
+    currency: InstrumentCurrency,
+    value: Decimal,
+) -> None:
+    stmt = (
+        insert(CashHoldingMonthlySnapshot)
+        .values(
+            wallet_id=wallet_id,
+            cash_holding_id=cash_holding_id,
+            month_key=month_key,
+            currency=currency,
+            value=value,
+        )
+        .on_conflict_do_update(
+            constraint="uq_cash_monthly_snapshot",
             set_={"currency": currency, "value": value, "updated_at": func.now()},
         )
     )

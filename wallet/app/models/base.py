@@ -390,6 +390,19 @@ class DebtBase(SQLModel):
                                description="Planned end date (timezone-aware).",)
     
     
+class CashHoldingBase(SQLModel):
+    model_config = ConfigDict(validate_assignment=True, from_attributes=True)
+
+    name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255), nullable=False))
+    amount: Q2NonNeg = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False),
+                             description="Physical cash amount (non-negative).")
+    currency: InstrumentCurrency = Field(
+        sa_column=sa.Column(sa.Enum(InstrumentCurrency, name="instrument_currency_enum"), nullable=False),
+        description="Cash currency (PLN/USD/EUR/GBP/CHF).",
+    )
+    note: NoneIfEmpty = Field(default=None, sa_column=sa.Column(sa.String(255), nullable=True))
+
+
 class RecurringExpenseBase(SQLModel):
     name: NonEmptyStr = Field(sa_column=sa.Column(sa.String(255), nullable=False))
     category: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(64), nullable=True))
@@ -455,6 +468,14 @@ class BrokerageAccountMonthlySnapshotBase(SQLModel):
 class MetalHoldingMonthlySnapshotBase(SQLModel):
     month_key: str = Field(sa_column=sa.Column(sa.String(7), nullable=False, index=True))
     currency: Currency = Field(sa_column=sa.Column(sa.Enum(Currency, name="currency_enum"), nullable=False))
+    value: Decimal = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
+
+
+class CashHoldingMonthlySnapshotBase(SQLModel):
+    month_key: str = Field(sa_column=sa.Column(sa.String(7), nullable=False, index=True))
+    currency: InstrumentCurrency = Field(
+        sa_column=sa.Column(sa.Enum(InstrumentCurrency, name="instrument_currency_enum"), nullable=False)
+    )
     value: Decimal = Field(sa_column=sa.Column(sa.Numeric(20, 2), nullable=False, server_default="0"))
 
 

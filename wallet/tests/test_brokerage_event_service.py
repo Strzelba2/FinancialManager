@@ -18,7 +18,11 @@ from app.api.services.brokerage_event import (
 )
 from app.api.services.brokerage_history_import import import_brokerage_history_service
 from app.core.exceptions import ImportMismatchError
-from app.crud.broker_event_crud import rebuild_account_holdings_from_events
+from app.crud.broker_event_crud import (
+    delete_brokerage_event_and_rebuild_holding,
+    rebuild_account_holdings_from_events,
+)
+from app.crud.transaction_crud import delete_transaction_for_user_rebalance
 from app.crud.holding_crud import (
     HoldingQuantityExceeded,
     apply_conversion_to_holding_pair,
@@ -1579,3 +1583,370 @@ class TestBrokerageHoldingReplay(unittest.IsolatedAsyncioTestCase):
         assert "Cannot sell 10 WORK" in exc_info.value.detail
         assert session.flush.await_count == 1
         session.add.assert_not_called()
+
+
+@allure.epic("Unit Tests")
+@allure.feature("Wallet")
+@allure.story("Brokerage cash settlement transaction and event are deleted together")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("wallet", "brokerage", "transactions", "holdings", "financial-data", "unit")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "A BUY/SELL/DIV event creates a linked cash transaction on the PLN deposit account. "
+    "Deleting that transaction must also delete the event and rebuild holdings from the "
+    "remaining events; deleting the event must also delete the transaction and rebalance "
+    "cash. Scenario: opening balance 1000.00 PLN, BUY 5 PKN @ 50.000 (-250.00), "
+    "BUY 10 PKN @ 55.500 (-555.00). Deleting the second BUY restores 750.00 PLN and "
+    "a 5 PKN @ 50.000 holding."
+)
+class TestBrokerageCashTransactionLink(unittest.IsolatedAsyncioTestCase):
+    class _ScalarRows:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return TestBrokerageCashTransactionLink._ScalarRows(self._rows)
+
+    def setUp(self) -> None:
+        self.user_id = uuid4()
+        self.brokerage_account_id = uuid4()
+        self.deposit_id = uuid4()
+        self.instrument_id = uuid4()
+        self.tx_id = uuid4()
+
+    def _event(self, kind, quantity, price, minute, transaction_id=None):
+        return SimpleNamespace(
+            id=uuid4(),
+            brokerage_account_id=self.brokerage_account_id,
+            instrument_id=self.instrument_id,
+            target_instrument_id=None,
+            transaction_id=transaction_id,
+            instrument_symbol="PKN",
+            kind=kind,
+            quantity=Decimal(quantity),
+            price=Decimal(price),
+            split_ratio=Decimal("0"),
+            note=None,
+            trade_at=datetime(2026, 9, 1, 10, minute, tzinfo=timezone.utc),
+        )
+
+    def _second_buy_tx(self):
+        return SimpleNamespace(
+            id=self.tx_id,
+            account_id=self.deposit_id,
+            date_transaction=datetime(2026, 9, 1, 10, 2, tzinfo=timezone.utc),
+            amount=Decimal("-555.00"),
+            balance_before=Decimal("750.00"),
+            balance_after=Decimal("195.00"),
+        )
+
+    def _delete_session(self, tx, linked_event, later, remaining_events, existing_holdings):
+        balance = SimpleNamespace(available=Decimal("195.00"))
+        prev = SimpleNamespace(balance_after=Decimal("750.00"))
+        session = Mock()
+        session.scalar = AsyncMock(side_effect=[
+            tx,                   # ownership check
+            "BROKERAGE",          # account type
+            balance,              # balance row
+            prev,                 # previous tx: first BUY, balance_after 750.00
+            linked_event,         # linked brokerage event
+        ])
+        session.scalars = AsyncMock(return_value=self._ScalarRows(later))
+        session.execute = AsyncMock(side_effect=[
+            None,                                  # delete capital gains
+            self._Result(remaining_events),        # rebuild: events
+            self._Result(existing_holdings),       # rebuild: current holdings
+        ])
+        session.delete = AsyncMock()
+        session.flush = AsyncMock()
+        session.add = Mock()
+        return session, balance
+
+    async def test_manual_buy_links_event_to_created_cash_transaction(self) -> None:
+        payload = BrokerageEventCreate(
+            brokerage_account_id=self.brokerage_account_id,
+            instrument_symbol="PKN",
+            instrument_mic="XWAR",
+            instrument_name="ORLEN",
+            kind=BrokerageEventKind.TRADE_BUY,
+            quantity=Decimal("10"),
+            price=Decimal("55.5"),
+            currency=Currency.PLN,
+            split_ratio=Decimal("0"),
+            trade_at=datetime(2026, 9, 1, 10, 2, tzinfo=timezone.utc),
+        )
+        session = Mock()
+        session.refresh = AsyncMock()
+        holding = SimpleNamespace(quantity=Decimal("5"), avg_cost=Decimal("50.000"))
+        event = SimpleNamespace(id=uuid4(), brokerage_account_id=self.brokerage_account_id, transaction_id=None)
+        create_transactions_mock = AsyncMock(
+            return_value={"created": 1, "transaction_ids": [str(self.tx_id)]}
+        )
+
+        with (
+            patch(
+                "app.api.services.brokerage_event.get_brokerage_account",
+                new=AsyncMock(return_value=SimpleNamespace(id=self.brokerage_account_id)),
+            ),
+            patch(
+                "app.api.services.brokerage_event.get_or_create_stock_backed_instrument",
+                new=AsyncMock(return_value=SimpleNamespace(id=self.instrument_id)),
+            ),
+            patch(
+                "app.api.services.brokerage_event.find_duplicate_brokerage_event",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "app.api.services.brokerage_event.get_or_create_holding",
+                new=AsyncMock(return_value=holding),
+            ),
+            patch(
+                "app.api.services.brokerage_event.create_brokerage_event",
+                new=AsyncMock(return_value=event),
+            ),
+            patch(
+                "app.api.services.brokerage_event.resolve_deposit_for_event",
+                new=AsyncMock(return_value=SimpleNamespace(id=self.deposit_id)),
+            ),
+            patch(
+                "app.api.services.brokerage_event.create_transactions_service",
+                new=create_transactions_mock,
+            ),
+        ):
+            await create_brokerage_event_and_update_holding(session, payload)
+
+        tx_request = create_transactions_mock.await_args.kwargs["payload"]
+        assert tx_request.account_id == self.deposit_id
+        assert tx_request.transactions[0].amount == Decimal("-555.00")
+        assert tx_request.transactions[0].description == "BUY PKN 10.00 @ 55.500"
+        assert event.transaction_id == self.tx_id
+        assert holding.quantity == Decimal("15.00")
+
+    async def test_deleting_linked_buy_transaction_deletes_event_and_rebuilds_holding(self) -> None:
+        tx = self._second_buy_tx()
+        first_buy = self._event(BrokerageEventKind.TRADE_BUY, "5", "50.000", minute=1)
+        second_buy = self._event(BrokerageEventKind.TRADE_BUY, "10", "55.500", minute=2, transaction_id=self.tx_id)
+        stale_holding = SimpleNamespace(
+            account_id=self.brokerage_account_id,
+            instrument_id=self.instrument_id,
+            quantity=Decimal("15"),
+            avg_cost=Decimal("53.666666"),
+        )
+        session, balance = self._delete_session(
+            tx=tx,
+            linked_event=second_buy,
+            later=[],
+            remaining_events=[first_buy],
+            existing_holdings=[stale_holding],
+        )
+
+        ok = await delete_transaction_for_user_rebalance(session, self.user_id, self.tx_id)
+
+        assert ok is True
+        deleted = [call.args[0] for call in session.delete.await_args_list]
+        assert deleted == [second_buy, tx, stale_holding]
+        assert balance.available == Decimal("750.00")
+        added = [call.args[0] for call in session.add.call_args_list]
+        assert len(added) == 1
+        assert added[0].account_id == self.brokerage_account_id
+        assert added[0].instrument_id == self.instrument_id
+        assert added[0].quantity == Decimal("5.00")
+        assert added[0].avg_cost == Decimal("50.000")
+
+    async def test_deleting_linked_buy_rejects_when_later_sell_would_exceed_holding(self) -> None:
+        tx = self._second_buy_tx()
+        first_buy = self._event(BrokerageEventKind.TRADE_BUY, "5", "50.000", minute=1)
+        second_buy = self._event(BrokerageEventKind.TRADE_BUY, "10", "55.500", minute=2, transaction_id=self.tx_id)
+        later_sell = self._event(BrokerageEventKind.TRADE_SELL, "8.00", "60.000", minute=3, transaction_id=uuid4())
+        later_sell_cash = SimpleNamespace(amount=Decimal("480.00"))
+        session, _balance = self._delete_session(
+            tx=tx,
+            linked_event=second_buy,
+            later=[later_sell_cash],
+            remaining_events=[first_buy, later_sell],
+            existing_holdings=[],
+        )
+
+        with pytest.raises(HoldingQuantityExceeded) as exc_info:
+            await delete_transaction_for_user_rebalance(session, self.user_id, self.tx_id)
+
+        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Cannot sell 8.00 PKN" in exc_info.value.detail
+        assert "missing 3.00" in exc_info.value.detail
+        session.add.assert_not_called()
+
+    async def test_deleting_plain_cash_transaction_does_not_touch_holdings(self) -> None:
+        tx = self._second_buy_tx()
+        session, balance = self._delete_session(
+            tx=tx,
+            linked_event=None,
+            later=[],
+            remaining_events=[],
+            existing_holdings=[],
+        )
+
+        with patch("app.crud.transaction_crud.rebuild_account_holdings_from_events", new=AsyncMock()) as rebuild:
+            ok = await delete_transaction_for_user_rebalance(session, self.user_id, self.tx_id)
+
+        assert ok is True
+        assert [call.args[0] for call in session.delete.await_args_list] == [tx]
+        assert balance.available == Decimal("750.00")
+        rebuild.assert_not_awaited()
+
+    async def test_deleting_other_users_transaction_leaves_event_and_holdings(self) -> None:
+        session = Mock()
+        session.scalar = AsyncMock(return_value=None)
+        session.delete = AsyncMock()
+        session.execute = AsyncMock()
+
+        with patch("app.crud.transaction_crud.rebuild_account_holdings_from_events", new=AsyncMock()) as rebuild:
+            ok = await delete_transaction_for_user_rebalance(session, uuid4(), self.tx_id)
+
+        assert ok is False
+        session.delete.assert_not_awaited()
+        session.execute.assert_not_awaited()
+        rebuild.assert_not_awaited()
+
+    async def test_deleting_linked_event_deletes_cash_transaction_with_rebalance(self) -> None:
+        event = self._event(BrokerageEventKind.TRADE_BUY, "10", "55.500", minute=2, transaction_id=self.tx_id)
+        session = Mock()
+        session.get = AsyncMock(side_effect=[
+            event,
+            SimpleNamespace(wallet_id=uuid4()),
+            SimpleNamespace(user_id=self.user_id),
+        ])
+        session.delete = AsyncMock()
+
+        with (
+            patch(
+                "app.crud.broker_event_crud.delete_transaction_for_user_rebalance",
+                new=AsyncMock(return_value=True),
+            ) as delete_tx,
+            patch("app.crud.broker_event_crud.rebuild_account_holdings_from_events", new=AsyncMock()) as rebuild,
+        ):
+            ok = await delete_brokerage_event_and_rebuild_holding(session, self.user_id, event.id)
+
+        assert ok is True
+        delete_tx.assert_awaited_once_with(session=session, user_id=self.user_id, transaction_id=self.tx_id)
+        session.delete.assert_not_awaited()
+        rebuild.assert_not_awaited()
+
+    async def test_deleting_unlinked_event_rebuilds_holdings_without_cash_change(self) -> None:
+        event = self._event(BrokerageEventKind.SPLIT, "0", "0", minute=2)
+        session = Mock()
+        session.get = AsyncMock(side_effect=[
+            event,
+            SimpleNamespace(wallet_id=uuid4()),
+            SimpleNamespace(user_id=self.user_id),
+        ])
+        session.delete = AsyncMock()
+        session.flush = AsyncMock()
+
+        with (
+            patch("app.crud.broker_event_crud.delete_transaction_for_user_rebalance", new=AsyncMock()) as delete_tx,
+            patch("app.crud.broker_event_crud.rebuild_account_holdings_from_events", new=AsyncMock()) as rebuild,
+        ):
+            ok = await delete_brokerage_event_and_rebuild_holding(session, self.user_id, event.id)
+
+        assert ok is True
+        delete_tx.assert_not_awaited()
+        session.delete.assert_awaited_once_with(event)
+        rebuild.assert_awaited_once_with(session=session, account_id=self.brokerage_account_id)
+
+    async def test_deleting_other_users_event_keeps_event_and_cash(self) -> None:
+        event = self._event(BrokerageEventKind.TRADE_BUY, "10", "55.500", minute=2, transaction_id=self.tx_id)
+        session = Mock()
+        session.get = AsyncMock(side_effect=[
+            event,
+            SimpleNamespace(wallet_id=uuid4()),
+            SimpleNamespace(user_id=uuid4()),
+        ])
+        session.delete = AsyncMock()
+
+        with patch("app.crud.broker_event_crud.delete_transaction_for_user_rebalance", new=AsyncMock()) as delete_tx:
+            ok = await delete_brokerage_event_and_rebuild_holding(session, self.user_id, event.id)
+
+        assert ok is False
+        delete_tx.assert_not_awaited()
+        session.delete.assert_not_awaited()
+
+    async def test_history_import_links_trade_event_to_its_cash_row(self) -> None:
+        transfer_tx_id = uuid4()
+        trade_tx_id = uuid4()
+        event = SimpleNamespace(id=uuid4(), transaction_id=None)
+        payload = BrokerageHistoryImportRequest(
+            brokerage_account_id=self.brokerage_account_id,
+            rows=[
+                BrokerageHistoryImportRow(
+                    row_number=1,
+                    operation_type="TRANSFER",
+                    trade_at=datetime(2026, 2, 11, 9, 0, tzinfo=timezone.utc),
+                    currency=Currency.PLN,
+                    amount=Decimal("100.00"),
+                    amount_after=Decimal("100.00"),
+                    description="Wplata na rachunek maklerski",
+                ),
+                BrokerageHistoryImportRow(
+                    row_number=2,
+                    operation_type="FORCED_SELL",
+                    trade_at=datetime(2026, 2, 12, 9, 0, tzinfo=timezone.utc),
+                    currency=Currency.PLN,
+                    amount=Decimal("125.00"),
+                    amount_after=Decimal("225.00"),
+                    description="Wykup przymusowy OLDCO",
+                    instrument_symbol="OLD",
+                    instrument_mic="XWAR",
+                    instrument_name="OLDCO",
+                ),
+            ],
+        )
+
+        with (
+            patch(
+                "app.api.services.brokerage_history_import.list_brokerage_deposit_links",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(currency=Currency.PLN, deposit_account_id=self.deposit_id),
+                    ]
+                ),
+            ),
+            patch(
+                "app.api.services.brokerage_history_import.resolve_stock_instrument",
+                new=AsyncMock(return_value=SimpleNamespace(symbol="OLD", mic="XWAR")),
+            ),
+            patch(
+                "app.api.services.brokerage_history_import.get_or_create_stock_backed_instrument",
+                new=AsyncMock(return_value=SimpleNamespace(id=self.instrument_id)),
+            ),
+            patch(
+                "app.api.services.brokerage_history_import.get_holding_by_keys",
+                new=AsyncMock(return_value=SimpleNamespace(quantity=Decimal("5"))),
+            ),
+            patch(
+                "app.api.services.brokerage_history_import.create_brokerage_event_and_update_holding",
+                new=AsyncMock(return_value=(event, SimpleNamespace())),
+            ),
+            patch(
+                "app.api.services.brokerage_history_import.find_duplicate_transaction",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "app.api.services.brokerage_history_import.create_transactions_rebalance_service",
+                new=AsyncMock(return_value={"created": 2, "transaction_ids": [str(transfer_tx_id), str(trade_tx_id)]}),
+            ),
+        ):
+            summary = await import_brokerage_history_service(
+                session=Mock(),
+                user_id=self.user_id,
+                payload=payload,
+            )
+
+        assert summary.cash_transactions_created == 2
+        assert event.transaction_id == trade_tx_id

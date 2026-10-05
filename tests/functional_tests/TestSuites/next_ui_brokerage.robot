@@ -44,7 +44,7 @@ User Can Manage Brokerage Event And Bossa History Import Guards
     Click    xpath=(//div[@role="dialog"]//button[@role="combobox"])[3]
     Click    xpath=//*[@role="option"][contains(normalize-space(.), "${brokerage}[symbol]")]
     Fill Text    xpath=//label[normalize-space(.)='Ilość']/following::input[1]    1
-    Fill Text    xpath=//label[normalize-space(.)='Cena / kwota']/following::input[1]    100
+    Fill Text    xpath=//label[normalize-space(.)='Cena za sztukę']/following::input[1]    100
     Click    text=Wybierz datę i godzinę
     Click    role=button[name=/Teraz/i]
     Click    role=button[name=/Dodaj operację/i]

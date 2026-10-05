@@ -155,6 +155,46 @@ describe('WalletManagerPage', () => {
     expect(screen.getByText('+50.0%')).toBeInTheDocument()
   })
 
+  it('shows physical cash, includes it in the wallet total and compares it with the previous snapshot', async () => {
+    await nextUiUnitStory('Wallet manager includes physical cash in totals and month-over-month change', {
+      severity: 'critical',
+      tags: ['wallet', 'cash', 'wallet-manager', 'snapshots', 'money', 'next-ui'],
+    })
+    const now = new Date()
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const prevKey = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`
+    const wallet: WalletManagerNode = {
+      id: 'wallet-1',
+      name: 'FUNDUSZ Rodzinny',
+      deposit_accounts: [],
+      brokerage_accounts: [],
+      metals: null,
+      real_estate: null,
+      physical_cash: {
+        count: 2,
+        value: '1500',
+        ccy: 'PLN',
+        items: [
+          { id: 'cash-1', name: 'Sejf', amount: '1000', amount_ccy: 'PLN', value: '1000', ccy: 'PLN' },
+          { id: 'cash-2', name: 'Funty', amount: '100', amount_ccy: 'GBP', value: '500', ccy: 'PLN' },
+        ],
+      },
+      snapshots: {
+        [prevKey]: { ccy: 'PLN', cash_deposit: '0', cash_physical: '1200', cash_broker: '0', stocks: '0', metals: '0', real_estate: '0' },
+      },
+    }
+
+    renderManager([wallet])
+
+    expect(screen.getByText('Gotówka fizyczna')).toBeInTheDocument()
+    expect(screen.getByText('Funty')).toBeInTheDocument()
+    expect(screen.getByText(/100,00\s*GBP/)).toBeInTheDocument()
+    expect(screen.getAllByText(/1500,00\s*PLN/).length).toBeGreaterThan(0)
+    // 1500 PLN now vs 1200 PLN in the previous snapshot.
+    expect(screen.getByText('+25.0%')).toBeInTheDocument()
+    expect(screen.getByText('Gotówka 100%')).toBeInTheDocument()
+  })
+
   it('converts CHF brokerage cash subaccounts to the view currency', async () => {
     await nextUiUnitStory('Wallet manager converts CHF cash subaccounts to the selected view currency', {
       severity: 'critical',

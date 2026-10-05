@@ -13,7 +13,7 @@ from app.api.services.wallet_manager_service import (
     create_monthly_snapshot_for_user_service,
     get_wallet_manager_tree_service,
 )
-from app.models.enums import AccountType, Currency
+from app.models.enums import AccountType, Currency, InstrumentCurrency
 
 pytestmark = pytest.mark.unit
 
@@ -61,6 +61,8 @@ class WalletManagerServiceUnitTests(unittest.IsolatedAsyncioTestCase):
             patch("app.api.services.wallet_manager_service.list_real_estates", new=AsyncMock(return_value=[])),
             patch("app.api.services.wallet_manager_service.list_metal_monthly_snapshots", new=AsyncMock(return_value=[])),
             patch("app.api.services.wallet_manager_service.list_real_estate_monthly_snapshots", new=AsyncMock(return_value=[])),
+            patch("app.api.services.wallet_manager_service.list_cash_monthly_snapshots", new=AsyncMock(return_value=[])),
+            patch("app.api.services.wallet_manager_service.list_cash_holdings_for_wallets", new=AsyncMock(return_value=[])),
         ):
             tree = await get_wallet_manager_tree_service(
                 session=session,
@@ -147,6 +149,7 @@ class WalletManagerServiceUnitTests(unittest.IsolatedAsyncioTestCase):
             ) as bro_upsert,
             patch("app.api.services.wallet_manager_service.list_metal_holdings_by_wallet", new=AsyncMock(return_value=[])),
             patch("app.api.services.wallet_manager_service.list_real_estates", new=AsyncMock(return_value=[])),
+            patch("app.api.services.wallet_manager_service.list_cash_holdings_for_wallets", new=AsyncMock(return_value=[])),
         ):
             result = await create_monthly_snapshot_for_user_service(
                 session=session,
@@ -156,7 +159,7 @@ class WalletManagerServiceUnitTests(unittest.IsolatedAsyncioTestCase):
                 stock_client=stock_client,
             )
 
-        self.assertEqual(result, (month, True, 1, 1, 0, 0))
+        self.assertEqual(result, (month, True, 1, 1, 0, 0, 0))
         fx_upsert.assert_awaited_once_with(session, month_key=month, rates_json={"USD/PLN": Decimal("4.00")})
         dep_upsert.assert_awaited_once_with(
             session,
@@ -177,3 +180,168 @@ class WalletManagerServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         )
         stock_client.get_latest_quotes_for_symbols.assert_awaited_once_with(symbols=["PKO"])
         stock_client.sync_daily_candles.assert_awaited_once_with("CPIYPL.M")
+
+
+OCT_FX = {
+    "EUR/PLN": Decimal("4.3745"),
+    "GBP/PLN": Decimal("5.1353"),
+    "USD/PLN": Decimal("3.8881"),
+}
+
+
+def _tree_patches(wallet, cash_rows, cash_snaps, fx_rows=()):
+    prefix = "app.api.services.wallet_manager_service."
+    empty = AsyncMock(return_value=[])
+    return [
+        patch(prefix + "list_wallets", new=AsyncMock(return_value=[wallet])),
+        patch(prefix + "list_fx_rows_for_months", new=AsyncMock(return_value=list(fx_rows))),
+        patch(prefix + "list_deposit_accounts_for_wallets", new=empty),
+        patch(prefix + "count_transactions_since", new=AsyncMock(return_value={})),
+        patch(prefix + "list_deposit_monthly_snapshots", new=empty),
+        patch(prefix + "list_brokerage_accounts", new=empty),
+        patch(prefix + "count_brokerage_events_since", new=AsyncMock(return_value={})),
+        patch(prefix + "list_brokerage_monthly_snapshots", new=empty),
+        patch(prefix + "list_brokerage_deposit_links", new=empty),
+        patch(prefix + "list_holdings", new=empty),
+        patch(prefix + "list_metal_holdings_by_wallet", new=empty),
+        patch(prefix + "list_real_estates", new=empty),
+        patch(prefix + "list_metal_monthly_snapshots", new=empty),
+        patch(prefix + "list_real_estate_monthly_snapshots", new=empty),
+        patch(prefix + "list_cash_monthly_snapshots", new=AsyncMock(return_value=cash_snaps)),
+        patch(prefix + "list_cash_holdings_for_wallets", new=AsyncMock(return_value=cash_rows)),
+    ]
+
+
+def _cash(wallet_id, name, amount, currency):
+    return SimpleNamespace(id=uuid4(), wallet_id=wallet_id, name=name, amount=Decimal(amount), currency=currency)
+
+
+@allure.epic("Unit Tests")
+@allure.feature("Wallet")
+@allure.story("Wallet manager snapshots include physical cash")
+@allure.severity(allure.severity_level.CRITICAL)
+@allure.tag("wallet", "snapshots", "cash", "money", "fx", "financial-data")
+@allure.link("https://github.com/Strzelba2/FinancialManager", name="GitHub")
+@allure.description(
+    "Physical cash is stored in monthly snapshots in its original currency and is "
+    "included in the wallet-manager current value and snapshot totals. Scenario: "
+    "226.50 PLN + 1092.00 PLN + 196.70 EUR + 130.00 GBP with EUR/PLN 4.3745 and "
+    "GBP/PLN 5.1353 equals 2846.55 PLN."
+)
+class WalletManagerPhysicalCashTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.wallet_id = uuid4()
+        self.wallet = SimpleNamespace(id=self.wallet_id, name="FUNDUSZ Rodzinny", currency=Currency.PLN)
+        self.cash_rows = [
+            _cash(self.wallet_id, "Edyty Portfel", "226.50", InstrumentCurrency.PLN),
+            _cash(self.wallet_id, "Artur Portfel", "1092.00", InstrumentCurrency.PLN),
+            _cash(self.wallet_id, "Euro", "196.70", InstrumentCurrency.EUR),
+            _cash(self.wallet_id, "funty", "130.00", InstrumentCurrency.GBP),
+        ]
+
+    async def test_create_monthly_snapshot_upserts_physical_cash_in_original_currency(self) -> None:
+        session = Mock()
+        session.begin.return_value = _AsyncContext()
+        stock_client = Mock(get_latest_quotes_for_symbols=AsyncMock(return_value={}), sync_daily_candles=AsyncMock())
+        prefix = "app.api.services.wallet_manager_service."
+
+        with (
+            patch(prefix + "upsert_fx_monthly_snapshot_uow", new=AsyncMock()),
+            patch(prefix + "list_wallets", new=AsyncMock(return_value=[self.wallet])),
+            patch(prefix + "list_deposit_accounts_for_wallets", new=AsyncMock(return_value=[])),
+            patch(prefix + "list_brokerage_accounts", new=AsyncMock(return_value=[])),
+            patch(prefix + "list_brokerage_deposit_links", new=AsyncMock(return_value=[])),
+            patch(prefix + "list_holdings", new=AsyncMock(return_value=[])),
+            patch(prefix + "list_metal_holdings_by_wallet", new=AsyncMock(return_value=[])),
+            patch(prefix + "list_real_estates", new=AsyncMock(return_value=[])),
+            patch(prefix + "list_cash_holdings_for_wallets", new=AsyncMock(return_value=self.cash_rows)),
+            patch(prefix + "upsert_cash_monthly_snapshot", new=AsyncMock()) as cash_upsert,
+        ):
+            result = await create_monthly_snapshot_for_user_service(
+                session=session,
+                user_id=uuid4(),
+                month_key_snap="2026-10",
+                currency_rate={k: str(v) for k, v in OCT_FX.items()},
+                stock_client=stock_client,
+            )
+
+        self.assertEqual(result, ("2026-10", True, 0, 0, 0, 0, 4))
+        gbp_call = cash_upsert.await_args_list[3]
+        self.assertEqual(gbp_call.kwargs, {
+            "wallet_id": self.wallet_id,
+            "cash_holding_id": self.cash_rows[3].id,
+            "month_key": "2026-10",
+            "currency": InstrumentCurrency.GBP,
+            "value": Decimal("130.00"),
+        })
+
+    async def test_create_monthly_snapshot_without_wallets_returns_zero_counts(self) -> None:
+        session = Mock()
+        session.begin.return_value = _AsyncContext()
+
+        with (
+            patch("app.api.services.wallet_manager_service.upsert_fx_monthly_snapshot_uow", new=AsyncMock()),
+            patch("app.api.services.wallet_manager_service.list_wallets", new=AsyncMock(return_value=[])),
+        ):
+            result = await create_monthly_snapshot_for_user_service(
+                session=session,
+                user_id=uuid4(),
+                month_key_snap="2026-10",
+                currency_rate={},
+                stock_client=Mock(),
+            )
+
+        self.assertEqual(result, ("2026-10", True, 0, 0, 0, 0, 0))
+
+    async def test_tree_includes_current_physical_cash_and_snapshot_cash_in_wallet_currency(self) -> None:
+        cash_snaps = [
+            SimpleNamespace(wallet_id=self.wallet_id, month_key=mk, value=c.amount, currency=c.currency)
+            for c in self.cash_rows
+            for mk in ["2026-10"]
+        ]
+        fx_row = SimpleNamespace(month_key="2026-10", rates_json={k: str(v) for k, v in OCT_FX.items()})
+        patches = _tree_patches(self.wallet, self.cash_rows, cash_snaps, fx_rows=[fx_row])
+
+        with patch("app.api.services.wallet_manager_service.last_n_month_keys", return_value=["2026-10"]):
+            for p in patches:
+                p.start()
+            try:
+                tree = await get_wallet_manager_tree_service(
+                    session=Mock(),
+                    user_id=uuid4(),
+                    months=1,
+                    stock_client=Mock(get_latest_quotes_for_symbols=AsyncMock(return_value={})),
+                    currency_rate={k: str(v) for k, v in OCT_FX.items()},
+                )
+            finally:
+                for p in patches:
+                    p.stop()
+
+        physical = tree[0]["physical_cash"]
+        self.assertEqual(physical["count"], 4)
+        self.assertEqual(physical["ccy"], "PLN")
+        self.assertEqual(physical["value"].quantize(Decimal("0.01")), Decimal("2846.55"))
+        self.assertEqual(physical["items"][3]["amount_ccy"], "GBP")
+        self.assertEqual(tree[0]["snapshots"]["2026-10"]["cash_physical"].quantize(Decimal("0.01")), Decimal("2846.55"))
+
+    async def test_tree_flags_cash_without_fx_rate_instead_of_counting_it_at_face_value(self) -> None:
+        patches = _tree_patches(self.wallet, [self.cash_rows[3]], [])
+
+        for p in patches:
+            p.start()
+        try:
+            tree = await get_wallet_manager_tree_service(
+                session=Mock(),
+                user_id=uuid4(),
+                months=1,
+                stock_client=Mock(get_latest_quotes_for_symbols=AsyncMock(return_value={})),
+                currency_rate={},
+            )
+        finally:
+            for p in patches:
+                p.stop()
+
+        physical = tree[0]["physical_cash"]
+        self.assertEqual(physical["value"], Decimal("0"))
+        self.assertEqual(physical["health"]["missing_fx"], 1)
+

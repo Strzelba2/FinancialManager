@@ -53,6 +53,7 @@ describe('TransactionsDialog – brokerage form', () => {
     )
 
     await screen.findByText('Rynek *')
+    expect(screen.getByText('Cena za sztukę')).toBeInTheDocument()
     fireEvent.click(screen.getAllByRole('combobox')[1]!)
     fireEvent.click(await screen.findByRole('option', { name: 'XWAR · GPW' }))
 

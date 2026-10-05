@@ -469,6 +469,29 @@ function TabButton({
   )
 }
 
+const LAST_MANUAL_ACCOUNT_KEY = 'transactions_last_manual_account'
+
+// Pick the account used for the last successful manual transaction when it is still
+// available; otherwise fall back to the first account. Storage may be blocked.
+function initialManualAccountId(accounts: TransactionAccountOpt[]): string {
+  let lastId: string | null = null
+  try {
+    lastId = window.localStorage.getItem(LAST_MANUAL_ACCOUNT_KEY)
+  } catch {
+    lastId = null
+  }
+  if (lastId && accounts.some((account) => account.id === lastId)) return lastId
+  return accounts[0]?.id ?? ''
+}
+
+function rememberManualAccountId(accountId: string) {
+  try {
+    window.localStorage.setItem(LAST_MANUAL_ACCOUNT_KEY, accountId)
+  } catch {
+    // Remembering the account is a convenience only.
+  }
+}
+
 function ManualTab({
   accounts,
   onSuccess,
@@ -477,7 +500,7 @@ function ManualTab({
   onSuccess: () => void
 }) {
   const [isPending, startTransition] = useTransition()
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
+  const [accountId, setAccountId] = useState(() => initialManualAccountId(accounts))
   const [amount, setAmount] = useState('')
   const [description, setDescription] = useState('')
   const [capitalGainKind, setCapitalGainKind] = useState<CapitalGainKind>('TRANSACTION')
@@ -523,6 +546,7 @@ function ManualTab({
         return
       }
 
+      rememberManualAccountId(accountId)
       toast.success('Pomyślnie dodano transakcję')
       onSuccess()
     })
@@ -1680,7 +1704,7 @@ function BrokerageTab({
             />
           </div>
           <div className="space-y-1">
-            <Label className="text-white/70 text-xs">{kind === 'ADJUSTMENT' ? 'Śr. cena po korekcie' : 'Cena / kwota'}</Label>
+            <Label className="text-white/70 text-xs">{kind === 'ADJUSTMENT' ? 'Śr. cena po korekcie' : 'Cena za sztukę'}</Label>
             <Input
               value={price}
               onChange={(event) => setPrice(event.target.value)}

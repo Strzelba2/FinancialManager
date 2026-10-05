@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 from typing import Tuple, Optional
 from decimal import Decimal
 import logging
+import uuid
 
 from app.models.models import Holding, BrokerageEvent
 from app.models.enums import BrokerageEventKind, CapitalGainKind, Currency, InstrumentCurrency, InstrumentType
@@ -341,6 +342,7 @@ async def create_brokerage_event_and_update_holding(
             )
 
             transaction_id = tx_summary['transaction_ids'][-1]
+            event.transaction_id = uuid.UUID(str(transaction_id))
 
         if pnl_settle != 0:
             data = CapitalGainCreate(

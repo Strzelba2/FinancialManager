@@ -178,9 +178,17 @@ sequenceDiagram
     Wallet->>Db: Lock account balance and affected transaction chain
     Wallet->>Wallet: Remove row and recalculate later balances
     Wallet->>Wallet: Reject non-CREDIT negative intermediate balance
+    opt Transaction is linked to a brokerage event
+        Wallet->>Wallet: Delete event and rebuild account holdings
+        Wallet->>Wallet: Reject rebuild that oversells a later SELL
+    end
     Wallet->>Db: Persist corrected chain and final available balance
     Wallet-->>Next: ok
 ```
+
+A cash transaction created by a brokerage `BUY`, `SELL`, or `DIV` event is linked
+through `brokerage_events.transaction_id`. Deleting it also deletes the event and
+rebuilds holdings; see `docs/design/brokerage-holding-events.md`.
 
 ### Classify and report taxes
 
@@ -267,7 +275,8 @@ second HTTP create contract.
 
 Important wallet errors:
 
-- `400`: unknown user or a delete operation rejected by lifecycle validation.
+- `400`: unknown user or a delete operation rejected by lifecycle validation, including
+  a linked brokerage delete that would oversell a later `SELL`.
 - `404`: unknown account or transaction not owned by the current user.
 - `409`: duplicate transaction.
 - `422`: malformed input, balance mismatch, or a non-credit negative balance result.

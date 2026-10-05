@@ -90,6 +90,15 @@ class MetalHoldingItem(BaseModel):
     price_currency: Optional[Currency] = None
     
     
+class CashHoldingItem(BaseModel):
+    id: uuid.UUID
+    wallet_id: uuid.UUID
+    name: str
+    amount: Decimal
+    currency: InstrumentCurrency
+    note: Optional[str] = None
+
+
 class DebtItem(BaseModel):
     id: uuid.UUID
     name: str
@@ -148,6 +157,7 @@ class WalletListItem(BaseModel):
     metal_holdings: List[MetalHoldingItem] = Field(default_factory=list)
     
     debts: List[DebtItem] = Field(default_factory=list)
+    cash_holdings: List[CashHoldingItem] = Field(default_factory=list)
     
     recurring_expenses_top: List[RecurringExpenseItem] = Field(default_factory=list)
     
@@ -492,6 +502,7 @@ class CreateMonthlySnapshotOut(BaseModel):
     bro_upserted: int
     metal_upserted: int
     re_upserted: int
+    cash_upserted: int = 0
     
     
 class WalletRenameIn(BaseModel):

@@ -31,6 +31,17 @@ export type BrokerageAccountListItem = {
   totals_by_currency: Record<string, string>  // { PLN: "1234.56", USD: "500.00" }
 }
 
+export type CashCurrency = Currency | 'GBP' | 'CHF'
+
+export type CashHoldingItem = {
+  id: string
+  wallet_id: string
+  name: string
+  amount: string
+  currency: CashCurrency
+  note: string | null
+}
+
 export type DebtItem = {
   id: string
   name: string
@@ -118,6 +129,7 @@ export type WalletListItem = {
   accounts: AccountListItem[]
   brokerage_accounts: BrokerageAccountListItem[]
   debts: DebtItem[]
+  cash_holdings: CashHoldingItem[]
   real_estates: RealEstateItem[]
   metal_holdings: MetalHoldingItem[]
   capital_gains_deposit_ytd: Record<string, string>

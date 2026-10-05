@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Holding, Instrument, BrokerageAccount, Wallet
+from app.models.models import Holding, Instrument, BrokerageAccount, BrokerageEvent, Wallet
 from app.models.enums import BrokerageEventKind
 from app.schemas.schemas import (
     HoldingCreate, HoldingUpdate, BrokerageEventCreate
@@ -374,3 +374,53 @@ def apply_conversion_to_holding_pair(
 
     target_holding.quantity = new_target_qty
     target_holding.avg_cost = (target_total_cost + carried_cost) / new_target_qty
+
+
+async def rebuild_account_holdings_from_events(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+) -> None:
+    """
+    Rebuild all holdings for a brokerage account from its event history.
+
+    Account-level replay is required for CONVERSION events because one event touches
+    both a source instrument and a target instrument.
+    """
+    event_rows = await session.execute(
+        select(BrokerageEvent)
+        .where(BrokerageEvent.brokerage_account_id == account_id)
+        .order_by(BrokerageEvent.trade_at.asc(), BrokerageEvent.id.asc())
+    )
+    events = list(event_rows.scalars().all())
+
+    current_rows = await session.execute(select(Holding).where(Holding.account_id == account_id))
+    for holding in current_rows.scalars().all():
+        await session.delete(holding)
+    await session.flush()
+
+    states: dict[uuid.UUID, Holding] = {}
+
+    def state_for(instrument_id: uuid.UUID) -> Holding:
+        return states.setdefault(
+            instrument_id,
+            Holding(
+                account_id=account_id,
+                instrument_id=instrument_id,
+                quantity=Decimal("0"),
+                avg_cost=Decimal("0"),
+            ),
+        )
+
+    for ev in events:
+        source = state_for(ev.instrument_id)
+        if ev.kind == BrokerageEventKind.CONVERSION and ev.target_instrument_id is not None:
+            target = state_for(ev.target_instrument_id)
+            apply_conversion_to_holding_pair(source, target, ev)
+        else:
+            apply_event_to_holding(source, ev)
+
+    for holding in states.values():
+        if holding.quantity == 0:
+            continue
+        session.add(holding)
+    await session.flush()

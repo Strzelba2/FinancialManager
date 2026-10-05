@@ -9,7 +9,7 @@ import allure
 import pytest
 
 from app.api.services.snapshots_service import sum_snapshots_into_monthly_totals
-from app.models.enums import Currency
+from app.models.enums import Currency, InstrumentCurrency
 
 pytestmark = pytest.mark.unit
 
@@ -97,3 +97,32 @@ class SnapshotMonthlyTotalsTests(unittest.TestCase):
         )
 
         self.assertEqual(totals[wallet_id][month], Decimal("20.00"))
+
+    def test_includes_physical_cash_in_original_currency(self) -> None:
+        wallet_id = uuid4()
+        month = "2026-10"
+        cash = [
+            ("226.50", InstrumentCurrency.PLN),
+            ("1092.00", InstrumentCurrency.PLN),
+            ("196.70", InstrumentCurrency.EUR),
+            ("130.00", InstrumentCurrency.GBP),
+        ]
+
+        totals = sum_snapshots_into_monthly_totals(
+            fx_by_month={month: {"EUR/PLN": "4.3745", "GBP/PLN": "5.1353"}},
+            target_ccy="PLN",
+            dep_rows=[
+                SimpleNamespace(wallet_id=wallet_id, month_key=month, currency=Currency.PLN, available=Decimal("875661.99")),
+            ],
+            bro_rows=[],
+            metal_rows=[],
+            re_rows=[],
+            cash_rows=[
+                SimpleNamespace(wallet_id=wallet_id, month_key=month, currency=ccy, value=Decimal(amount))
+                for amount, ccy in cash
+            ],
+        )
+
+        # 1318.50 PLN + 196.70 EUR * 4.3745 + 130.00 GBP * 5.1353 = 2846.55 PLN of physical cash.
+        self.assertEqual(totals[wallet_id][month].quantize(Decimal("0.01")), Decimal("878508.54"))
+

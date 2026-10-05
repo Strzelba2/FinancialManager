@@ -84,6 +84,23 @@ to settlement currency. The service rejects such events before updating holdings
 settlement currency or FX rate is missing. Holding-only changes should use `SPLIT`,
 `ADJUSTMENT`, or `CONVERSION`, not a cash trade with omitted settlement data.
 
+Cash settlement link and deletion:
+
+- a manual `BUY`, `SELL`, or `DIV` event creates one cash transaction on the linked
+  deposit account and stores its id in `brokerage_events.transaction_id`
+- a BoSSA full-history trade row that produces both an event and a cash row links the
+  event to that cash transaction in the same way
+- deleting the linked transaction (`DELETE /wallet/transactions/{id}`) also deletes the
+  event, rebalances the cash chain, deletes the linked capital gain, and rebuilds all
+  holdings of the brokerage account from the remaining events
+- deleting the linked event (`DELETE /wallet/brokerage/events/{id}`) runs the same
+  operation through the cash transaction
+- if the rebuilt history would oversell a later `SELL`, the delete is rejected with
+  `400` and the whole operation is rolled back
+- events without a linked transaction (`SPLIT`, `ADJUSTMENT`, `CONVERSION`, and CSV
+  event imports with `creat_transaction=False`) are deleted alone and only holdings are
+  rebuilt
+
 BoSSA missing instruments are blocking:
 
 - parser rows with unresolved instruments are marked `NEEDS_REVIEW`
@@ -148,6 +165,14 @@ GET /stock/instruments/resolve?mic=XLON&symbol=LNGA.UK
 `brokerage_events` has a nullable `target_instrument_id` foreign key to `instruments`.
 It is used only for corporate conversion events. Older event kinds keep this field null.
 
+`brokerage_events` has a nullable, unique `transaction_id` foreign key to `transactions`
+with `ON DELETE SET NULL`. Migration
+`wallet/migrations/versions/a3c5e7f9b1d2_link_brokerage_events_to_transactions.py`
+backfills existing rows only for unambiguous one-to-one matches: same linked deposit
+account, `date_transaction = trade_at`, and the manual settlement description
+`<BUY|SELL|DIV> <symbol> <quantity> @ <price>` compared numerically. Older BoSSA history
+cash rows use bank descriptions and stay unlinked.
+
 `stock.instrument` has nullable `quote_source` for manually managed quote source pages.
 `wallet.instruments.symbol` supports symbols up to 12 characters so wallet mirrors can
 store symbols such as `LNGA.UK`.
@@ -167,6 +192,9 @@ Evidence expected from the testing process:
 
 - wallet unit tests for split, adjustment, conversion, migration structure, and
   oversell diagnostics
+- wallet unit tests for the event-to-cash-transaction link: deleting a linked
+  transaction deletes the event and rebuilds holdings, deleting a linked event deletes
+  the transaction, oversell after delete is rejected, and cross-user deletes do nothing
 - component/API tests for BoSSA generated cash balances in PLN, USD, and EUR and
   persisted import into linked cash subaccounts
 - unit and component/API tests for BoSSA all-or-nothing missing instrument preflight

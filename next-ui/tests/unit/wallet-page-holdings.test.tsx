@@ -72,6 +72,7 @@ function walletFixture(id: string, name: string, brokerageAccountId: string): Wa
       totals_by_currency: { PLN: '1000.00' },
     }],
     debts: [],
+    cash_holdings: [],
     real_estates: [],
     metal_holdings: [],
     capital_gains_deposit_ytd: {},

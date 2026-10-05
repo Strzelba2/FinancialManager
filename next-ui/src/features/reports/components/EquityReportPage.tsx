@@ -1,11 +1,11 @@
 'use client'
 
-import { startTransition, useState } from 'react'
+import { startTransition, useEffect, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   TrendingUp, TrendingDown, Minus, ExternalLink,
   CheckCircle2, AlertTriangle, Calendar, Users, Target,
-  BarChart3, Activity, Shield, Zap, BookOpen,
+  BarChart3, Activity, Shield, Zap, BookOpen, Star,
 } from 'lucide-react'
 import type {
   EquityReport, ReportPeriod, MV, ScoreItem,
@@ -13,6 +13,7 @@ import type {
 } from '../types/equity'
 import { evalStatus } from '../data/indicators'
 import { IndicatorLegendDialog } from './IndicatorLegendDialog'
+import { FavoritesDialog } from '../../wallet/components/FavoritesDialog'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -180,6 +181,72 @@ function InterpretCard({ text }: { text: string }) {
   )
 }
 
+export function ReportFavoriteButton({
+  symbol,
+  name,
+  mic,
+}: {
+  symbol: string
+  name: string | null
+  mic: string
+}) {
+  const [isFavorite, setIsFavorite] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadFavoriteStatus() {
+      try {
+        const response = await fetch(`/api/wallet/favorites?symbol=${encodeURIComponent(symbol)}`)
+        if (!response.ok) return
+
+        const status = await response.json() as { isFavorite: boolean }
+
+        if (!cancelled) setIsFavorite(status.isFavorite)
+      } catch {
+        // The report remains usable when the wallet service is temporarily unavailable.
+      }
+    }
+
+    void loadFavoriteStatus()
+    return () => { cancelled = true }
+  }, [symbol])
+
+  const label = isFavorite
+    ? `Zarządzaj ulubionymi dla ${symbol}`
+    : `Dodaj ${symbol} do ulubionych`
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setDialogOpen(true)}
+        aria-label={label}
+        aria-pressed={isFavorite}
+        title={label}
+        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+          isFavorite
+            ? 'border-amber-400/40 bg-amber-500/15 text-amber-400 hover:bg-amber-500/25'
+            : 'border-white/10 bg-white/5 text-slate-400 hover:border-white/20 hover:text-slate-200'
+        }`}
+      >
+        <Star className={`h-4.5 w-4.5 ${isFavorite ? 'fill-current' : ''}`} />
+      </button>
+
+      {dialogOpen && (
+        <FavoritesDialog
+          symbol={symbol}
+          name={name}
+          mic={mic}
+          onClose={() => setDialogOpen(false)}
+          onFavoriteChange={setIsFavorite}
+        />
+      )}
+    </>
+  )
+}
+
 function CompanyHeader({ company, meta }: { company: EquityReport['company']; meta: EquityReport['meta'] }) {
   const { price } = company
   const cap = price.market_cap
@@ -196,6 +263,11 @@ function CompanyHeader({ company, meta }: { company: EquityReport['company']; me
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <h1 className="text-2xl font-bold text-white">{company.name}</h1>
             <span className="text-white/40 text-lg">{company.full_name}</span>
+            <ReportFavoriteButton
+              symbol={meta.symbol}
+              name={company.full_name || company.name}
+              mic={meta.mic}
+            />
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-xs mb-3">

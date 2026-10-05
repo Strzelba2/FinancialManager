@@ -106,6 +106,7 @@ async def ingest_market(session: AsyncSession,
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
+            channel="chromium",  # Full Chromium supports the provider's browser verification.
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
@@ -367,6 +368,7 @@ async def refresh_quote_source_instruments(
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
+            channel="chromium",  # Match the browser used for market table ingestion.
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",

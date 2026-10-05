@@ -22,6 +22,7 @@ from app.crud.brokerage_deposit_link_crud import list_brokerage_deposit_links
 from app.crud.holding_crud import HoldingQuantityExceeded, get_holding_by_keys
 from app.crud.transaction_crud import find_duplicate_transaction
 from app.models.enums import BrokerageEventKind, Currency
+from app.models.models import BrokerageEvent
 from app.schemas.response import BrokerageEventsImportSummary
 from app.schemas.schemas import (
     BrokerageEventCreate,
@@ -280,6 +281,7 @@ async def import_brokerage_history_service(
 
     result_by_row: dict[int, dict] = {}
     cash_rows_by_currency: dict[Currency, list[tuple[BrokerageHistoryImportRow, TransactionIn]]] = defaultdict(list)
+    events_by_row: dict[int, BrokerageEvent] = {}
     errors: list[str] = []
 
     for row in payload.rows:
@@ -345,6 +347,7 @@ async def import_brokerage_history_service(
                     stock_client=stock_client,
                 )
                 result["brokerage_event_id"] = event.id
+                events_by_row[row.row_number] = event
             except HoldingQuantityExceeded as exc:
                 message = f"Row {row.row_number}: HTTP {exc.status_code} - {exc.detail}"
                 result.update(
@@ -425,6 +428,10 @@ async def import_brokerage_history_service(
         for transaction, transaction_id in zip(ordered_transactions, transaction_ids):
             row = transaction_to_row[id(transaction)]
             result_by_row[row.row_number]["transaction_id"] = transaction_id
+            event = events_by_row.get(row.row_number)
+            if event is not None:
+                # Trade row settled in cash: link so deleting either side removes both.
+                event.transaction_id = uuid.UUID(str(transaction_id))
 
     rows_out = []
     for row in sorted(payload.rows, key=lambda item: item.row_number):

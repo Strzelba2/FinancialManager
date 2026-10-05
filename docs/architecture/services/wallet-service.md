@@ -17,8 +17,8 @@ holdings, gains, and related personal finance records.
   track realized capital gains.
 - Link brokerage accounts to one or more ordinary deposit-account cash ledgers so PLN,
   USD, and EUR brokerage cash can be validated independently during import.
-- Own debts, recurring expenses, goals, notes, favorites, alerts, real estate, real
-  estate prices, and metal holdings.
+- Own debts, physical cash holdings, recurring expenses, goals, notes, favorites, alerts,
+  real estate, real estate prices, and metal holdings.
 - Call `stock` when wallet work needs market-facing quote or instrument information.
 - Call `session` crypto batch operations instead of reading auth key material.
 
@@ -50,8 +50,8 @@ holdings, gains, and related personal finance records.
 `wallet/app/api/main.py` mounts two main route prefixes:
 
 - `/wallet` for wallets, accounts, transactions, brokerage, holdings, real estate,
-  metal holdings, debts, recurring expenses, goals, manager views, favorites-related
-  wallet flows, and alerts-related wallet flows
+  metal holdings, debts, physical cash holdings, recurring expenses, goals, manager views,
+  favorites-related wallet flows, and alerts-related wallet flows
 - `/users` for user-scoped notes, holdings, favorites, and alerts
 
 The FastAPI health surface is `/healthz`.

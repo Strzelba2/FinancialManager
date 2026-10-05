@@ -239,6 +239,26 @@ export async function deleteDebt(userId: string, id: string): Promise<boolean> {
   return result.ok
 }
 
+export async function createCashHolding(
+  userId: string,
+  payload: Record<string, unknown>,
+): Promise<ApiResult<unknown>> {
+  return request<unknown>('POST', '/wallet/cash-holdings/create', payload, { 'X-User-Id': userId })
+}
+
+export async function updateCashHolding(
+  userId: string,
+  id: string,
+  payload: Record<string, unknown>,
+): Promise<ApiResult<unknown>> {
+  return request<unknown>('PUT', `/wallet/cash-holdings/${id}`, payload, { 'X-User-Id': userId })
+}
+
+export async function deleteCashHolding(userId: string, id: string): Promise<boolean> {
+  const result = await request<unknown>('DELETE', `/wallet/cash-holdings/${id}`, undefined, { 'X-User-Id': userId })
+  return result.ok
+}
+
 export async function createRealEstate(
   userId: string,
   payload: Record<string, unknown>,
@@ -445,6 +465,7 @@ export type ManagerHealth = {
   stale_quotes?: boolean
   projection_mismatch?: boolean
   needs_review?: boolean
+  missing_fx?: number
 }
 
 export type ManagerDepositAccount = {
@@ -523,6 +544,23 @@ export type ManagerRealEstate = {
   health?: ManagerHealth
 }
 
+export type ManagerPhysicalCashItem = {
+  id?: string
+  name?: string | null
+  amount?: string | number
+  amount_ccy?: string
+  value?: string | number
+  ccy?: string
+}
+
+export type ManagerPhysicalCash = {
+  count?: number
+  value?: string | number
+  ccy?: string
+  items?: ManagerPhysicalCashItem[]
+  health?: ManagerHealth
+}
+
 export type WalletManagerNode = {
   id: string
   name: string
@@ -530,8 +568,10 @@ export type WalletManagerNode = {
   brokerage_accounts?: ManagerBrokerageAccount[]
   metals?: ManagerMetals | null
   real_estate?: ManagerRealEstate | null
+  physical_cash?: ManagerPhysicalCash | null
   snapshots?: Record<string, {
     cash_deposit?: string | number
+    cash_physical?: string | number
     cash_broker?: string | number
     stocks?: string | number
     metals?: string | number

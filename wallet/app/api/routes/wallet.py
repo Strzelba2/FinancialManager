@@ -14,7 +14,7 @@ from app.schemas.schemas import (
     )
 from app.schemas.response import (
     WalletUserResponse, WalletResponse, WalletListItem, AccountListItem, BrokerageAccountListItem,
-    QuoteBySymbolItem, BrokerageEventListItem, RealEstateItem, MetalHoldingItem, DebtItem,
+    QuoteBySymbolItem, BrokerageEventListItem, RealEstateItem, MetalHoldingItem, DebtItem, CashHoldingItem,
     RecurringExpenseItem, YearGoalRead, WalletOut, WalletRenameIn, CpiMonthlyOut, MonthlySeriesOut,
     LastFavoriteObservedItem, LastPriceAlertObservedItem
     )
@@ -44,11 +44,12 @@ from app.crud.capital_gain_crud import sum_capital_gains_for_wallet_year
 from app.crud.real_estate_crud import list_real_estates
 from app.crud.metal_holding_crud import list_metal_holdings_by_wallet
 from app.crud.debt_crud import list_debts
+from app.crud.cash_holding_crud import list_cash_holdings
 from app.crud.recurring_expenses_crud import list_top_recurring_expenses
 from app.crud.year_goal_crud import get_year_goal
 from app.crud.snapshots_crude import (
     list_brokerage_monthly_snapshots, list_deposit_monthly_snapshots, list_fx_rows_for_months,
-    list_metal_monthly_snapshots, list_real_estate_monthly_snapshots
+    list_metal_monthly_snapshots, list_real_estate_monthly_snapshots, list_cash_monthly_snapshots
 )
 from app.crud.favorites import list_last_favorite_items_for_user
 from app.crud.price_alert_crud import list_last_price_alerts_for_user
@@ -333,6 +334,19 @@ async def sync_user_route(
                 )
                 for d in d_rows
             ]
+
+            cash_rows = await list_cash_holdings(session, wallet_id=wallet.id)
+            wallet_list_item.cash_holdings = [
+                CashHoldingItem(
+                    id=c.id,
+                    wallet_id=c.wallet_id,
+                    name=c.name,
+                    amount=c.amount,
+                    currency=c.currency,
+                    note=c.note,
+                )
+                for c in cash_rows
+            ]
             
             top_exp = await list_top_recurring_expenses(session=session, wallet_id=wallet.id, limit=5)
 
@@ -377,6 +391,7 @@ async def sync_user_route(
     bro_rows = await list_brokerage_monthly_snapshots(session, wallet_ids, month_keys)
     metal_rows = await list_metal_monthly_snapshots(session, wallet_ids, month_keys)
     re_rows = await list_real_estate_monthly_snapshots(session, wallet_ids, month_keys) 
+    cash_snap_rows = await list_cash_monthly_snapshots(session, wallet_ids, month_keys)
 
     fx_by_month = {r.month_key: (r.rates_json or {}) for r in fx_rows}
     
@@ -388,6 +403,7 @@ async def sync_user_route(
         bro_rows=bro_rows,
         metal_rows=metal_rows,
         re_rows=re_rows,
+        cash_rows=cash_snap_rows,
     )
 
     wallet_item_by_id = {w.id: w for w in user_wallets.wallets}

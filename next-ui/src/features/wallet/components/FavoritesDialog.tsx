@@ -274,9 +274,10 @@ type Props = {
   name: string | null
   mic: string
   onClose: () => void
+  onFavoriteChange?: (isFavorite: boolean) => void
 }
 
-export function FavoritesDialog({ symbol, name, mic, onClose }: Props) {
+export function FavoritesDialog({ symbol, name, mic, onClose, onFavoriteChange }: Props) {
   const [listsWithItems, setListsWithItems] = useState<ListWithItems[]>([])
   const [activeTab, setActiveTab] = useState<string | null>(null)
   const [loadingLists, setLoadingLists] = useState(true)
@@ -308,15 +309,21 @@ export function FavoritesDialog({ symbol, name, mic, onClose }: Props) {
 
       setListsWithItems(withItems)
 
+      const normalizedSymbol = symbol.toUpperCase()
+      const listsContainingCurrentInstrument = withItems.filter(({ items }) => (
+        items.some((item) => item.symbol.toUpperCase() === normalizedSymbol)
+      ))
+      onFavoriteChange?.(listsContainingCurrentInstrument.length > 0)
+
       setActiveTab((prev) => {
         const ids = withItems.map((l) => l.list.id)
         if (prev && ids.includes(prev)) return prev
-        return ids[0] ?? null
+        return listsContainingCurrentInstrument[0]?.list.id ?? ids[0] ?? null
       })
     } finally {
       setLoadingLists(false)
     }
-  }, [])
+  }, [onFavoriteChange, symbol])
 
   useEffect(() => { refresh() }, [refresh])
 

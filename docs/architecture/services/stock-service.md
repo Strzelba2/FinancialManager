@@ -110,6 +110,15 @@ flowchart LR
 The scheduled path uses the stock Celery task module. Manual ingest is started by the
 stock API and uses storage lock/status keys without entering RabbitMQ first.
 
+Market table ingestion and per-instrument quote-source refresh launch Playwright with
+`channel="chromium"` and `headless=True`, selecting full Chromium rather than the
+default headless shell. This lets the browser execute  JavaScript verification
+before the existing consent handling and quote parsing. In a September 2026 live
+diagnostic, the default headless shell received an empty `application/octet-stream`
+response and failed with `Page.goto: Download is starting`; full Chromium loaded the
+table and the existing parser read a quote successfully. Provider availability still
+requires live verification; isolated unit tests do not exercise verification.
+
 ### Volume-zone analysis flow
 
 ```mermaid
